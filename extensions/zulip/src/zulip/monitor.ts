@@ -85,17 +85,22 @@ function sleep(ms: number, abortSignal?: AbortSignal): Promise<void> {
     return Promise.resolve();
   }
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
-    abortSignal?.addEventListener(
-      "abort",
-      () => {
+    let onAbort: (() => void) | undefined;
+    const timer = setTimeout(() => {
+      if (onAbort && abortSignal) {
+        abortSignal.removeEventListener("abort", onAbort);
+      }
+      resolve();
+    }, ms);
+    if (abortSignal) {
+      onAbort = () => {
         clearTimeout(timer);
         const err = new Error("aborted");
         err.name = "AbortError";
         reject(err);
-      },
-      { once: true },
-    );
+      };
+      abortSignal.addEventListener("abort", onAbort, { once: true });
+    }
   });
 }
 
@@ -195,18 +200,30 @@ async function pollEvents(params: {
   lastEventId: number;
   abortSignal?: AbortSignal;
 }): Promise<ZulipEventsResponse> {
-  return await zulipRequest<ZulipEventsResponse>({
-    auth: params.auth,
-    method: "GET",
-    path: "/api/v1/events",
-    query: {
-      queue_id: params.queueId,
-      last_event_id: params.lastEventId,
-      // Be explicit: we want long-poll behavior to avoid tight polling loops that can trigger 429s.
-      dont_block: false,
-    },
-    abortSignal: params.abortSignal,
-  });
+  // Wrap the parent signal with a per-poll timeout so we don't hang forever
+  // if the Zulip server goes unresponsive during long-poll.
+  const POLL_TIMEOUT_MS = 90_000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), POLL_TIMEOUT_MS);
+  const onParentAbort = () => controller.abort();
+  params.abortSignal?.addEventListener("abort", onParentAbort, { once: true });
+  try {
+    return await zulipRequest<ZulipEventsResponse>({
+      auth: params.auth,
+      method: "GET",
+      path: "/api/v1/events",
+      query: {
+        queue_id: params.queueId,
+        last_event_id: params.lastEventId,
+        // Be explicit: we want long-poll behavior to avoid tight polling loops that can trigger 429s.
+        dont_block: false,
+      },
+      abortSignal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+    params.abortSignal?.removeEventListener("abort", onParentAbort);
+  }
 }
 
 function shouldIgnoreMessage(params: {
@@ -219,7 +236,7 @@ function shouldIgnoreMessage(params: {
     return { ignore: true, reason: "self" };
   }
   if (msg.type !== "stream") {
-    return { ignore: true, reason: "non-stream" };
+    return { ignore: true, reason: "dm" };
   }
   const stream = normalizeStreamName(msg.display_recipient);
   if (!stream) {
@@ -229,6 +246,38 @@ function shouldIgnoreMessage(params: {
     return { ignore: true, reason: "not-allowed-stream" };
   }
   return { ignore: false };
+}
+
+/**
+ * Send a one-time "I only work in streams" reply to DM senders.
+ * Uses a Set to avoid spamming the same sender repeatedly.
+ */
+async function replyToDm(params: {
+  auth: ZulipAuth;
+  senderId: number;
+  dmNotifiedSenders: Set<number>;
+  log?: (message: string) => void;
+}): Promise<void> {
+  if (params.dmNotifiedSenders.has(params.senderId)) {
+    return;
+  }
+  params.dmNotifiedSenders.add(params.senderId);
+  try {
+    await zulipRequest({
+      auth: params.auth,
+      method: "POST",
+      path: "/api/v1/messages",
+      form: {
+        type: "direct",
+        to: JSON.stringify([params.senderId]),
+        content:
+          "👋 I only work in Zulip streams — mention me in a stream to chat! DMs are not supported.",
+      },
+    });
+    params.log?.(`[zulip] sent DM redirect to user ${params.senderId}`);
+  } catch (err) {
+    params.log?.(`[zulip] failed to send DM redirect: ${String(err)}`);
+  }
 }
 
 async function bestEffortReaction(params: {
@@ -389,6 +438,9 @@ export async function monitorZulipProvider(
 
     // Dedupe cache prevents reprocessing messages after queue re-registration or reconnect.
     const dedupe = createDedupeCache({ ttlMs: 5 * 60 * 1000, maxSize: 500 });
+
+    // Track DM senders we've already notified to avoid spam.
+    const dmNotifiedSenders = new Set<number>();
 
     const handleMessage = async (msg: ZulipEventMessage) => {
       if (typeof msg.id !== "number") {
@@ -588,13 +640,67 @@ export async function monitorZulipProvider(
       let retry = 0;
       let stage: "register" | "poll" | "handle" = "register";
 
+      // Backpressure: limit concurrent message handlers to prevent unbounded pile-up.
+      const MAX_CONCURRENT_HANDLERS = 5;
+      let activeHandlers = 0;
+      const handlerWaiters: Array<() => void> = [];
+
+      const throttledHandleMessage = async (msg: ZulipEventMessage) => {
+        if (activeHandlers >= MAX_CONCURRENT_HANDLERS) {
+          await new Promise<void>((resolve) => handlerWaiters.push(resolve));
+        }
+        activeHandlers++;
+        try {
+          await handleMessage(msg);
+        } finally {
+          activeHandlers--;
+          const next = handlerWaiters.shift();
+          if (next) next();
+        }
+      };
+
       while (!stopped && !abortSignal.aborted) {
         try {
           if (!queueId) {
             stage = "register";
+            const wasReregistration = lastEventId !== -1;
             const reg = await registerQueue({ auth, stream, abortSignal });
             queueId = reg.queueId;
             lastEventId = reg.lastEventId;
+
+            // Issue 5: recover messages lost during queue gap on re-registration.
+            if (wasReregistration) {
+              try {
+                const recent = await zulipRequest<{
+                  result: string;
+                  messages?: ZulipEventMessage[];
+                }>({
+                  auth,
+                  method: "GET",
+                  path: "/api/v1/messages",
+                  query: {
+                    anchor: "newest",
+                    num_before: 10,
+                    num_after: 0,
+                    narrow: JSON.stringify([["stream", stream]]),
+                    apply_markdown: "false",
+                  },
+                  abortSignal,
+                });
+                if (recent.result === "success" && recent.messages) {
+                  for (const msg of recent.messages) {
+                    // dedupe.check skips already-processed messages
+                    throttledHandleMessage(msg).catch((err) => {
+                      runtime.error?.(`zulip: catchup message failed: ${String(err)}`);
+                    });
+                  }
+                }
+              } catch (catchupErr) {
+                logger.debug?.(
+                  `[zulip:${account.accountId}] catchup fetch failed: ${String(catchupErr)}`,
+                );
+              }
+            }
           }
 
           stage = "poll";
@@ -612,6 +718,22 @@ export async function monitorZulipProvider(
             .map((evt) => evt.message)
             .filter((m): m is ZulipEventMessage => Boolean(m));
 
+          // Issue 2: handle DMs by sending a redirect notice.
+          const dmMessages = messages.filter(
+            (m) => m.type !== "stream" && m.sender_id !== botUserId,
+          );
+          for (const dm of dmMessages) {
+            if (typeof dm.sender_id === "number") {
+              logger.debug?.(`[zulip:${account.accountId}] ignoring DM from user ${dm.sender_id}`);
+              replyToDm({
+                auth,
+                senderId: dm.sender_id,
+                dmNotifiedSenders,
+                log: (m) => logger.debug?.(m),
+              }).catch(() => undefined);
+            }
+          }
+
           // Defensive throttle: if Zulip responds immediately without any message payloads (e.g.
           // heartbeat-only events, proxies, or aggressive server settings), avoid a tight loop that can
           // hit 429s.
@@ -624,8 +746,8 @@ export async function monitorZulipProvider(
 
           stage = "handle";
           for (const msg of messages) {
-            // Fire-and-forget with error handling for concurrent processing
-            handleMessage(msg).catch((err) => {
+            // Use throttled handler with backpressure (max concurrent limit)
+            throttledHandleMessage(msg).catch((err) => {
               runtime.error?.(`zulip: message processing failed: ${String(err)}`);
             });
             // Small stagger between starting each message for natural pacing
@@ -641,7 +763,6 @@ export async function monitorZulipProvider(
           const retryAfterMs = (err as ZulipHttpError).retryAfterMs;
           if (status !== 429) {
             queueId = "";
-            lastEventId = -1;
           }
           retry += 1;
           const backoffMs = computeZulipMonitorBackoffMs({
@@ -653,6 +774,20 @@ export async function monitorZulipProvider(
             `[zulip:${account.accountId}] monitor error (stream=${stream}, stage=${stage}): ${String(err)} (retry in ${backoffMs}ms)`,
           );
           await sleep(backoffMs, abortSignal).catch(() => undefined);
+        }
+      }
+
+      // Issue 4: clean up the server-side event queue on shutdown.
+      if (queueId) {
+        try {
+          await zulipRequest({
+            auth,
+            method: "DELETE",
+            path: "/api/v1/events",
+            form: { queue_id: queueId },
+          });
+        } catch {
+          // Best effort — server will expire it anyway.
         }
       }
     };
