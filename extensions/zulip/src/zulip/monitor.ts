@@ -544,7 +544,7 @@ export async function monitorZulipProvider(
       // is stopping (e.g. gateway restart). Without this, in-flight HTTP calls to Zulip get
       // aborted immediately, wasting the LLM tokens already spent generating the response.
       const DELIVERY_GRACE_MS = 10_000;
-      const DELIVERY_TIMEOUT_MS = 60_000;
+      const DELIVERY_TIMEOUT_MS = 1_200_000;
       const deliveryController = new AbortController();
       const deliverySignal = deliveryController.signal;
       const deliveryTimer = setTimeout(() => {
