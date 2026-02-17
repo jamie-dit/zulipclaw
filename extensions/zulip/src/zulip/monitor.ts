@@ -501,6 +501,7 @@ export async function monitorZulipProvider(
   };
   opts.abortSignal?.addEventListener("abort", stop, { once: true });
 
+  let freshnessTimer: ReturnType<typeof setInterval> | undefined;
   const run = async () => {
     const me = await fetchZulipMe(auth, abortSignal);
     if (me.result !== "success" || typeof me.user_id !== "number") {
@@ -530,7 +531,14 @@ export async function monitorZulipProvider(
       const stream = normalizeStreamName(msg.display_recipient);
       const topic = normalizeTopic(msg.subject) || account.defaultTopic;
       const content = msg.content ?? "";
-      if (!stream || !content.trim()) {
+      if (!stream) {
+        return;
+      }
+      // Defer the definitive empty-content check until after upload processing —
+      // image-only messages have content (upload URLs) that gets stripped later,
+      // but should still be processed as media. Quick pre-check: bail only if
+      // content is truly blank AND contains no upload references at all.
+      if (!content.trim() && !content.includes("/user_uploads/")) {
         return;
       }
 
@@ -602,6 +610,12 @@ export async function monitorZulipProvider(
         } catch {
           // Ignore URL parse errors.
         }
+      }
+
+      // Now that uploads are resolved, bail if there's truly nothing to process:
+      // no text content AND no media attachments.
+      if (!cleanedContent.trim() && inboundUploads.length === 0) {
+        return;
       }
 
       const route = core.channel.routing.resolveAgentRoute({
@@ -811,6 +825,50 @@ export async function monitorZulipProvider(
         }
       };
 
+      // Freshness checker: periodically verify we haven't missed messages during
+      // long-poll gaps, queue re-registrations, or silent connection drops.
+      // Fetches the 5 most recent messages via REST and processes any with IDs
+      // higher than the last one we saw through the event queue.
+      let lastSeenMsgId = 0;
+      const FRESHNESS_INTERVAL_MS = 30_000;
+      freshnessTimer = setInterval(async () => {
+        if (stopped || abortSignal.aborted || lastSeenMsgId === 0) return;
+        try {
+          const recent = await zulipRequest<{ result: string; messages?: ZulipEventMessage[] }>({
+            auth,
+            method: "GET",
+            path: "/api/v1/messages",
+            query: {
+              anchor: "newest",
+              num_before: 5,
+              num_after: 0,
+              narrow: JSON.stringify([["stream", stream]]),
+              apply_markdown: "false",
+            },
+            abortSignal,
+          });
+          if (recent.result === "success" && recent.messages) {
+            let caught = 0;
+            for (const msg of recent.messages) {
+              if (typeof msg.id === "number" && msg.id > lastSeenMsgId) {
+                caught++;
+                lastSeenMsgId = msg.id;
+                throttledHandleMessage(msg).catch((err) => {
+                  runtime.error?.(`zulip: freshness catchup failed: ${String(err)}`);
+                });
+              }
+            }
+            if (caught > 0) {
+              logger.warn(
+                `[zulip:${account.accountId}] freshness checker recovered ${caught} missed message(s) in stream "${stream}"`,
+              );
+            }
+          }
+        } catch {
+          // Best effort — freshness check is non-critical.
+        }
+      }, FRESHNESS_INTERVAL_MS);
+
       while (!stopped && !abortSignal.aborted) {
         try {
           if (!queueId) {
@@ -841,6 +899,10 @@ export async function monitorZulipProvider(
                 });
                 if (recent.result === "success" && recent.messages) {
                   for (const msg of recent.messages) {
+                    // Track highest ID for freshness checker.
+                    if (typeof msg.id === "number" && msg.id > lastSeenMsgId) {
+                      lastSeenMsgId = msg.id;
+                    }
                     // dedupe.check skips already-processed messages
                     throttledHandleMessage(msg).catch((err) => {
                       runtime.error?.(`zulip: catchup message failed: ${String(err)}`);
@@ -904,6 +966,10 @@ export async function monitorZulipProvider(
 
           stage = "handle";
           for (const msg of messages) {
+            // Track highest message ID for freshness checker gap detection.
+            if (typeof msg.id === "number" && msg.id > lastSeenMsgId) {
+              lastSeenMsgId = msg.id;
+            }
             // Use throttled handler with backpressure (max concurrent limit)
             throttledHandleMessage(msg).catch((err) => {
               runtime.error?.(`zulip: message processing failed: ${String(err)}`);
@@ -987,6 +1053,8 @@ export async function monitorZulipProvider(
       runtime.error?.(`[zulip:${account.accountId}] monitor crashed: ${String(err)}`);
     })
     .finally(() => {
+      // Clean up freshness checker interval.
+      if (freshnessTimer) clearInterval(freshnessTimer);
       logger.info(`[zulip:${account.accountId}] stopped`);
     });
 
