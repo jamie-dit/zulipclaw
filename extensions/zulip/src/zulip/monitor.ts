@@ -1,10 +1,10 @@
-import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk";
 import crypto from "node:crypto";
+import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk";
 import { createReplyPrefixOptions } from "openclaw/plugin-sdk";
-import type { ZulipAuth } from "./client.js";
-import type { ZulipHttpError } from "./client.js";
 import { getZulipRuntime } from "../runtime.js";
 import { resolveZulipAccount, type ResolvedZulipAccount } from "./accounts.js";
+import type { ZulipAuth } from "./client.js";
+import type { ZulipHttpError } from "./client.js";
 import { zulipRequest } from "./client.js";
 import { createDedupeCache } from "./dedupe.js";
 import { normalizeStreamName, normalizeTopic } from "./normalize.js";
@@ -472,11 +472,24 @@ export async function monitorZulipProvider(
     cfg,
     accountId: opts.accountId,
   });
+  const formatRuntimeMessage = (args: unknown[]) =>
+    args
+      .map((arg) => {
+        if (typeof arg === "string") {
+          return arg;
+        }
+        try {
+          return JSON.stringify(arg);
+        } catch {
+          return String(arg);
+        }
+      })
+      .join(" ");
   const runtime: RuntimeEnv = opts.runtime ?? {
-    log: (message: string) => core.logging.getChildLogger().info(message),
-    error: (message: string) => core.logging.getChildLogger().error(message),
-    exit: () => {
-      throw new Error("Runtime exit not available");
+    log: (...args: unknown[]) => core.logging.getChildLogger().info(formatRuntimeMessage(args)),
+    error: (...args: unknown[]) => core.logging.getChildLogger().error(formatRuntimeMessage(args)),
+    exit: (code: number) => {
+      throw new Error(`Runtime exit not available (${code})`);
     },
   };
 

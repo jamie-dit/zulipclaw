@@ -1,7 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk";
-import type { ZulipAuth } from "./client.js";
 import { resolveZulipAccount } from "./accounts.js";
+import type { ZulipAuth } from "./client.js";
 import { zulipRequest, zulipRequestWithRetry } from "./client.js";
 import { normalizeStreamName } from "./normalize.js";
 import { normalizeTopic } from "./normalize.js";

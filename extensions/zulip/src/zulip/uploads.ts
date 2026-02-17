@@ -1,8 +1,8 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveChannelMediaMaxBytes, type OpenClawConfig } from "openclaw/plugin-sdk";
-import type { ZulipApiSuccess, ZulipAuth } from "./client.js";
 import { getZulipRuntime } from "../runtime.js";
+import type { ZulipApiSuccess, ZulipAuth } from "./client.js";
 import { normalizeZulipBaseUrl } from "./normalize.js";
 
 const HTTP_URL_RE = /^https?:\/\//i;
