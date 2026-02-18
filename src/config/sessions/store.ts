@@ -651,17 +651,22 @@ async function saveSessionStoreUnlocked(
     }
   }
 
-  // Dehydrate inline skillsSnapshots to content-addressed refs before serialising.
-  dehydrateSkillsSnapshots(store, storePath);
+  // Deep-clone before dehydrating so the caller's in-memory references keep
+  // their inline skillsSnapshot (dehydrate mutates entries in-place).
+  const storeToWrite = structuredClone(store);
+  dehydrateSkillsSnapshots(storeToWrite, storePath);
+
+  // Invalidate cache so next load re-reads from disk and re-hydrates snapshots.
+  SESSION_STORE_CACHE.delete(storePath);
 
   // Write to per-session files (layout was established by migrateFromMonolithic above).
   if (isPerSessionLayoutPresent(storePath)) {
-    await saveStoreToPerSessionFiles(storePath, store);
+    await saveStoreToPerSessionFiles(storePath, storeToWrite);
     return;
   }
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-  const json = JSON.stringify(store, null, 2);
+  const json = JSON.stringify(storeToWrite, null, 2);
 
   // Windows: use temp-file + rename for atomic writes, same as other platforms.
   // Direct `writeFile` truncates the target to 0 bytes before writing, which

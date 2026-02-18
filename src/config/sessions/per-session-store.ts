@@ -22,6 +22,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { loadSnapshot } from "./skills-snapshot-store.js";
 import type { SessionEntry } from "./types.js";
 
 const log = createSubsystemLogger("sessions/per-session-store");
@@ -293,6 +294,22 @@ export function loadStoreFromPerSessionFiles(
     const entry = loadSessionData(dataPath);
     if (entry) {
       store[sessionKey] = entry;
+    }
+  }
+
+  // Hydrate content-addressed skillsSnapshot refs back to inline snapshots.
+  // (Same as the monolithic load path in store.ts.)
+  for (const entry of Object.values(store)) {
+    if (!entry || entry.skillsSnapshot || !entry.skillsSnapshotRef) {
+      continue;
+    }
+    try {
+      const snapshot = loadSnapshot(storePath, entry.skillsSnapshotRef);
+      if (snapshot) {
+        entry.skillsSnapshot = snapshot;
+      }
+    } catch {
+      // Best-effort: snapshot file may not exist yet.
     }
   }
 
