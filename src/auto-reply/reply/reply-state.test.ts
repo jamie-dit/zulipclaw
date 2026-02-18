@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { loadSessionStore } from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   appendHistoryEntry,
@@ -318,7 +319,7 @@ describe("incrementCompactionCount", () => {
     });
     expect(count).toBe(3);
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const stored = loadSessionStore(storePath);
     expect(stored[sessionKey].compactionCount).toBe(3);
   });
 
@@ -345,7 +346,7 @@ describe("incrementCompactionCount", () => {
       tokensAfter: 12_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const stored = loadSessionStore(storePath);
     expect(stored[sessionKey].compactionCount).toBe(1);
     expect(stored[sessionKey].totalTokens).toBe(12_000);
     // input/output cleared since we only have the total estimate
@@ -373,7 +374,7 @@ describe("incrementCompactionCount", () => {
       storePath,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const stored = loadSessionStore(storePath);
     expect(stored[sessionKey].compactionCount).toBe(1);
     // totalTokens unchanged
     expect(stored[sessionKey].totalTokens).toBe(180_000);

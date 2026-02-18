@@ -8,6 +8,7 @@ import {
   type SessionEntry,
   saveSessionStore,
 } from "./sessions.js";
+import { resolveSessionDataPath } from "./sessions/per-session-store.js";
 
 describe("Session Store Cache", () => {
   let fixtureRoot = "";
@@ -75,11 +76,13 @@ describe("Session Store Cache", () => {
     // First load - from disk
     const loaded1 = loadSessionStore(storePath);
     expect(loaded1).toEqual(testStore);
+    const firstLoadReads = readSpy.mock.calls.length;
 
-    // Second load - should return cached data (no extra disk read)
+    // Second load - per-session cache should avoid extra data-file reads
     const loaded2 = loadSessionStore(storePath);
     expect(loaded2).toEqual(testStore);
-    expect(readSpy).toHaveBeenCalledTimes(1);
+    const secondLoadReads = readSpy.mock.calls.length - firstLoadReads;
+    expect(secondLoadReads).toBeLessThanOrEqual(1); // index read only
     readSpy.mockRestore();
   });
 
@@ -109,7 +112,7 @@ describe("Session Store Cache", () => {
     expect(loaded2["session:1"].skillsSnapshot?.skills?.[0]?.name).toBe("alpha");
   });
 
-  it("should refresh cache when store file changes on disk", async () => {
+  it("should refresh cache when session data file changes on disk", async () => {
     const testStore: Record<string, SessionEntry> = {
       "session:1": {
         sessionId: "id-1",
@@ -124,13 +127,17 @@ describe("Session Store Cache", () => {
     const loaded1 = loadSessionStore(storePath);
     expect(loaded1).toEqual(testStore);
 
-    // Modify file on disk while cache is valid
+    // Modify the per-session data file on disk while cache is valid
     const modifiedStore: Record<string, SessionEntry> = {
-      "session:99": { sessionId: "id-99", updatedAt: Date.now() },
+      "session:1": {
+        ...testStore["session:1"],
+        displayName: "Test Session 1 (updated)",
+      },
     };
-    fs.writeFileSync(storePath, JSON.stringify(modifiedStore, null, 2));
+    const dataPath = resolveSessionDataPath(storePath, testStore["session:1"].sessionId);
+    fs.writeFileSync(dataPath, JSON.stringify(modifiedStore["session:1"], null, 2));
     const bump = new Date(Date.now() + 2000);
-    fs.utimesSync(storePath, bump, bump);
+    fs.utimesSync(dataPath, bump, bump);
 
     // Second load - should return the updated store
     const loaded2 = loadSessionStore(storePath);
@@ -186,15 +193,15 @@ describe("Session Store Cache", () => {
     const loaded1 = loadSessionStore(storePath);
     expect(loaded1).toEqual(testStore);
 
-    // Modify file on disk
+    // Modify data file on disk
     const modifiedStore: Record<string, SessionEntry> = {
-      "session:2": {
-        sessionId: "id-2",
-        updatedAt: Date.now(),
-        displayName: "Test Session 2",
+      "session:1": {
+        ...testStore["session:1"],
+        displayName: "Test Session 1 (cache bypass)",
       },
     };
-    fs.writeFileSync(storePath, JSON.stringify(modifiedStore, null, 2));
+    const dataPath = resolveSessionDataPath(storePath, testStore["session:1"].sessionId);
+    fs.writeFileSync(dataPath, JSON.stringify(modifiedStore["session:1"], null, 2));
 
     // Second load - should read from disk (cache disabled)
     const loaded2 = loadSessionStore(storePath);

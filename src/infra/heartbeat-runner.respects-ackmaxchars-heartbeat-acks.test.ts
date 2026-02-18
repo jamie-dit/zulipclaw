@@ -1,7 +1,6 @@
-import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveMainSessionKey } from "../config/sessions.js";
+import { loadSessionStore, resolveMainSessionKey, saveSessionStore } from "../config/sessions.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
@@ -336,15 +335,14 @@ describe("resolveHeartbeatIntervalMs", () => {
       });
 
       replySpy.mockImplementationOnce(async () => {
-        const raw = await fs.readFile(storePath, "utf-8");
-        const parsed = JSON.parse(raw) as Record<string, { updatedAt?: number } | undefined>;
+        const parsed = loadSessionStore(storePath, { skipCache: true });
         if (parsed[sessionKey]) {
           parsed[sessionKey] = {
             ...parsed[sessionKey],
             updatedAt: bumpedUpdatedAt,
           };
         }
-        await fs.writeFile(storePath, JSON.stringify(parsed, null, 2));
+        await saveSessionStore(storePath, parsed);
         return { text: "" };
       });
 
@@ -353,7 +351,7 @@ describe("resolveHeartbeatIntervalMs", () => {
         deps: makeWhatsAppDeps(),
       });
 
-      const finalStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      const finalStore = loadSessionStore(storePath, { skipCache: true }) as Record<
         string,
         { updatedAt?: number } | undefined
       >;

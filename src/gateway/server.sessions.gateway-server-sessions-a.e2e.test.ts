@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { loadSessionStore, saveSessionStore, type SessionEntry } from "../config/sessions.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import {
   connectOk,
@@ -517,10 +518,10 @@ describe("gateway server sessions", () => {
     );
 
     const writeRawStore = async (store: Record<string, unknown>) => {
-      await fs.writeFile(storePath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
+      await saveSessionStore(storePath, store as Record<string, SessionEntry>);
     };
     const readStore = async () =>
-      JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, Record<string, unknown>>;
+      loadSessionStore(storePath, { skipCache: true }) as Record<string, Record<string, unknown>>;
 
     await writeRawStore({
       "agent:ops:MAIN": { sessionId, updatedAt: Date.now() - 2_000 },
@@ -696,7 +697,7 @@ describe("gateway server sessions", () => {
       "sess-main",
     );
 
-    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    const store = loadSessionStore(storePath, { skipCache: true }) as Record<
       string,
       { sessionId?: string }
     >;
@@ -737,7 +738,7 @@ describe("gateway server sessions", () => {
       "sess-active",
     );
 
-    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    const store = loadSessionStore(storePath, { skipCache: true }) as Record<
       string,
       { sessionId?: string }
     >;

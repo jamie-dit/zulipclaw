@@ -328,8 +328,10 @@ describe("sessions", () => {
     const store = loadSessionStore(storePath);
     expect(store["agent:main:main"]?.sessionId).toBe("sess-1");
 
-    const raw = await fs.readFile(storePath, "utf-8");
-    expect(raw.trim().startsWith("{")).toBe(true);
+    // After per-session migration, index.json is always a valid JSON object.
+    const indexPath = path.join(path.dirname(storePath), "index.json");
+    const rawIndex = await fs.readFile(indexPath, "utf-8");
+    expect(rawIndex.trim().startsWith("{")).toBe(true);
   });
 
   it("normalizes last route fields on write", async () => {

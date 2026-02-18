@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { loadSessionStore } from "../config/sessions.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -232,7 +233,7 @@ describe("gateway server sessions", () => {
     expect(patched.ok).toBe(true);
     expect(patched.payload?.key).toBe("agent:ops:work");
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    const stored = loadSessionStore(storePath, { skipCache: true }) as Record<
       string,
       { thinkingLevel?: string }
     >;

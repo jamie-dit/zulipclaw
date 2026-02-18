@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { SessionEntry } from "../config/sessions.js";
+import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
 import {
   capArrayByJsonBytes,
   classifySessionKey,
@@ -156,7 +156,7 @@ describe("gateway session utils", () => {
       expect.arrayContaining(["agent:ops:mysession", "agent:ops:MySession"]),
     );
     // The legacy key must resolve to the actual entry in the store
-    const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
+    const store = loadSessionStore(storePath, { skipCache: true });
     const found = target.storeKeys.some((k) => Boolean(store[k]));
     expect(found).toBe(true);
   });

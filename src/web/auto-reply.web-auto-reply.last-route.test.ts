@@ -1,7 +1,7 @@
 import "./test-helpers.js";
-import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadSessionStore } from "../config/sessions.js";
 import { installWebAutoReplyUnitTestHooks, makeSessionStore } from "./auto-reply.test-harness.js";
 import { buildMentionConfig } from "./auto-reply/mentions.js";
 import { createEchoTracker } from "./auto-reply/monitor/echo.js";
@@ -86,8 +86,8 @@ function buildInboundMessage(params: {
   };
 }
 
-async function readStoredRoutes(storePath: string) {
-  return JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+function readStoredRoutes(storePath: string) {
+  return loadSessionStore(storePath, { skipCache: true }) as Record<
     string,
     { lastChannel?: string; lastTo?: string; lastAccountId?: string }
   >;
@@ -118,7 +118,7 @@ describe("web auto-reply last-route", () => {
 
     await awaitBackgroundTasks(backgroundTasks);
 
-    const stored = await readStoredRoutes(store.storePath);
+    const stored = readStoredRoutes(store.storePath);
     expect(stored[mainSessionKey]?.lastChannel).toBe("whatsapp");
     expect(stored[mainSessionKey]?.lastTo).toBe("+1000");
 
@@ -151,7 +151,7 @@ describe("web auto-reply last-route", () => {
 
     await awaitBackgroundTasks(backgroundTasks);
 
-    const stored = await readStoredRoutes(store.storePath);
+    const stored = readStoredRoutes(store.storePath);
     expect(stored[groupSessionKey]?.lastChannel).toBe("whatsapp");
     expect(stored[groupSessionKey]?.lastTo).toBe("123@g.us");
     expect(stored[groupSessionKey]?.lastAccountId).toBe("work");

@@ -16,6 +16,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { loadSessionStore, saveSessionStore } from "../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 const withTempHome = withTempCronHome;
 
@@ -81,8 +82,10 @@ async function writeSessionStore(
 }
 
 async function readSessionEntry(storePath: string, key: string) {
-  const raw = await fs.readFile(storePath, "utf-8");
-  const store = JSON.parse(raw) as Record<string, { sessionId?: string; label?: string }>;
+  const store = loadSessionStore(storePath, { skipCache: true }) as Record<
+    string,
+    { sessionId?: string; label?: string }
+  >;
   return store[key];
 }
 
@@ -498,14 +501,16 @@ describe("runCronIsolatedAgentTurn", () => {
   it("preserves an existing cron session label", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home);
-      const raw = await fs.readFile(storePath, "utf-8");
-      const store = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      const store = loadSessionStore(storePath, { skipCache: true }) as Record<
+        string,
+        Record<string, unknown>
+      >;
       store["agent:main:cron:job-1"] = {
         sessionId: "old",
         updatedAt: Date.now(),
         label: "Nightly digest",
       };
-      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await saveSessionStore(storePath, store);
 
       await runCronTurn(home, {
         jobPayload: { kind: "agentTurn", message: "ping", deliver: false },

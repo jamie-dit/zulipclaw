@@ -555,7 +555,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payload.text?.toLowerCase()).toContain("reset");
       expect(sessionStore.main.sessionId).not.toBe(sessionId);
 
-      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      const persisted = sessions.loadSessionStore(storePath);
       expect(persisted.main.sessionId).toBe(sessionStore.main.sessionId);
     });
   });
@@ -603,7 +603,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payload.text?.toLowerCase()).toContain("reset");
       expect(sessionStore.main.sessionId).not.toBe(sessionId);
 
-      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      const persisted = sessions.loadSessionStore(storePath);
       expect(persisted.main.sessionId).toBe(sessionStore.main.sessionId);
     });
   });
@@ -651,7 +651,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(sessionStore.main.sessionId).not.toBe(sessionId);
       await expect(fs.access(transcriptPath)).rejects.toBeDefined();
 
-      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      const persisted = sessions.loadSessionStore(storePath);
       expect(persisted.main.sessionId).toBe(sessionStore.main.sessionId);
     });
   });
@@ -685,7 +685,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(sessionStore.main).toBeUndefined();
       await expect(fs.access(transcriptPath)).rejects.toThrow();
 
-      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      const persisted = sessions.loadSessionStore(storePath);
       expect(persisted.main).toBeUndefined();
     });
   });
@@ -722,7 +722,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(sessionStore.main).toBeDefined();
       await expect(fs.access(transcriptPath)).resolves.toBeUndefined();
 
-      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      const persisted = sessions.loadSessionStore(storePath);
       expect(persisted.main).toBeDefined();
     });
   });
@@ -907,7 +907,7 @@ describe("runReplyAgent memory flush", () => {
       expect(calls[0]?.prompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
       expect(calls[1]?.prompt).toBe("hello");
 
-      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      const stored = sessions.loadSessionStore(storePath);
       expect(stored[sessionKey].memoryFlushAt).toBeTypeOf("number");
       expect(stored[sessionKey].memoryFlushCompactionCount).toBe(1);
     });
@@ -950,7 +950,7 @@ describe("runReplyAgent memory flush", () => {
         | undefined;
       expect(call?.prompt).toBe("hello");
 
-      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      const stored = sessions.loadSessionStore(storePath);
       expect(stored[sessionKey].memoryFlushAt).toBeUndefined();
     });
   });
@@ -1033,7 +1033,7 @@ describe("runReplyAgent memory flush", () => {
         commandBody: "hello",
       });
 
-      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      const stored = sessions.loadSessionStore(storePath);
       expect(stored[sessionKey].compactionCount).toBe(2);
       expect(stored[sessionKey].memoryFlushCompactionCount).toBe(2);
     });

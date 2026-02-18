@@ -21,6 +21,18 @@ import { getFileMtimeMs, isCacheEnabled, resolveCacheTtlMs } from "../cache-util
 import { loadConfig } from "../config.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
+import {
+  clearPerSessionCacheForTest,
+  isPerSessionLayoutPresent,
+  loadIndex,
+  loadStoreFromPerSessionFiles,
+  migrateFromMonolithic,
+  removePerSessionLayoutFiles,
+  saveStoreToPerSessionFiles,
+  updateSessionDataEntry,
+} from "./per-session-store.js";
+
+export { removePerSessionLayoutFiles };
 import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 const log = createSubsystemLogger("sessions/store");
@@ -120,6 +132,7 @@ function normalizeSessionStore(store: Record<string, SessionEntry>): void {
 
 export function clearSessionStoreCacheForTest(): void {
   SESSION_STORE_CACHE.clear();
+  clearPerSessionCacheForTest();
   for (const queue of LOCK_QUEUES.values()) {
     for (const task of queue.pending) {
       task.reject(new Error("session store queue cleared for test"));
@@ -149,6 +162,11 @@ export function loadSessionStore(
   storePath: string,
   opts: LoadSessionStoreOptions = {},
 ): Record<string, SessionEntry> {
+  // Use per-session layout when index.json is present.
+  if (isPerSessionLayoutPresent(storePath)) {
+    return loadStoreFromPerSessionFiles(storePath, { skipCache: opts.skipCache });
+  }
+
   // Check cache first if enabled
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
     const cached = SESSION_STORE_CACHE.get(storePath);
@@ -503,6 +521,10 @@ async function saveSessionStoreUnlocked(
   // Invalidate cache on write to ensure consistency
   invalidateSessionStoreCache(storePath);
 
+  // Auto-migrate from monolithic to per-session layout on first save.
+  // migrateFromMonolithic is a no-op if index.json already exists.
+  await migrateFromMonolithic(storePath, store);
+
   normalizeSessionStore(store);
 
   if (!opts?.skipMaintenance) {
@@ -564,6 +586,12 @@ async function saveSessionStoreUnlocked(
       // Rotate the on-disk file if it exceeds the size threshold.
       await rotateSessionFile(storePath, maintenance.rotateBytes);
     }
+  }
+
+  // Write to per-session files (layout was established by migrateFromMonolithic above).
+  if (isPerSessionLayoutPresent(storePath)) {
+    await saveStoreToPerSessionFiles(storePath, store);
+    return;
   }
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
@@ -805,6 +833,32 @@ export async function updateSessionStoreEntry(params: {
   update: (entry: SessionEntry) => Promise<Partial<SessionEntry> | null>;
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, update } = params;
+
+  // Fast path: if per-session layout is established, look up the session's
+  // data file from the index and lock only that one file.
+  if (isPerSessionLayoutPresent(storePath)) {
+    const index = loadIndex(storePath);
+    const indexEntry = index[sessionKey];
+    if (!indexEntry?.sessionId) {
+      // Session not in index — nothing to update.
+      return null;
+    }
+    const { sessionId } = indexEntry;
+
+    return await updateSessionDataEntry({
+      storePath,
+      sessionKey,
+      sessionId,
+      update: async (existing) => {
+        // The caller's update fn expects the full existing entry.
+        return await update(existing);
+      },
+      merge: mergeSessionEntry,
+      createIfMissing: false,
+    });
+  }
+
+  // Legacy path: full store lock + rewrite.
   return await withSessionStoreLock(storePath, async () => {
     const store = loadSessionStore(storePath);
     const existing = store[sessionKey];

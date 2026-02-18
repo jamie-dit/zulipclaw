@@ -322,7 +322,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       typingMode: "instant",
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const stored = loadSessionStore(storePath);
     // totalTokens should reflect actual post-compaction context (~10k), not
     // the stale pre-compaction value (181k) or the inflated accumulated (190k)
     expect(stored[sessionKey].totalTokens).toBe(10_000);
@@ -383,7 +383,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       typingMode: "instant",
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const stored = loadSessionStore(storePath);
     // totalTokens should use lastCallUsage (55k), not accumulated (75k)
     expect(stored[sessionKey].totalTokens).toBe(55_000);
   });
