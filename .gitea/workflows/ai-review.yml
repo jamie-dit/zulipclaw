@@ -1,0 +1,73 @@
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  AIReview:
+    name: AI Code Review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: https://gitea.com/actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Docker
+        run: |
+          if ! command -v docker &>/dev/null; then
+            apt-get update && apt-get install -y docker.io
+          fi
+
+      - name: Run AI Code Review
+        run: |
+          BASE_REF="${{ gitea.event.pull_request.base.ref }}"
+          git fetch origin "$BASE_REF"
+
+          if ! DIFF_CONTENT=$(git diff "origin/$BASE_REF"...HEAD 2>/dev/null); then
+            echo "::warning::No merge base found, using two-dot diff"
+            if ! DIFF_CONTENT=$(git diff "origin/$BASE_REF"..HEAD 2>/dev/null); then
+              echo "::warning::Could not compute diff, skipping AI review"
+              exit 0
+            fi
+          fi
+
+          if [ -z "$DIFF_CONTENT" ]; then
+            echo "No changes to review"
+            exit 0
+          fi
+
+          echo "Diff size: $(echo "$DIFF_CONTENT" | wc -c) bytes"
+
+          echo "${{ secrets.GTOKEN }}" | docker login gitea.hosting-cloud.net -u "${{ gitea.actor }}" --password-stdin
+          docker pull gitea.hosting-cloud.net/dreamit/dreamguard:latest
+
+          VOLUMES_FLAG=""
+          HELPER_CID=""
+          RUNNER_CID=$(hostname)
+          if HELPER_CID=$(docker create -v /workspace alpine true 2>/dev/null); then
+            if docker cp "$RUNNER_CID:${{ gitea.workspace }}/." - 2>/dev/null \
+               | docker cp - "$HELPER_CID:/workspace" 2>/dev/null; then
+              VOLUMES_FLAG="--volumes-from $HELPER_CID"
+              echo "Workspace shared for file scanning"
+            else
+              echo "::warning::Could not share workspace — file scanning will be skipped"
+              docker rm "$HELPER_CID" 2>/dev/null || true
+              HELPER_CID=""
+            fi
+          fi
+
+          echo "$DIFF_CONTENT" | docker run --rm -i \
+            $VOLUMES_FLAG \
+            -e REPO_ROOT=/workspace \
+            -e OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
+            -e GITEA_TOKEN="${{ secrets.GTOKEN }}" \
+            -e REPO_NAME="${{ gitea.repository }}" \
+            -e PR_NUMBER="${{ gitea.event.pull_request.number }}" \
+            -e DIFF_PATH=/dev/stdin \
+            gitea.hosting-cloud.net/dreamit/dreamguard:latest
+          REVIEW_EXIT=$?
+
+          [ -n "$HELPER_CID" ] && docker rm "$HELPER_CID" 2>/dev/null || true
+          exit $REVIEW_EXIT
