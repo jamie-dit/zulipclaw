@@ -7,7 +7,6 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { buildBrowseProvidersButton } from "../../telegram/model-buttons.js";
 import { shortenHomePath } from "../../utils.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveModelsCommandReply } from "./commands-models.js";
@@ -215,21 +214,6 @@ export async function maybeHandleModelDirectiveInfo(params: {
 
   if (wantsSummary) {
     const current = `${params.provider}/${params.model}`;
-    const isTelegram = params.surface === "telegram";
-
-    if (isTelegram) {
-      const buttons = buildBrowseProvidersButton();
-      return {
-        text: [
-          `Current: ${current}`,
-          "",
-          "Tap below to browse models, or use:",
-          "/model <provider/model> to switch",
-          "/model status for details",
-        ].join("\n"),
-        channelData: { telegram: { buttons } },
-      };
-    }
 
     return {
       text: [

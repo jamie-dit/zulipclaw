@@ -1,4 +1,4 @@
-import type { DiscordPluralKitConfig } from "../discord/pluralkit.js";
+type DiscordPluralKitConfig = Record<string, unknown>;
 import type {
   BlockStreamingCoalesceConfig,
   DmPolicy,

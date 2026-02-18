@@ -14,7 +14,6 @@ import {
   readConfigFileSnapshot,
 } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import { listTelegramAccountIds, resolveTelegramAccount } from "../telegram/accounts.js";
 import { note } from "../terminal/note.js";
 import { isRecord, resolveHomeDir } from "../utils.js";
 import { normalizeLegacyConfigValues } from "./doctor-legacy-config.js";
@@ -290,15 +289,32 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
     return { config: cfg, changes: [] };
   }
 
-  const tokens = Array.from(
-    new Set(
-      listTelegramAccountIds(cfg)
-        .map((accountId) => resolveTelegramAccount({ cfg, accountId }))
-        .map((account) => (account.tokenSource === "none" ? "" : account.token))
-        .map((token) => token.trim())
-        .filter(Boolean),
-    ),
-  );
+  const collectTokensFromConfig = (input: OpenClawConfig): string[] => {
+    const telegram = asObjectRecord(input.channels?.telegram);
+    if (!telegram) {
+      return [];
+    }
+    const tokens: string[] = [];
+    const topLevelToken = typeof telegram.token === "string" ? telegram.token.trim() : "";
+    if (topLevelToken) {
+      tokens.push(topLevelToken);
+    }
+    const accounts = asObjectRecord(telegram.accounts);
+    if (!accounts) {
+      return tokens;
+    }
+    for (const account of Object.values(accounts)) {
+      const accountObj = asObjectRecord(account);
+      const token =
+        accountObj && typeof accountObj.token === "string" ? accountObj.token.trim() : "";
+      if (token) {
+        tokens.push(token);
+      }
+    }
+    return tokens;
+  };
+
+  const tokens = Array.from(new Set(collectTokensFromConfig(cfg)));
 
   if (tokens.length === 0) {
     return {

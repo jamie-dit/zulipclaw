@@ -8,13 +8,6 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  buildModelsKeyboard,
-  buildProviderKeyboard,
-  calculateTotalPages,
-  getModelsPageSize,
-  type ProviderInfo,
-} from "../../telegram/model-buttons.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandHandler } from "./commands-types.js";
 
@@ -192,24 +185,9 @@ export async function resolveModelsCommandReply(params: {
   const { provider, page, pageSize, all } = parseModelsArgs(argText);
 
   const { byProvider, providers } = await buildModelsProviderData(params.cfg);
-  const isTelegram = params.surface === "telegram";
 
   // Provider list (no provider specified)
   if (!provider) {
-    // For Telegram: show buttons if there are providers
-    if (isTelegram && providers.length > 0) {
-      const providerInfos: ProviderInfo[] = providers.map((p) => ({
-        id: p,
-        count: byProvider.get(p)?.size ?? 0,
-      }));
-      const buttons = buildProviderKeyboard(providerInfos);
-      const text = "Select a provider:";
-      return {
-        text,
-        channelData: { telegram: { buttons } },
-      };
-    }
-
     // Text fallback for non-Telegram surfaces
     const lines: string[] = [
       "Providers:",
@@ -246,28 +224,6 @@ export async function resolveModelsCommandReply(params: {
       "Switch: /model <provider/model>",
     ];
     return { text: lines.join("\n") };
-  }
-
-  // For Telegram: use button-based model list with inline keyboard pagination
-  if (isTelegram) {
-    const telegramPageSize = getModelsPageSize();
-    const totalPages = calculateTotalPages(total, telegramPageSize);
-    const safePage = Math.max(1, Math.min(page, totalPages));
-
-    const buttons = buildModelsKeyboard({
-      provider,
-      models,
-      currentModel: params.currentModel,
-      currentPage: safePage,
-      totalPages,
-      pageSize: telegramPageSize,
-    });
-
-    const text = `Models (${provider}) — ${total} available`;
-    return {
-      text,
-      channelData: { telegram: { buttons } },
-    };
   }
 
   // Text fallback for non-Telegram surfaces
