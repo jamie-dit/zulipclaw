@@ -74,11 +74,11 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
   mentions: {
     stripPatterns: () => [
       // Zulip user mentions in raw Markdown look like: @**Full Name**
-      "@\\*\\*[^*]+\\*\\*",
+      "@\\\\*\\\\*[^*]+\\\\*\\\\*",
       // Wildcard mentions.
-      "\\B@all\\b",
-      "\\B@everyone\\b",
-      "\\B@stream\\b",
+      "\\\\B@all\\\\b",
+      "\\\\B@everyone\\\\b",
+      "\\\\B@stream\\\\b",
     ],
   },
   reload: { configPrefixes: ["channels.zulip"] },
@@ -183,7 +183,9 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
         email: account.email ?? "",
         apiKey: account.apiKey ?? "",
       };
-      const result = await sendZulipStreamMessage({
+      const result = await (
+        await import("./zulip/send.js")
+      ).sendZulipStreamMessage({
         auth,
         stream,
         topic,
@@ -321,7 +323,11 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
         },
       });
       activeProviders.set(accountId, provider);
-      return provider;
+      // Keep this Promise pending until the monitor's run loop actually exits.
+      // The core gateway tracks startAccount's Promise settlement to detect
+      // channel health — if it resolves immediately, the health-monitor thinks
+      // the channel stopped and enters a restart loop.
+      await provider.done;
     },
     stopAccount: async (ctx) => {
       const accountId = normalizeAccountId(ctx.account.accountId ?? DEFAULT_ACCOUNT_ID);

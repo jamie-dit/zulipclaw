@@ -1,10 +1,10 @@
-import crypto from "node:crypto";
 import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk";
+import crypto from "node:crypto";
 import { createReplyPrefixOptions } from "openclaw/plugin-sdk";
-import { getZulipRuntime } from "../runtime.js";
-import { resolveZulipAccount, type ResolvedZulipAccount } from "./accounts.js";
 import type { ZulipAuth } from "./client.js";
 import type { ZulipHttpError } from "./client.js";
+import { getZulipRuntime } from "../runtime.js";
+import { resolveZulipAccount, type ResolvedZulipAccount } from "./accounts.js";
 import { zulipRequest } from "./client.js";
 import { createDedupeCache } from "./dedupe.js";
 import { normalizeStreamName, normalizeTopic } from "./normalize.js";
@@ -472,24 +472,11 @@ export async function monitorZulipProvider(
     cfg,
     accountId: opts.accountId,
   });
-  const formatRuntimeMessage = (args: unknown[]) =>
-    args
-      .map((arg) => {
-        if (typeof arg === "string") {
-          return arg;
-        }
-        try {
-          return JSON.stringify(arg);
-        } catch {
-          return String(arg);
-        }
-      })
-      .join(" ");
   const runtime: RuntimeEnv = opts.runtime ?? {
-    log: (...args: unknown[]) => core.logging.getChildLogger().info(formatRuntimeMessage(args)),
-    error: (...args: unknown[]) => core.logging.getChildLogger().error(formatRuntimeMessage(args)),
-    exit: (code: number) => {
-      throw new Error(`Runtime exit not available (${code})`);
+    log: (message: string) => core.logging.getChildLogger().info(message),
+    error: (message: string) => core.logging.getChildLogger().error(message),
+    exit: () => {
+      throw new Error("Runtime exit not available");
     },
   };
 
@@ -514,14 +501,13 @@ export async function monitorZulipProvider(
   };
   opts.abortSignal?.addEventListener("abort", stop, { once: true });
 
-  let freshnessTimer: ReturnType<typeof setInterval> | undefined;
   const run = async () => {
     const me = await fetchZulipMe(auth, abortSignal);
     if (me.result !== "success" || typeof me.user_id !== "number") {
       throw new Error(me.msg || "Failed to fetch Zulip bot identity");
     }
     const botUserId = me.user_id;
-    logger.info(`[zulip:${account.accountId}] bot user_id=${botUserId}`);
+    logger.warn(`[zulip-debug][${account.accountId}] bot user_id=${botUserId}`);
 
     // Dedupe cache prevents reprocessing messages after queue re-registration or reconnect.
     const dedupe = createDedupeCache({ ttlMs: 5 * 60 * 1000, maxSize: 500 });
@@ -844,7 +830,7 @@ export async function monitorZulipProvider(
       // higher than the last one we saw through the event queue.
       let lastSeenMsgId = 0;
       const FRESHNESS_INTERVAL_MS = 30_000;
-      freshnessTimer = setInterval(async () => {
+      const freshnessTimer = setInterval(async () => {
         if (stopped || abortSignal.aborted || lastSeenMsgId === 0) return;
         try {
           const recent = await zulipRequest<{ result: string; messages?: ZulipEventMessage[] }>({
@@ -931,6 +917,9 @@ export async function monitorZulipProvider(
           }
 
           stage = "poll";
+          logger.warn(
+            `[zulip-debug][${account.accountId}] polling events (queue=${queueId.slice(0, 8)}, lastEventId=${lastEventId}, stream=${stream})`,
+          );
           const events = await pollEvents({ auth, queueId, lastEventId, abortSignal });
           if (events.result !== "success") {
             throw new Error(events.msg || "Zulip events poll failed");
@@ -947,9 +936,31 @@ export async function monitorZulipProvider(
             }
           }
 
+          logger.warn(
+            `[zulip-debug][${account.accountId}] poll returned ${list.length} events (messages: ${list.filter((e) => e.message).length}, lastEventId=${lastEventId})`,
+          );
+
           const messages = list
             .map((evt) => evt.message)
             .filter((m): m is ZulipEventMessage => Boolean(m));
+
+          // Track highest message ID for freshness checker gap detection.
+          for (const msg of messages) {
+            if (typeof msg.id === "number" && msg.id > lastSeenMsgId) {
+              lastSeenMsgId = msg.id;
+            }
+          }
+
+          for (const msg of messages) {
+            const ignore = shouldIgnoreMessage({
+              message: msg,
+              botUserId,
+              streams: account.streams,
+            });
+            logger.warn(
+              `[zulip-debug][${account.accountId}] event msg id=${msg.id} topic="${msg.subject}" sender=${msg.sender_id} ignore=${ignore.ignore}${ignore.reason ? ` (${ignore.reason})` : ""}`,
+            );
+          }
 
           // Issue 2: handle DMs by sending a redirect notice.
           const dmMessages = messages.filter(
@@ -979,10 +990,6 @@ export async function monitorZulipProvider(
 
           stage = "handle";
           for (const msg of messages) {
-            // Track highest message ID for freshness checker gap detection.
-            if (typeof msg.id === "number" && msg.id > lastSeenMsgId) {
-              lastSeenMsgId = msg.id;
-            }
             // Use throttled handler with backpressure (max concurrent limit)
             throttledHandleMessage(msg).catch((err) => {
               runtime.error?.(`zulip: message processing failed: ${String(err)}`);
@@ -1033,6 +1040,9 @@ export async function monitorZulipProvider(
         }
       }
 
+      // Clean up freshness checker interval.
+      clearInterval(freshnessTimer);
+
       // Issue 4: clean up the server-side event queue on shutdown.
       if (queueId) {
         try {
@@ -1057,7 +1067,7 @@ export async function monitorZulipProvider(
     await Promise.all(plan.map((entry) => pollStreamQueue(entry.stream)));
   };
 
-  void run()
+  const done = run()
     .catch((err) => {
       if (abortSignal.aborted || stopped) {
         return;
@@ -1066,10 +1076,8 @@ export async function monitorZulipProvider(
       runtime.error?.(`[zulip:${account.accountId}] monitor crashed: ${String(err)}`);
     })
     .finally(() => {
-      // Clean up freshness checker interval.
-      if (freshnessTimer) clearInterval(freshnessTimer);
-      logger.info(`[zulip:${account.accountId}] stopped`);
+      logger.warn(`[zulip-debug][${account.accountId}] stopped`);
     });
 
-  return { stop };
+  return { stop, done };
 }
