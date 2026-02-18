@@ -33,6 +33,11 @@ import {
 } from "./per-session-store.js";
 
 export { removePerSessionLayoutFiles };
+import {
+  loadSnapshot,
+  pruneUnreferencedSnapshots,
+  storeSnapshot,
+} from "./skills-snapshot-store.js";
 import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 const log = createSubsystemLogger("sessions/store");
@@ -146,6 +151,61 @@ export function getSessionStoreLockQueueSizeForTest(): number {
   return LOCK_QUEUES.size;
 }
 
+// ============================================================================
+// skillsSnapshot deduplication helpers
+// ============================================================================
+
+/**
+ * Hydrate any content-addressed skillsSnapshot references back into inline
+ * snapshots so that the rest of the system doesn't need to know about refs.
+ * Called after loading the store from disk.
+ */
+function hydrateSkillsSnapshots(store: Record<string, SessionEntry>, storePath: string): void {
+  for (const entry of Object.values(store)) {
+    if (!entry || entry.skillsSnapshot || !entry.skillsSnapshotRef) {
+      continue;
+    }
+    const loaded = loadSnapshot(storePath, entry.skillsSnapshotRef);
+    if (loaded) {
+      entry.skillsSnapshot = loaded;
+    }
+  }
+}
+
+/**
+ * Dehydrate inline skillsSnapshots to content-addressed refs before saving.
+ * Mutates entries in-place (removes `skillsSnapshot`, adds `skillsSnapshotRef`).
+ * Also prunes snapshot files that are no longer referenced.
+ */
+function dehydrateSkillsSnapshots(store: Record<string, SessionEntry>, storePath: string): void {
+  const referencedRefs = new Set<string>();
+
+  for (const entry of Object.values(store)) {
+    if (!entry) {
+      continue;
+    }
+    if (entry.skillsSnapshot) {
+      try {
+        const ref = storeSnapshot(storePath, entry.skillsSnapshot);
+        entry.skillsSnapshotRef = ref;
+        delete entry.skillsSnapshot;
+        referencedRefs.add(ref);
+      } catch {
+        // Best-effort: keep inline on failure so we don't lose data.
+      }
+    } else if (entry.skillsSnapshotRef) {
+      referencedRefs.add(entry.skillsSnapshotRef);
+    }
+  }
+
+  // Prune orphaned snapshot files (best-effort; never throw).
+  try {
+    pruneUnreferencedSnapshots(storePath, referencedRefs);
+  } catch {
+    // ignore
+  }
+}
+
 export async function withSessionStoreLockForTest<T>(
   storePath: string,
   fn: () => Promise<T>,
@@ -237,6 +297,9 @@ export function loadSessionStore(
       delete rec.room;
     }
   }
+
+  // Hydrate content-addressed skillsSnapshot refs back to inline snapshots.
+  hydrateSkillsSnapshots(store, storePath);
 
   // Cache the result if caching is enabled
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
@@ -587,6 +650,9 @@ async function saveSessionStoreUnlocked(
       await rotateSessionFile(storePath, maintenance.rotateBytes);
     }
   }
+
+  // Dehydrate inline skillsSnapshots to content-addressed refs before serialising.
+  dehydrateSkillsSnapshots(store, storePath);
 
   // Write to per-session files (layout was established by migrateFromMonolithic above).
   if (isPerSessionLayoutPresent(storePath)) {

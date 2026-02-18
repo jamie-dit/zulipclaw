@@ -100,6 +100,13 @@ export type SessionEntry = {
   lastAccountId?: string;
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
+  /**
+   * Content-addressed ref for the skillsSnapshot (sha256 hex prefix).
+   * When set, the snapshot is stored in `snapshots/<ref>.json` beside the
+   * sessions store, and `skillsSnapshot` is omitted from the serialised entry
+   * to avoid 51 KB of duplicated data per session.
+   */
+  skillsSnapshotRef?: string;
   systemPromptReport?: SessionSystemPromptReport;
 };
 

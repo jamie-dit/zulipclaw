@@ -170,8 +170,8 @@ export function restoreArchivedSession(params: {
 
   // Remove from archive (best-effort, fire-and-forget).
   delete archiveStore[sessionKey];
-  saveJsonStore(archivePath, archiveStore).catch((err) => {
-    log.warn({ err: String(err) }, "lifecycle: failed to update archive after restore");
+  saveJsonStore(archivePath, archiveStore).catch((err: unknown) => {
+    log.warn("lifecycle: failed to update archive after restore: " + String(err));
   });
 
   log.info("restored archived session", { sessionKey });
@@ -396,17 +396,21 @@ export function getSessionLazy(params: {
   }
 
   // 2. Main store.
-  let entry = store[sessionKey];
+  let entry: SessionEntry | undefined = store[sessionKey];
   if (!entry) {
     // 3. Archive restore.
-    entry = restoreArchivedSession({ store, sessionKey, storePath, archiveDir });
+    const restored = restoreArchivedSession({ store, sessionKey, storePath, archiveDir });
+    if (restored) {
+      entry = restored;
+    }
   }
 
   if (entry) {
     GLOBAL_LRU.set(cacheKey, entry);
+    return entry;
   }
 
-  return entry;
+  return undefined;
 }
 
 /** Invalidate a specific key from the LRU (call after writes). */
