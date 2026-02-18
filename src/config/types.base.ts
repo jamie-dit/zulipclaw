@@ -107,6 +107,16 @@ export type SessionConfig = {
   };
   /** Automatic session store maintenance (pruning, capping, file rotation). */
   maintenance?: SessionMaintenanceConfig;
+  /**
+   * Auto-archive configuration: idle sessions are moved to an archive directory.
+   * Archived sessions are transparently restored on next access.
+   */
+  archive?: SessionArchiveConfig;
+  /**
+   * TTL eviction for ephemeral (cron / sub-agent) sessions.
+   * Sessions are detected by key pattern (`:subagent:` or `:cron:`).
+   */
+  ephemeralTtl?: SessionEphemeralTtlConfig;
 };
 
 export type SessionMaintenanceMode = "enforce" | "warn";
@@ -122,6 +132,30 @@ export type SessionMaintenanceConfig = {
   maxEntries?: number;
   /** Rotate sessions.json when it exceeds this size (e.g. "10mb"). Default: 10mb. */
   rotateBytes?: number | string;
+};
+
+export type SessionArchiveConfig = {
+  /**
+   * Archive sessions that have been idle longer than this many days.
+   * Archived sessions are moved to the `archive/` subdirectory next to sessions.json.
+   * They are transparently restored on access.
+   * Default: 30.
+   */
+  idleDays?: number;
+  /**
+   * Subdirectory name (relative to sessions.json location) where archived sessions
+   * are stored. Default: "archive".
+   */
+  dir?: string;
+};
+
+export type SessionEphemeralTtlConfig = {
+  /**
+   * Auto-purge cron and sub-agent sessions after this many days.
+   * Sessions are detected by key pattern (`:subagent:` or `:cron:`).
+   * Default: 7.
+   */
+  ttlDays?: number;
 };
 
 export type LoggingConfig = {
