@@ -83,6 +83,7 @@ requests; keep it if you override provider headers (see [/gateway/configuration]
 
 Anthropic's 1M context window is beta-gated. In OpenClaw, enable it per model
 with `params.context1m: true` for supported Opus/Sonnet models.
+Example below enables both Opus 4.6 and Sonnet 4.6.
 
 ```json5
 {
@@ -90,6 +91,9 @@ with `params.context1m: true` for supported Opus/Sonnet models.
     defaults: {
       models: {
         "anthropic/claude-opus-4-6": {
+          params: { context1m: true },
+        },
+        "anthropic/claude-sonnet-4-6": {
           params: { context1m: true },
         },
       },

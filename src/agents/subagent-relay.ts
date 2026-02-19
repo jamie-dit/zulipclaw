@@ -37,6 +37,7 @@ type RelayState = {
   editTimer?: NodeJS.Timeout;
   toolCount: number;
   status?: "running" | "ok" | "error";
+  lastUpdatedAt: number;
 };
 
 const TOOL_EMOJI: Record<string, string> = {
@@ -214,6 +215,32 @@ function formatElapsedShort(startedAt: number, now = Date.now()) {
   return `${minutes}m${String(seconds).padStart(2, "0")}s`;
 }
 
+export function formatRelayUpdatedTime(ts: number) {
+  const safeTs = typeof ts === "number" && Number.isFinite(ts) ? ts : Date.now();
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(new Date(safeTs));
+  } catch {
+    const date = new Date(safeTs);
+    const hours = date.getHours();
+    const minutes = String(date.getMinutes()).padStart(2, "0");
+    const suffix = hours >= 12 ? "PM" : "AM";
+    const hour12 = hours % 12 || 12;
+    return `${hour12}:${minutes} ${suffix}`;
+  }
+}
+
+export function formatRelayFooter(
+  params: Pick<RelayState, "startedAt" | "toolCount" | "status" | "lastUpdatedAt">,
+  now = Date.now(),
+) {
+  const statusEmoji = params.status === "ok" ? "✅ " : params.status === "error" ? "❌ " : "";
+  const callWord = params.toolCount === 1 ? "tool call" : "tool calls";
+  return `${statusEmoji}⏱️ ${formatElapsedShort(params.startedAt, now)} · ${params.toolCount} ${callWord} · updated ${formatRelayUpdatedTime(params.lastUpdatedAt)}`;
+}
+
 function escapeMarkdown(value: string) {
   return value.replace(/[*_`]/g, "\\$&");
 }
@@ -224,11 +251,7 @@ function renderRelayMessage(state: RelayState) {
   for (const line of state.toolLines) {
     lines.push(`├ ${line}`);
   }
-  const statusEmoji = state.status === "ok" ? "✅ " : state.status === "error" ? "❌ " : "";
-  const callWord = state.toolCount === 1 ? "tool call" : "tool calls";
-  lines.push(
-    `└ ${statusEmoji}⏱️ ${formatElapsedShort(state.startedAt)} · ${state.toolCount} ${callWord}`,
-  );
+  lines.push(`└ ${formatRelayFooter(state)}`);
   return lines.join("\n");
 }
 
@@ -324,6 +347,7 @@ async function flushRelayMessage(runId: string, options?: { finalize?: boolean }
   if (!state) {
     return;
   }
+  state.lastUpdatedAt = Date.now();
   const message = renderRelayMessage(state);
   try {
     if (state.messageId) {
@@ -376,18 +400,20 @@ function getOrCreateRelayState(runId: string): RelayState | undefined {
   if (!deliveryContext) {
     return undefined;
   }
+  const startedAt =
+    typeof registration.startedAt === "number" && Number.isFinite(registration.startedAt)
+      ? registration.startedAt
+      : Date.now();
   const state: RelayState = {
     runId,
     label: registration.label?.trim() || "worker",
     model: registration.model?.trim() || "default",
-    startedAt:
-      typeof registration.startedAt === "number" && Number.isFinite(registration.startedAt)
-        ? registration.startedAt
-        : Date.now(),
+    startedAt,
     toolLines: [],
     deliveryContext,
     toolCount: 0,
     status: "running",
+    lastUpdatedAt: startedAt,
   };
   relayByRun.set(runId, state);
   return state;
@@ -431,6 +457,7 @@ function handleLifecycleEvent(evt: AgentEventPayload) {
       const state = relayByRun.get(evt.runId);
       if (state) {
         state.startedAt = evt.data.startedAt;
+        state.lastUpdatedAt = evt.data.startedAt;
       }
     }
     return;
