@@ -69,7 +69,7 @@ const DEFAULT_REACTIONS: ResolvedZulipReactions = {
   onFailure: "warning",
   clearOnFinish: true,
   workflow: {
-    enabled: false,
+    enabled: true,
     replaceStageReaction: true,
     minTransitionMs: 1500,
     stages: {

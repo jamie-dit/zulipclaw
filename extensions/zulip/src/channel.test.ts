@@ -100,7 +100,7 @@ describe("zulipPlugin", () => {
     expect(account.reactions.clearOnFinish).toBe(false);
   });
 
-  it("keeps workflow reactions disabled by default", () => {
+  it("enables workflow reactions by default", () => {
     const cfg: OpenClawConfig = {
       channels: {
         zulip: {
@@ -113,7 +113,7 @@ describe("zulipPlugin", () => {
       },
     };
     const account = resolveZulipAccount({ cfg, accountId: "default" });
-    expect(account.reactions.workflow.enabled).toBe(false);
+    expect(account.reactions.workflow.enabled).toBe(true);
     expect(account.reactions.workflow.stages.queued).toBe(account.reactions.onStart);
     expect(account.reactions.workflow.stages.success).toBe(account.reactions.onSuccess);
     expect(account.reactions.workflow.stages.failure).toBe(account.reactions.onFailure);

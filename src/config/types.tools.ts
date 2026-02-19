@@ -167,8 +167,10 @@ export type DelegationNudgeConfig = {
   enabled?: boolean;
   /** Tool call count after which a soft warning is appended to results (default: 3). */
   softThreshold?: number;
-  /** Tool call count after which non-exempt tools are blocked (default: 6). */
+  /** Tool call count after which non-exempt tools are blocked on normal turns (default: 6). */
   hardThreshold?: number;
+  /** Tool call count hard cap for only the first depth-0 main turn (default: 10). */
+  firstTurnHardThreshold?: number;
   /** Tools exempt from blocking (always allowed). */
   exemptTools?: string[];
 };
