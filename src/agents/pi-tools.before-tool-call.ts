@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { isPlainObject } from "../utils.js";
+import { getDelegationNudgeCounter, incrementDelegationNudgeCounter } from "./delegation-nudge.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -133,7 +134,7 @@ export async function runBeforeToolCallHook(args: {
 
     recordToolCall(sessionState, toolName, params, args.toolCallId, args.ctx.loopDetection);
 
-    // Delegation nudge hard block
+    // Delegation nudge hard block (per-turn counter)
     if (
       args.ctx.delegationNudge?.enabled &&
       !isSubagentSessionKey(args.ctx.sessionKey) &&
@@ -154,11 +155,12 @@ export async function runBeforeToolCallHook(args: {
         ],
       );
 
-      // Check current tool call count in this run
-      const toolCallCount = sessionState.toolCallHistory?.length ?? 0;
+      const toolCallCount = incrementDelegationNudgeCounter(args.ctx.sessionKey);
+      const effectiveToolCallCount =
+        toolCallCount > 0 ? toolCallCount : getDelegationNudgeCounter(args.ctx.sessionKey);
 
-      if (toolCallCount >= hardThreshold && !exemptTools.has(toolName)) {
-        const reason = `BLOCKED: Tool call limit exceeded (${toolCallCount}/${hardThreshold}). You MUST use sessions_spawn to delegate this work to a sub-agent. Only delegation tools (sessions_spawn, subagents, message) are allowed.`;
+      if (effectiveToolCallCount >= hardThreshold && !exemptTools.has(toolName)) {
+        const reason = `BLOCKED: Tool call limit exceeded (${effectiveToolCallCount}/${hardThreshold}). You MUST use sessions_spawn to delegate this work to a sub-agent. Only delegation tools (sessions_spawn, subagents, message) are allowed.`;
         log.error(`Delegation nudge blocking ${toolName}: ${reason}`);
         return {
           blocked: true,
