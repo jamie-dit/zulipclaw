@@ -9,6 +9,12 @@ import {
   loadSubagentRegistryFromDisk,
   saveSubagentRegistryToDisk,
 } from "./subagent-registry.store.js";
+import {
+  initSubagentRelay,
+  registerSubagentRelayRun,
+  type SubagentRelayDeliveryContext,
+  unregisterSubagentRelayRun,
+} from "./subagent-relay.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 
 export type SubagentRunRecord = {
@@ -16,6 +22,7 @@ export type SubagentRunRecord = {
   childSessionKey: string;
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
+  requesterDeliveryContext?: SubagentRelayDeliveryContext;
   requesterDisplayKey: string;
   task: string;
   cleanup: "delete" | "keep";
@@ -84,6 +91,37 @@ function persistSubagentRuns() {
   }
 }
 
+function normalizeRelayDeliveryContext(
+  value?: SubagentRelayDeliveryContext,
+): SubagentRelayDeliveryContext | undefined {
+  const channel = typeof value?.channel === "string" ? value.channel.trim() : "";
+  const to = typeof value?.to === "string" ? value.to.trim() : "";
+  const accountId = typeof value?.accountId === "string" ? value.accountId.trim() : "";
+  if (!channel || !to) {
+    return undefined;
+  }
+  return {
+    channel,
+    to,
+    accountId: accountId || undefined,
+  };
+}
+
+function resolveRelayDeliveryContextForRun(params: {
+  requesterDeliveryContext?: SubagentRelayDeliveryContext;
+  requesterOrigin?: DeliveryContext;
+}) {
+  const explicit = normalizeRelayDeliveryContext(params.requesterDeliveryContext);
+  if (explicit) {
+    return explicit;
+  }
+  return normalizeRelayDeliveryContext({
+    channel: params.requesterOrigin?.channel,
+    to: params.requesterOrigin?.to,
+    accountId: params.requesterOrigin?.accountId,
+  });
+}
+
 const resumedRuns = new Set<string>();
 
 function suppressAnnounceForSteerRestart(entry?: SubagentRunRecord) {
@@ -131,12 +169,14 @@ function resumeSubagentRun(runId: string) {
   if ((entry.announceRetryCount ?? 0) >= MAX_ANNOUNCE_RETRY_COUNT) {
     logAnnounceGiveUp(entry, "retry-limit");
     entry.cleanupCompletedAt = Date.now();
+    unregisterSubagentRelayRun(runId);
     persistSubagentRuns();
     return;
   }
   if (typeof entry.endedAt === "number" && Date.now() - entry.endedAt > ANNOUNCE_EXPIRY_MS) {
     logAnnounceGiveUp(entry, "expiry");
     entry.cleanupCompletedAt = Date.now();
+    unregisterSubagentRelayRun(runId);
     persistSubagentRuns();
     return;
   }
@@ -194,6 +234,16 @@ function restoreSubagentRunsOnce() {
       if (!subagentRuns.has(runId)) {
         subagentRuns.set(runId, entry);
       }
+      registerSubagentRelayRun({
+        runId,
+        label: entry.label,
+        model: entry.model,
+        startedAt: entry.startedAt,
+        deliveryContext: resolveRelayDeliveryContextForRun({
+          requesterDeliveryContext: entry.requesterDeliveryContext,
+          requesterOrigin: entry.requesterOrigin,
+        }),
+      });
     }
 
     // Resume pending work.
@@ -251,6 +301,7 @@ async function sweepSubagentRuns() {
       continue;
     }
     subagentRuns.delete(runId);
+    unregisterSubagentRelayRun(runId);
     mutated = true;
     try {
       await callGateway({
@@ -271,6 +322,7 @@ async function sweepSubagentRuns() {
 }
 
 function ensureListener() {
+  initSubagentRelay();
   if (listenerStarted) {
     return;
   }
@@ -290,6 +342,16 @@ function ensureListener() {
         entry.startedAt = startedAt;
         persistSubagentRuns();
       }
+      registerSubagentRelayRun({
+        runId: entry.runId,
+        label: entry.label,
+        model: entry.model,
+        startedAt: startedAt ?? entry.startedAt,
+        deliveryContext: resolveRelayDeliveryContextForRun({
+          requesterDeliveryContext: entry.requesterDeliveryContext,
+          requesterOrigin: entry.requesterOrigin,
+        }),
+      });
       return;
     }
     if (phase !== "end" && phase !== "error") {
@@ -334,6 +396,7 @@ function finalizeSubagentCleanup(runId: string, cleanup: "delete" | "keep", didA
       // Give up: mark as completed to break the infinite retry loop.
       logAnnounceGiveUp(entry, retryCount >= MAX_ANNOUNCE_RETRY_COUNT ? "retry-limit" : "expiry");
       entry.cleanupCompletedAt = now;
+      unregisterSubagentRelayRun(runId);
       persistSubagentRuns();
       retryDeferredCompletedAnnounces(runId);
       return;
@@ -356,11 +419,13 @@ function finalizeSubagentCleanup(runId: string, cleanup: "delete" | "keep", didA
   }
   if (cleanup === "delete") {
     subagentRuns.delete(runId);
+    unregisterSubagentRelayRun(runId);
     persistSubagentRuns();
     retryDeferredCompletedAnnounces(runId);
     return;
   }
   entry.cleanupCompletedAt = Date.now();
+  unregisterSubagentRelayRun(runId);
   persistSubagentRuns();
   retryDeferredCompletedAnnounces(runId);
 }
@@ -385,6 +450,7 @@ function retryDeferredCompletedAnnounces(excludeRunId?: string) {
     if (endedAgo > ANNOUNCE_EXPIRY_MS) {
       logAnnounceGiveUp(entry, "expiry");
       entry.cleanupCompletedAt = now;
+      unregisterSubagentRelayRun(runId);
       persistSubagentRuns();
       continue;
     }
@@ -470,6 +536,7 @@ export function replaceSubagentRunAfterSteer(params: {
   if (previousRunId !== nextRunId) {
     subagentRuns.delete(previousRunId);
     resumedRuns.delete(previousRunId);
+    unregisterSubagentRelayRun(previousRunId);
   }
 
   const now = Date.now();
@@ -495,6 +562,16 @@ export function replaceSubagentRunAfterSteer(params: {
   };
 
   subagentRuns.set(nextRunId, next);
+  registerSubagentRelayRun({
+    runId: nextRunId,
+    label: next.label,
+    model: next.model,
+    startedAt: next.startedAt,
+    deliveryContext: resolveRelayDeliveryContextForRun({
+      requesterDeliveryContext: next.requesterDeliveryContext,
+      requesterOrigin: next.requesterOrigin,
+    }),
+  });
   ensureListener();
   persistSubagentRuns();
   if (archiveAtMs) {
@@ -509,6 +586,7 @@ export function registerSubagentRun(params: {
   childSessionKey: string;
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
+  requesterDeliveryContext?: SubagentRelayDeliveryContext;
   requesterDisplayKey: string;
   task: string;
   cleanup: "delete" | "keep";
@@ -524,11 +602,16 @@ export function registerSubagentRun(params: {
   const runTimeoutSeconds = params.runTimeoutSeconds ?? 0;
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
+  const requesterDeliveryContext = resolveRelayDeliveryContextForRun({
+    requesterDeliveryContext: params.requesterDeliveryContext,
+    requesterOrigin,
+  });
   subagentRuns.set(params.runId, {
     runId: params.runId,
     childSessionKey: params.childSessionKey,
     requesterSessionKey: params.requesterSessionKey,
     requesterOrigin,
+    requesterDeliveryContext,
     requesterDisplayKey: params.requesterDisplayKey,
     task: params.task,
     cleanup: params.cleanup,
@@ -540,6 +623,13 @@ export function registerSubagentRun(params: {
     startedAt: now,
     archiveAtMs,
     cleanupHandled: false,
+  });
+  registerSubagentRelayRun({
+    runId: params.runId,
+    label: params.label,
+    model: params.model,
+    startedAt: now,
+    deliveryContext: requesterDeliveryContext,
   });
   ensureListener();
   persistSubagentRuns();
@@ -610,6 +700,9 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
 }
 
 export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
+  for (const runId of subagentRuns.keys()) {
+    unregisterSubagentRelayRun(runId);
+  }
   subagentRuns.clear();
   resumedRuns.clear();
   resetAnnounceQueuesForTests();
@@ -632,6 +725,7 @@ export function addSubagentRunForTests(entry: SubagentRunRecord) {
 export function releaseSubagentRun(runId: string) {
   const didDelete = subagentRuns.delete(runId);
   if (didDelete) {
+    unregisterSubagentRelayRun(runId);
     persistSubagentRuns();
   }
   if (subagentRuns.size === 0) {
@@ -747,12 +841,30 @@ export function markSubagentRunTerminated(params: {
     entry.cleanupHandled = true;
     entry.cleanupCompletedAt = now;
     entry.suppressAnnounceReason = "killed";
+    unregisterSubagentRelayRun(runId);
     updated += 1;
   }
   if (updated > 0) {
     persistSubagentRuns();
   }
   return updated;
+}
+
+export function getSubagentRelayDeliveryContext(
+  runId: string,
+): SubagentRelayDeliveryContext | undefined {
+  const key = runId.trim();
+  if (!key) {
+    return undefined;
+  }
+  const entry = subagentRuns.get(key);
+  if (!entry) {
+    return undefined;
+  }
+  return resolveRelayDeliveryContextForRun({
+    requesterDeliveryContext: entry.requesterDeliveryContext,
+    requesterOrigin: entry.requesterOrigin,
+  });
 }
 
 export function listSubagentRunsForRequester(requesterSessionKey: string): SubagentRunRecord[] {

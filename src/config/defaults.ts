@@ -299,7 +299,9 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const hasSubMax =
     typeof defaults?.subagents?.maxConcurrent === "number" &&
     Number.isFinite(defaults.subagents.maxConcurrent);
-  if (hasMax && hasSubMax) {
+  const hasRelayEnabled = typeof defaults?.subagents?.relay?.enabled === "boolean";
+  const hasRelayLevel = typeof defaults?.subagents?.relay?.level === "string";
+  if (hasMax && hasSubMax && hasRelayEnabled && hasRelayLevel) {
     return cfg;
   }
 
@@ -315,6 +317,17 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
     nextSubagents.maxConcurrent = DEFAULT_SUBAGENT_MAX_CONCURRENT;
     mutated = true;
   }
+
+  const nextSubagentRelay = nextSubagents.relay ? { ...nextSubagents.relay } : {};
+  if (!hasRelayEnabled) {
+    nextSubagentRelay.enabled = true;
+    mutated = true;
+  }
+  if (!hasRelayLevel) {
+    nextSubagentRelay.level = "tools";
+    mutated = true;
+  }
+  nextSubagents.relay = nextSubagentRelay;
 
   if (!mutated) {
     return cfg;

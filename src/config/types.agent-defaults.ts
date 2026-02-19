@@ -251,6 +251,13 @@ export type AgentDefaultsConfig = {
     model?: string | { primary?: string; fallbacks?: string[] };
     /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high"). */
     thinking?: string;
+    /** Relay sub-agent run updates back to parent channel/topic. */
+    relay?: {
+      /** Enable sub-agent relay message updates. Default: true. */
+      enabled?: boolean;
+      /** Relay detail level. */
+      level?: "tools" | "full" | "summary";
+    };
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: {
