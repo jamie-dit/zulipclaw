@@ -181,7 +181,11 @@ function formatToolLine(toolNameRaw: string, args: unknown, startedAt: number, t
   const emoji = TOOL_EMOJI[toolName] ?? "🔨";
   const detail = formatToolDetail(toolName, readRecord(args));
   const title = toolName.replaceAll("_", " ");
-  const stamp = `_${formatToolElapsed(startedAt, ts)}_`;
+
+  // Guard against invalid timestamps - use current time if ts is invalid
+  const validTs = typeof ts === "number" && Number.isFinite(ts) ? ts : Date.now();
+  const stamp = `_${formatToolElapsed(startedAt, validTs)}_`;
+
   if (!detail) {
     return `${stamp} ${emoji} ${title}`;
   }
