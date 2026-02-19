@@ -44,11 +44,16 @@ export function applyKnownModelContextWindow(params: {
   contextWindow?: number;
 }): number | undefined {
   const provider = typeof params.provider === "string" ? params.provider.trim() : "";
+  const normalizedProvider = provider.toLowerCase();
   const modelId = typeof params.modelId === "string" ? params.modelId.trim() : "";
 
-  const known =
-    lookupKnownModelContextWindow(provider && modelId ? `${provider}/${modelId}` : undefined) ??
-    lookupKnownModelContextWindow(modelId);
+  let known: number | undefined;
+  if (!provider || normalizedProvider === "anthropic") {
+    known = lookupKnownModelContextWindow(modelId);
+  } else if (modelId.toLowerCase().startsWith("anthropic/")) {
+    // For aggregator providers (e.g. openrouter) only trust explicit anthropic-prefixed ids.
+    known = lookupKnownModelContextWindow(modelId);
+  }
 
   const current =
     typeof params.contextWindow === "number" && Number.isFinite(params.contextWindow)

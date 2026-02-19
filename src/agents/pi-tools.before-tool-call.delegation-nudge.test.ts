@@ -1,17 +1,21 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { callGateway } from "../infra/gateway-client.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { resetDelegationNudgeCounter, startDelegationNudgeTurn } from "./delegation-nudge.js";
 import { runBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 
+const { mockCallGateway } = vi.hoisted(() => ({
+  mockCallGateway: vi.fn(),
+}));
+
 vi.mock("../plugins/hook-runner-global.js");
 vi.mock("./subagent-spawn.js");
-vi.mock("../infra/gateway-client.js");
+vi.mock("../gateway/call.js", () => ({
+  callGateway: mockCallGateway,
+}));
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const mockSpawnSubagentDirect = vi.mocked(spawnSubagentDirect);
-const mockCallGateway = vi.mocked(callGateway);
 
 describe("delegation nudge hard-threshold behavior", () => {
   beforeEach(() => {
@@ -112,13 +116,9 @@ describe("delegation nudge hard-threshold behavior", () => {
     startDelegationNudgeTurn({ sessionKey, isFirstTurn: false });
 
     mockSpawnSubagentDirect.mockResolvedValue({
-      accepted: true,
-      sessionKey,
+      status: "accepted",
       childSessionKey: "agent:main:subagent:auto-child",
-      displayChildSessionKey: "agent:main:subagent:auto-child",
-      childRunId: "run-1",
-      childSessionId: "session-1",
-      status: "queued",
+      runId: "run-1",
     });
     mockCallGateway.mockResolvedValue({ ok: true, result: { id: "msg-1" } });
 

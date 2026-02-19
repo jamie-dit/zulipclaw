@@ -239,6 +239,10 @@ export function createOpenClawCodingTools(options?: {
   disableMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /** Whether this run is the first turn for the current depth-0 main session. */
+  delegationNudgeIsFirstTurn?: boolean;
+  /** Current turn prompt text (used for auto-delegation context). */
+  turnPrompt?: string;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -517,6 +521,15 @@ export function createOpenClawCodingTools(options?: {
       sessionKey: options?.sessionKey,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
       delegationNudge: resolveDelegationNudgeConfig({ cfg: options?.config, agentId }),
+      delegationIsFirstTurn: options?.delegationNudgeIsFirstTurn,
+      messageChannel: options?.messageProvider,
+      agentAccountId: options?.agentAccountId,
+      messageTo: options?.messageTo,
+      messageThreadId: options?.messageThreadId,
+      groupId: options?.groupId,
+      groupChannel: options?.groupChannel,
+      groupSpace: options?.groupSpace,
+      turnPrompt: options?.turnPrompt,
     }),
   );
   const withAbort = options?.abortSignal

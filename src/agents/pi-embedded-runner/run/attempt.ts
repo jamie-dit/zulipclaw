@@ -28,7 +28,7 @@ import {
   resolveChannelMessageToolHints,
 } from "../../channel-tools.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
-import { resetDelegationNudgeCounter } from "../../delegation-nudge.js";
+import { startDelegationNudgeTurn } from "../../delegation-nudge.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
@@ -235,9 +235,16 @@ export async function runEmbeddedAttempt(
   await fs.mkdir(resolvedWorkspace, { recursive: true });
 
   const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
+  const hadSessionFileAtTurnStart = await fs
+    .stat(params.sessionFile)
+    .then(() => true)
+    .catch(() => false);
 
-  // Reset delegation nudge counters for each new run/turn.
-  resetDelegationNudgeCounter(sandboxSessionKey);
+  // Track delegation nudge state per run/turn.
+  startDelegationNudgeTurn({
+    sessionKey: sandboxSessionKey,
+    isFirstTurn: !hadSessionFileAtTurnStart,
+  });
 
   const sandbox = await resolveSandboxContext({
     config: params.config,
@@ -332,6 +339,8 @@ export async function runEmbeddedAttempt(
           requireExplicitMessageTarget:
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
+          delegationNudgeIsFirstTurn: !hadSessionFileAtTurnStart,
+          turnPrompt: params.prompt,
         });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
     logToolSchemasForGoogle({ tools, provider: params.provider });
@@ -532,6 +541,10 @@ export async function runEmbeddedAttempt(
         cfg: params.config,
         agentId: sessionAgentId,
       });
+      const clientDelegationNudge = resolveDelegationNudgeConfig({
+        cfg: params.config,
+        agentId: sessionAgentId,
+      });
       const clientToolDefs = params.clientTools
         ? toClientToolDefinitions(
             params.clientTools,
@@ -540,8 +553,18 @@ export async function runEmbeddedAttempt(
             },
             {
               agentId: sessionAgentId,
-              sessionKey: params.sessionKey,
+              sessionKey: params.sessionKey ?? params.sessionId,
               loopDetection: clientToolLoopDetection,
+              delegationNudge: clientDelegationNudge,
+              delegationIsFirstTurn: !hadSessionFileAtTurnStart,
+              messageChannel: params.messageChannel ?? params.messageProvider,
+              agentAccountId: params.agentAccountId,
+              messageTo: params.messageTo,
+              messageThreadId: params.messageThreadId,
+              groupId: params.groupId,
+              groupChannel: params.groupChannel,
+              groupSpace: params.groupSpace,
+              turnPrompt: params.prompt,
             },
           )
         : [];

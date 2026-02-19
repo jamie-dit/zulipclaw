@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { applyConfiguredContextWindows, applyDiscoveredContextWindows } from "./context.js";
+import {
+  applyConfiguredContextWindows,
+  applyDiscoveredContextWindows,
+  lookupContextTokens,
+} from "./context.js";
 import { createSessionManagerRuntimeRegistry } from "./pi-extensions/session-manager-runtime-registry.js";
 
 describe("applyDiscoveredContextWindows", () => {
@@ -14,6 +18,20 @@ describe("applyDiscoveredContextWindows", () => {
     });
 
     expect(cache.get("claude-sonnet-4-5")).toBe(200_000);
+  });
+
+  it("upgrades discovered Claude 4.6 model context windows to 1M", () => {
+    const cache = new Map<string, number>();
+    applyDiscoveredContextWindows({
+      cache,
+      models: [
+        { id: "claude-opus-4-6", contextWindow: 200_000 },
+        { id: "claude-sonnet-4-6", contextWindow: 200_000 },
+      ],
+    });
+
+    expect(cache.get("claude-opus-4-6")).toBe(1_000_000);
+    expect(cache.get("claude-sonnet-4-6")).toBe(1_000_000);
   });
 });
 
@@ -53,6 +71,13 @@ describe("applyConfiguredContextWindows", () => {
 
     expect(cache.get("custom/model")).toBe(150_000);
     expect(cache.has("bad/model")).toBe(false);
+  });
+});
+
+describe("lookupContextTokens", () => {
+  it("falls back to known 1M context windows for Claude 4.6 ids", () => {
+    expect(lookupContextTokens("claude-opus-4-6")).toBe(1_000_000);
+    expect(lookupContextTokens("anthropic/claude-sonnet-4-6")).toBe(1_000_000);
   });
 });
 

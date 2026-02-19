@@ -371,9 +371,24 @@ const DelegationNudgeSchema = z
     enabled: z.boolean().optional(),
     softThreshold: z.number().int().positive().optional(),
     hardThreshold: z.number().int().positive().optional(),
+    firstTurnHardThreshold: z.number().int().positive().optional(),
     exemptTools: z.array(z.string()).optional(),
   })
   .strict()
+  .superRefine((value, ctx) => {
+    if (
+      typeof value.firstTurnHardThreshold === "number" &&
+      typeof value.hardThreshold === "number" &&
+      value.firstTurnHardThreshold < value.hardThreshold
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["firstTurnHardThreshold"],
+        message:
+          "tools.delegationNudge.firstTurnHardThreshold must be greater than or equal to hardThreshold.",
+      });
+    }
+  })
   .optional();
 
 const ToolLoopDetectionSchema = z
