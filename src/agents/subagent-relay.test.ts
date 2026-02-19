@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatToolElapsed } from "./subagent-relay.js";
+import { formatToolElapsed, formatToolLine } from "./subagent-relay.js";
 
 describe("subagent-relay", () => {
   describe("formatToolElapsed", () => {
@@ -29,6 +29,19 @@ describe("subagent-relay", () => {
       expect(
         formatToolElapsed(undefined as unknown as number, undefined as unknown as number),
       ).toBe("+0:00");
+    });
+  });
+
+  describe("formatToolLine", () => {
+    it("renders bracketed elapsed prefix instead of italic markdown", () => {
+      const line = formatToolLine("read", { path: "/tmp/file.txt" }, 1_000, 8_000);
+      expect(line).toContain("[+0:07]");
+      expect(line).not.toContain("_+0:07_");
+    });
+
+    it("keeps hour-style elapsed formatting in the bracket prefix", () => {
+      const line = formatToolLine("exec", { command: "echo hi" }, 1_000, 3_662_000);
+      expect(line.startsWith("[+1:01:01]")).toBe(true);
     });
   });
 });

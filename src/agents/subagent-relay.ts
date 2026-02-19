@@ -188,7 +188,7 @@ export function formatToolElapsed(startedAt: number, ts: number) {
   return `+${Math.floor(totalSeconds / 60)}:${String(seconds).padStart(2, "0")}`;
 }
 
-function formatToolLine(toolNameRaw: string, args: unknown, startedAt: number, ts: number) {
+export function formatToolLine(toolNameRaw: string, args: unknown, startedAt: number, ts: number) {
   const toolName = toolNameRaw.trim().toLowerCase();
   const emoji = TOOL_EMOJI[toolName] ?? "🔨";
   const detail = formatToolDetail(toolName, readRecord(args));
@@ -196,7 +196,7 @@ function formatToolLine(toolNameRaw: string, args: unknown, startedAt: number, t
 
   // Guard against invalid timestamps - use current time if ts is invalid
   const validTs = typeof ts === "number" && Number.isFinite(ts) ? ts : Date.now();
-  const stamp = `_${formatToolElapsed(startedAt, validTs)}_`;
+  const stamp = `[${formatToolElapsed(startedAt, validTs)}]`;
 
   if (!detail) {
     return `${stamp} ${emoji} ${title}`;
