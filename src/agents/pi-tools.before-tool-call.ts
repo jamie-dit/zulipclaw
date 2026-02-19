@@ -1,7 +1,8 @@
-import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import type { DelegationNudgeConfig, ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { isPlainObject } from "../utils.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -10,6 +11,7 @@ export type HookContext = {
   agentId?: string;
   sessionKey?: string;
   loopDetection?: ToolLoopDetectionConfig;
+  delegationNudge?: DelegationNudgeConfig;
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -130,6 +132,40 @@ export async function runBeforeToolCallHook(args: {
     }
 
     recordToolCall(sessionState, toolName, params, args.toolCallId, args.ctx.loopDetection);
+
+    // Delegation nudge hard block
+    if (
+      args.ctx.delegationNudge?.enabled &&
+      !isSubagentSessionKey(args.ctx.sessionKey) &&
+      !isCronSessionKey(args.ctx.sessionKey)
+    ) {
+      const config = args.ctx.delegationNudge;
+      const hardThreshold = config.hardThreshold ?? 6;
+      const exemptTools = new Set(
+        config.exemptTools ?? [
+          "sessions_spawn",
+          "subagents",
+          "message",
+          "session_status",
+          "memory_search",
+          "memory_get",
+          "tts",
+          "cron",
+        ],
+      );
+
+      // Check current tool call count in this run
+      const toolCallCount = sessionState.toolCallHistory?.length ?? 0;
+
+      if (toolCallCount >= hardThreshold && !exemptTools.has(toolName)) {
+        const reason = `BLOCKED: Tool call limit exceeded (${toolCallCount}/${hardThreshold}). You MUST use sessions_spawn to delegate this work to a sub-agent. Only delegation tools (sessions_spawn, subagents, message) are allowed.`;
+        log.error(`Delegation nudge blocking ${toolName}: ${reason}`);
+        return {
+          blocked: true,
+          reason,
+        };
+      }
+    }
   }
 
   const hookRunner = getGlobalHookRunner();

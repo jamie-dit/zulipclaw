@@ -6,7 +6,7 @@ import {
   readTool,
 } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
-import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import type { DelegationNudgeConfig, ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
@@ -150,6 +150,30 @@ export function resolveToolLoopDetectionConfig(params: {
       ...global.detectors,
       ...agent.detectors,
     },
+  };
+}
+
+export function resolveDelegationNudgeConfig(params: {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+}): DelegationNudgeConfig | undefined {
+  const global = params.cfg?.tools?.delegationNudge;
+  const agent =
+    params.agentId && params.cfg
+      ? resolveAgentConfig(params.cfg, params.agentId)?.tools?.delegationNudge
+      : undefined;
+
+  if (!agent) {
+    return global;
+  }
+  if (!global) {
+    return agent;
+  }
+
+  return {
+    ...global,
+    ...agent,
+    exemptTools: [...(global.exemptTools ?? []), ...(agent.exemptTools ?? [])],
   };
 }
 
@@ -492,6 +516,7 @@ export function createOpenClawCodingTools(options?: {
       agentId,
       sessionKey: options?.sessionKey,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
+      delegationNudge: resolveDelegationNudgeConfig({ cfg: options?.config, agentId }),
     }),
   );
   const withAbort = options?.abortSignal

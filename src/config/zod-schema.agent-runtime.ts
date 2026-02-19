@@ -366,6 +366,16 @@ const ToolLoopDetectionDetectorSchema = z
   .strict()
   .optional();
 
+const DelegationNudgeSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    softThreshold: z.number().int().positive().optional(),
+    hardThreshold: z.number().int().positive().optional(),
+    exemptTools: z.array(z.string()).optional(),
+  })
+  .strict()
+  .optional();
+
 const ToolLoopDetectionSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -435,6 +445,7 @@ export const AgentToolsSchema = z
     exec: AgentToolExecSchema,
     fs: ToolFsSchema,
     loopDetection: ToolLoopDetectionSchema,
+    delegationNudge: DelegationNudgeSchema,
     sandbox: z
       .object({
         tools: ToolPolicySchema,
@@ -634,6 +645,7 @@ export const ToolsSchema = z
       .strict()
       .optional(),
     loopDetection: ToolLoopDetectionSchema,
+    delegationNudge: DelegationNudgeSchema,
     message: z
       .object({
         allowCrossContextSend: z.boolean().optional(),

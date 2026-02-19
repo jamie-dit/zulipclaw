@@ -2,6 +2,7 @@ import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
+import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import type {
@@ -371,8 +372,28 @@ export async function handleToolExecutionEnd(
   );
 
   if (ctx.params.onToolResult && ctx.shouldEmitToolOutput()) {
-    const outputText = extractToolResultText(sanitizedResult);
+    let outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
+      // --- Delegation nudge soft warning ---
+      // Only for main sessions, not sub-agents or crons
+      const sessionKey = ctx.params.sessionKey;
+      if (
+        sessionKey &&
+        !isSubagentSessionKey(sessionKey) &&
+        !isCronSessionKey(sessionKey) &&
+        ctx.params.config?.tools?.delegationNudge?.enabled
+      ) {
+        const config = ctx.params.config.tools.delegationNudge;
+        const softThreshold = config.softThreshold ?? 3;
+        const hardThreshold = config.hardThreshold ?? 6;
+        const toolCallCount = ctx.state.toolMetas.length;
+
+        if (toolCallCount >= softThreshold && toolCallCount < hardThreshold) {
+          const nudgeMsg = `\n\n⚠️ DELEGATION NUDGE: You have made ${toolCallCount} tool calls in this turn. You SHOULD delegate remaining work to a sub-agent using sessions_spawn. Direct tool use in the main session should be minimal.`;
+          outputText += nudgeMsg;
+        }
+      }
+
       ctx.emitToolOutput(toolName, meta, outputText);
     }
   }
