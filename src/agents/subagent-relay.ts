@@ -3,6 +3,11 @@ import { loadConfig } from "../config/config.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { defaultRuntime } from "../runtime.js";
 
+/**
+ * ZulipClaw fork note:
+ * This relay is intentionally Zulip-only (stream/topic targets) and is not
+ * intended as a multi-platform formatting relay.
+ */
 export type SubagentRelayDeliveryContext = {
   channel?: string;
   to?: string;

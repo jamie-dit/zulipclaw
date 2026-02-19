@@ -9,12 +9,7 @@ import {
   loadSubagentRegistryFromDisk,
   saveSubagentRegistryToDisk,
 } from "./subagent-registry.store.js";
-import {
-  initSubagentRelay,
-  registerSubagentRelayRun,
-  type SubagentRelayDeliveryContext,
-  unregisterSubagentRelayRun,
-} from "./subagent-relay.js";
+import type { SubagentRelayDeliveryContext, SubagentRelayRegistration } from "./subagent-relay.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 
 export type SubagentRunRecord = {
@@ -64,6 +59,70 @@ const MAX_ANNOUNCE_RETRY_COUNT = 3;
  * succeeded. Guards against stale registry entries surviving gateway restarts.
  */
 const ANNOUNCE_EXPIRY_MS = 5 * 60_000; // 5 minutes
+
+type SubagentRelayOps = {
+  initSubagentRelay: () => void;
+  registerSubagentRelayRun: (params: SubagentRelayRegistration) => void;
+  unregisterSubagentRelayRun: (runId: string) => void;
+};
+
+const subagentRelayOps: SubagentRelayOps = {
+  initSubagentRelay: () => {},
+  registerSubagentRelayRun: () => {},
+  unregisterSubagentRelayRun: () => {},
+};
+
+let subagentRelayLoadPromise: Promise<void> | null = null;
+
+function ensureSubagentRelayOpsLoaded() {
+  if (subagentRelayLoadPromise) {
+    return subagentRelayLoadPromise;
+  }
+  subagentRelayLoadPromise = import("./subagent-relay.js")
+    .then((module) => {
+      subagentRelayOps.initSubagentRelay = module.initSubagentRelay;
+      subagentRelayOps.registerSubagentRelayRun = module.registerSubagentRelayRun;
+      subagentRelayOps.unregisterSubagentRelayRun = module.unregisterSubagentRelayRun;
+    })
+    .catch((error) => {
+      defaultRuntime.log?.(
+        `[warn] subagent relay disabled: failed to import relay module: ${String(error)}`,
+      );
+    });
+  return subagentRelayLoadPromise;
+}
+
+function safeInitSubagentRelay() {
+  void ensureSubagentRelayOpsLoaded().then(() => {
+    try {
+      subagentRelayOps.initSubagentRelay();
+    } catch {
+      // relay initialization failure should not interrupt registry operations
+    }
+  });
+}
+
+function safeRegisterSubagentRelayRun(params: SubagentRelayRegistration) {
+  void ensureSubagentRelayOpsLoaded().then(() => {
+    try {
+      subagentRelayOps.registerSubagentRelayRun(params);
+    } catch {
+      // relay registration failure should not interrupt registry operations
+    }
+  });
+}
+
+function safeUnregisterSubagentRelayRun(runId: string) {
+  void ensureSubagentRelayOpsLoaded().then(() => {
+    try {
+      subagentRelayOps.unregisterSubagentRelayRun(runId);
+    } catch {
+      // relay cleanup failure should not interrupt registry cleanup
+    }
+  });
+}
+
+void ensureSubagentRelayOpsLoaded();
 
 function resolveAnnounceRetryDelayMs(retryCount: number) {
   const boundedRetryCount = Math.max(0, Math.min(retryCount, 10));
@@ -169,14 +228,14 @@ function resumeSubagentRun(runId: string) {
   if ((entry.announceRetryCount ?? 0) >= MAX_ANNOUNCE_RETRY_COUNT) {
     logAnnounceGiveUp(entry, "retry-limit");
     entry.cleanupCompletedAt = Date.now();
-    unregisterSubagentRelayRun(runId);
+    safeUnregisterSubagentRelayRun(runId);
     persistSubagentRuns();
     return;
   }
   if (typeof entry.endedAt === "number" && Date.now() - entry.endedAt > ANNOUNCE_EXPIRY_MS) {
     logAnnounceGiveUp(entry, "expiry");
     entry.cleanupCompletedAt = Date.now();
-    unregisterSubagentRelayRun(runId);
+    safeUnregisterSubagentRelayRun(runId);
     persistSubagentRuns();
     return;
   }
@@ -234,7 +293,7 @@ function restoreSubagentRunsOnce() {
       if (!subagentRuns.has(runId)) {
         subagentRuns.set(runId, entry);
       }
-      registerSubagentRelayRun({
+      safeRegisterSubagentRelayRun({
         runId,
         label: entry.label,
         model: entry.model,
@@ -301,7 +360,7 @@ async function sweepSubagentRuns() {
       continue;
     }
     subagentRuns.delete(runId);
-    unregisterSubagentRelayRun(runId);
+    safeUnregisterSubagentRelayRun(runId);
     mutated = true;
     try {
       await callGateway({
@@ -322,7 +381,7 @@ async function sweepSubagentRuns() {
 }
 
 function ensureListener() {
-  initSubagentRelay();
+  safeInitSubagentRelay();
   if (listenerStarted) {
     return;
   }
@@ -342,7 +401,7 @@ function ensureListener() {
         entry.startedAt = startedAt;
         persistSubagentRuns();
       }
-      registerSubagentRelayRun({
+      safeRegisterSubagentRelayRun({
         runId: entry.runId,
         label: entry.label,
         model: entry.model,
@@ -396,7 +455,7 @@ function finalizeSubagentCleanup(runId: string, cleanup: "delete" | "keep", didA
       // Give up: mark as completed to break the infinite retry loop.
       logAnnounceGiveUp(entry, retryCount >= MAX_ANNOUNCE_RETRY_COUNT ? "retry-limit" : "expiry");
       entry.cleanupCompletedAt = now;
-      unregisterSubagentRelayRun(runId);
+      safeUnregisterSubagentRelayRun(runId);
       persistSubagentRuns();
       retryDeferredCompletedAnnounces(runId);
       return;
@@ -419,13 +478,13 @@ function finalizeSubagentCleanup(runId: string, cleanup: "delete" | "keep", didA
   }
   if (cleanup === "delete") {
     subagentRuns.delete(runId);
-    unregisterSubagentRelayRun(runId);
+    safeUnregisterSubagentRelayRun(runId);
     persistSubagentRuns();
     retryDeferredCompletedAnnounces(runId);
     return;
   }
   entry.cleanupCompletedAt = Date.now();
-  unregisterSubagentRelayRun(runId);
+  safeUnregisterSubagentRelayRun(runId);
   persistSubagentRuns();
   retryDeferredCompletedAnnounces(runId);
 }
@@ -450,7 +509,7 @@ function retryDeferredCompletedAnnounces(excludeRunId?: string) {
     if (endedAgo > ANNOUNCE_EXPIRY_MS) {
       logAnnounceGiveUp(entry, "expiry");
       entry.cleanupCompletedAt = now;
-      unregisterSubagentRelayRun(runId);
+      safeUnregisterSubagentRelayRun(runId);
       persistSubagentRuns();
       continue;
     }
@@ -536,7 +595,7 @@ export function replaceSubagentRunAfterSteer(params: {
   if (previousRunId !== nextRunId) {
     subagentRuns.delete(previousRunId);
     resumedRuns.delete(previousRunId);
-    unregisterSubagentRelayRun(previousRunId);
+    safeUnregisterSubagentRelayRun(previousRunId);
   }
 
   const now = Date.now();
@@ -562,7 +621,7 @@ export function replaceSubagentRunAfterSteer(params: {
   };
 
   subagentRuns.set(nextRunId, next);
-  registerSubagentRelayRun({
+  safeRegisterSubagentRelayRun({
     runId: nextRunId,
     label: next.label,
     model: next.model,
@@ -624,7 +683,7 @@ export function registerSubagentRun(params: {
     archiveAtMs,
     cleanupHandled: false,
   });
-  registerSubagentRelayRun({
+  safeRegisterSubagentRelayRun({
     runId: params.runId,
     label: params.label,
     model: params.model,
@@ -701,7 +760,7 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
 
 export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   for (const runId of subagentRuns.keys()) {
-    unregisterSubagentRelayRun(runId);
+    safeUnregisterSubagentRelayRun(runId);
   }
   subagentRuns.clear();
   resumedRuns.clear();
@@ -725,7 +784,7 @@ export function addSubagentRunForTests(entry: SubagentRunRecord) {
 export function releaseSubagentRun(runId: string) {
   const didDelete = subagentRuns.delete(runId);
   if (didDelete) {
-    unregisterSubagentRelayRun(runId);
+    safeUnregisterSubagentRelayRun(runId);
     persistSubagentRuns();
   }
   if (subagentRuns.size === 0) {
@@ -841,7 +900,7 @@ export function markSubagentRunTerminated(params: {
     entry.cleanupHandled = true;
     entry.cleanupCompletedAt = now;
     entry.suppressAnnounceReason = "killed";
-    unregisterSubagentRelayRun(runId);
+    safeUnregisterSubagentRelayRun(runId);
     updated += 1;
   }
   if (updated > 0) {

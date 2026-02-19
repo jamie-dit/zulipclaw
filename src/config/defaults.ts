@@ -291,6 +291,11 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
+/**
+ * ZulipClaw fork note:
+ * Subagent relay defaults here are tuned for Zulip-only delivery and are not
+ * intended to represent multi-platform relay behavior.
+ */
 export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const agents = cfg.agents;
   const defaults = agents?.defaults;
