@@ -165,15 +165,31 @@ function formatToolDetail(toolName: string, args: Record<string, unknown>) {
   }
 }
 
-function formatToolLine(toolNameRaw: string, args: unknown) {
+function formatToolElapsed(startedAt: number, ts: number) {
+  const totalSeconds = Math.max(0, Math.floor((ts - startedAt) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `+${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+  return `+${Math.floor(totalSeconds / 60)}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatToolLine(toolNameRaw: string, args: unknown, startedAt: number, ts: number) {
   const toolName = toolNameRaw.trim().toLowerCase();
   const emoji = TOOL_EMOJI[toolName] ?? "🔨";
   const detail = formatToolDetail(toolName, readRecord(args));
   const title = toolName.replaceAll("_", " ");
+
+  // Guard against invalid timestamps - use current time if ts is invalid
+  const validTs = typeof ts === "number" && Number.isFinite(ts) ? ts : Date.now();
+  const stamp = `_${formatToolElapsed(startedAt, validTs)}_`;
+
   if (!detail) {
-    return `${emoji} ${title}`;
+    return `${stamp} ${emoji} ${title}`;
   }
-  return `${emoji} ${title}: ${detail}`;
+  return `${stamp} ${emoji} ${title}: ${detail}`;
 }
 
 function formatElapsedShort(startedAt: number, now = Date.now()) {
@@ -379,7 +395,7 @@ function handleToolEvent(evt: AgentEventPayload) {
     return;
   }
   const args = evt.data?.args;
-  const line = formatToolLine(toolName, args);
+  const line = formatToolLine(toolName, args, state.startedAt, evt.ts);
   state.toolLines.push(line);
   state.toolCount += 1;
   scheduleRelayFlush(evt.runId);
