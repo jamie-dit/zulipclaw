@@ -47,6 +47,18 @@ Welcome to the lobster tank! 🦞
 2. **New features / architecture** → Start a [GitHub Discussion](https://github.com/openclaw/openclaw/discussions) or ask in Discord first
 3. **Questions** → Discord #setup-help
 
+## Issue Linking Policy (epics vs complete issues)
+
+When your PR only delivers part of a larger epic, link with:
+- `refs #<epic>`
+- `part of #<epic>`
+
+Use closing keywords only when the linked issue is truly complete:
+- `fixes #<issue>`
+- `closes #<issue>`
+
+This prevents epic tracking issues from being auto-closed by partial work.
+
 ## Before You PR
 
 - Test locally with your OpenClaw instance
