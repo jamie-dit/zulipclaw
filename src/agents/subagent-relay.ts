@@ -165,8 +165,20 @@ function formatToolDetail(toolName: string, args: Record<string, unknown>) {
   }
 }
 
-function formatToolElapsed(startedAt: number, ts: number) {
-  const totalSeconds = Math.max(0, Math.floor((ts - startedAt) / 1000));
+export function formatToolElapsed(startedAt: number, ts: number) {
+  const hasValidTs = typeof ts === "number" && Number.isFinite(ts);
+  const safeTs = hasValidTs ? ts : Date.now();
+
+  let safeStartedAt =
+    typeof startedAt === "number" && Number.isFinite(startedAt) && startedAt > 0
+      ? startedAt
+      : safeTs;
+
+  if (!hasValidTs) {
+    safeStartedAt = safeTs;
+  }
+
+  const totalSeconds = Math.max(0, Math.floor((safeTs - safeStartedAt) / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
@@ -395,7 +407,12 @@ function handleToolEvent(evt: AgentEventPayload) {
     return;
   }
   const args = evt.data?.args;
-  const line = formatToolLine(toolName, args, state.startedAt, evt.ts);
+  const startedAt =
+    typeof state.startedAt === "number" && Number.isFinite(state.startedAt)
+      ? state.startedAt
+      : Date.now();
+  state.startedAt = startedAt;
+  const line = formatToolLine(toolName, args, startedAt, evt.ts);
   state.toolLines.push(line);
   state.toolCount += 1;
   scheduleRelayFlush(evt.runId);
