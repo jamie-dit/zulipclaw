@@ -26,6 +26,11 @@ import {
 } from "./inflight-checkpoints.js";
 import { normalizeStreamName, normalizeTopic } from "./normalize.js";
 import { buildZulipQueuePlan, buildZulipRegisterNarrow } from "./queue-plan.js";
+import {
+  handleReactionEvent,
+  startReactionButtonSessionCleanup,
+  stopReactionButtonSessionCleanup,
+} from "./reaction-buttons.js";
 import { addZulipReaction, removeZulipReaction } from "./reactions.js";
 import { sendZulipStreamMessage } from "./send.js";
 import { downloadZulipUploads, resolveOutboundMedia, uploadZulipFile } from "./uploads.js";
@@ -63,11 +68,26 @@ type ZulipEventMessage = {
   timestamp?: number;
 };
 
+type ZulipReactionEvent = {
+  id?: number;
+  type: "reaction";
+  op: "add" | "remove";
+  message_id: number;
+  emoji_name: string;
+  emoji_code: string;
+  user_id: number;
+  user?: {
+    email: string;
+    full_name: string;
+    user_id: number;
+  };
+};
+
 type ZulipEvent = {
   id?: number;
   type?: string;
   message?: ZulipEventMessage;
-};
+} & Partial<ZulipReactionEvent>;
 
 type ZulipEventsResponse = {
   result: "success" | "error";
@@ -310,7 +330,7 @@ async function registerQueue(params: {
     method: "POST",
     path: "/api/v1/register",
     form: {
-      event_types: JSON.stringify(["message"]),
+      event_types: JSON.stringify(["message", "reaction"]),
       apply_markdown: "false",
       narrow,
     },
@@ -781,6 +801,9 @@ export async function monitorZulipProvider(
   opts.abortSignal?.addEventListener("abort", stop, { once: true });
 
   const run = async () => {
+    // Start reaction button session cleanup
+    startReactionButtonSessionCleanup();
+
     const me = await fetchZulipMe(auth, abortSignal);
     if (me.result !== "success" || typeof me.user_id !== "number") {
       throw new Error(me.msg || "Failed to fetch Zulip bot identity");
@@ -1251,6 +1274,125 @@ export async function monitorZulipProvider(
 
     const resumedCheckpointIds = new Set<string>();
 
+    // Handler for reaction events (reaction buttons)
+    const handleReaction = (reactionEvent: ZulipReactionEvent) => {
+      // Only process 'add' operations, not 'remove'
+      if (reactionEvent.op !== "add") {
+        return;
+      }
+
+      // Only process reactions on stream messages
+      if (typeof reactionEvent.message_id !== "number") {
+        return;
+      }
+
+      const result = handleReactionEvent({
+        messageId: reactionEvent.message_id,
+        emojiName: reactionEvent.emoji_name,
+        userId: reactionEvent.user_id,
+        botUserId,
+      });
+
+      if (result) {
+        logger.info(
+          `[zulip:${account.accountId}] reaction button clicked: messageId=${result.messageId}, index=${result.selectedIndex}, value=${result.selectedOption?.value}`,
+        );
+
+        // Record the reaction button activity
+        core.channel.activity.record({
+          channel: "zulip",
+          accountId: account.accountId,
+          direction: "inbound",
+          at: Date.now(),
+        });
+
+        // Emit a synthetic message event that can be processed by the agent
+        // This allows the bot to respond to reaction button clicks
+        const stream = normalizeStreamName(reactionEvent.message?.stream_id?.toString() ?? "");
+        const topic = normalizeTopic(reactionEvent.message?.subject) || account.defaultTopic;
+
+        if (stream) {
+          const buttonPayload = {
+            type: "reaction_button_click" as const,
+            messageId: result.messageId,
+            selectedIndex: result.selectedIndex,
+            selectedOption: result.selectedOption,
+            userId: reactionEvent.user_id,
+            userName: reactionEvent.user?.full_name ?? String(reactionEvent.user_id),
+          };
+
+          // Create a synthetic context payload for the reaction button
+          const ctxPayload = core.channel.reply.finalizeInboundContext({
+            Body: `[zulip reaction button click: messageId=${result.messageId}, option="${result.selectedOption?.label}" (${result.selectedOption?.value})]`,
+            RawBody: JSON.stringify(buttonPayload),
+            CommandBody: `reaction_button_${result.selectedIndex}`,
+            From: `zulip:user:${reactionEvent.user_id}`,
+            To: `stream:${stream}#${topic}`,
+            SessionKey: `zulip:${account.accountId}:reaction:${result.messageId}`,
+            AccountId: account.accountId,
+            ChatType: "channel",
+            ThreadLabel: topic,
+            MessageThreadId: topic,
+            ConversationLabel: `${stream}#${topic}`,
+            GroupSubject: stream,
+            GroupChannel: `#${stream}`,
+            GroupSystemPrompt:
+              "A user clicked a reaction button on a previous message. Respond to their selection.",
+            Provider: "zulip" as const,
+            Surface: "zulip" as const,
+            SenderName: reactionEvent.user?.full_name ?? String(reactionEvent.user_id),
+            SenderId: String(reactionEvent.user_id),
+            MessageSid: `reaction-${result.messageId}-${Date.now()}`,
+            WasMentioned: true,
+            OriginatingChannel: "zulip" as const,
+            OriginatingTo: `stream:${stream}#${topic}`,
+            Timestamp: Date.now(),
+            CommandAuthorized: true,
+          });
+
+          // Dispatch the reaction button click through the normal reply flow
+          void core.channel.reply
+            .dispatchReplyFromConfig({
+              ctx: ctxPayload,
+              cfg,
+              dispatcher: {
+                sendToolResult: () => Promise.resolve(),
+                sendBlockReply: async (payload: ReplyPayload) => {
+                  if (payload.text) {
+                    await sendZulipStreamMessage({
+                      auth,
+                      stream,
+                      topic,
+                      content: payload.text,
+                      abortSignal,
+                    });
+                  }
+                },
+                sendFinalReply: async (payload: ReplyPayload) => {
+                  if (payload.text) {
+                    await sendZulipStreamMessage({
+                      auth,
+                      stream,
+                      topic,
+                      content: payload.text,
+                      abortSignal,
+                    });
+                  }
+                },
+                markComplete: () => {},
+                waitForIdle: () => Promise.resolve(),
+              },
+              replyOptions: {
+                disableBlockStreaming: true,
+              },
+            })
+            .catch((err) => {
+              logger.error?.(`[zulip] reaction button dispatch failed: ${String(err)}`);
+            });
+        }
+      }
+    };
+
     const replayPendingCheckpoints = async () => {
       const checkpoints = await loadZulipInFlightCheckpoints({ accountId: account.accountId });
       for (const checkpoint of checkpoints) {
@@ -1487,6 +1629,21 @@ export async function monitorZulipProvider(
             );
           }
 
+          // Handle reaction events
+          const reactionEvents = list
+            .filter((evt): evt is ZulipEvent & ZulipReactionEvent => evt.type === "reaction")
+            .map((evt) => evt as ZulipReactionEvent);
+
+          for (const reactionEvent of reactionEvents) {
+            try {
+              handleReaction(reactionEvent);
+            } catch (err) {
+              logger.debug?.(
+                `[zulip:${account.accountId}] reaction handling failed: ${String(err)}`,
+              );
+            }
+          }
+
           // Issue 2: handle DMs by sending a redirect notice.
           const dmMessages = messages.filter(
             (m) => m.type !== "stream" && m.sender_id !== botUserId,
@@ -1506,7 +1663,7 @@ export async function monitorZulipProvider(
           // Defensive throttle: if Zulip responds immediately without any message payloads (e.g.
           // heartbeat-only events, proxies, or aggressive server settings), avoid a tight loop that can
           // hit 429s.
-          if (messages.length === 0) {
+          if (messages.length === 0 && reactionEvents.length === 0) {
             const jitterMs = Math.floor(Math.random() * 250);
             await sleep(2000 + jitterMs, abortSignal).catch(() => undefined);
             retry = 0;
@@ -1603,6 +1760,8 @@ export async function monitorZulipProvider(
       runtime.error?.(`[zulip:${account.accountId}] monitor crashed: ${String(err)}`);
     })
     .finally(() => {
+      // Clean up reaction button sessions
+      stopReactionButtonSessionCleanup();
       logger.warn(`[zulip-debug][${account.accountId}] stopped`);
     });
 

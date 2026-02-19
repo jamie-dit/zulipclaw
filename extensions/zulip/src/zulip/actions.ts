@@ -5,6 +5,7 @@ import type { ZulipAuth } from "./client.js";
 import { zulipRequest, zulipRequestWithRetry } from "./client.js";
 import { normalizeStreamName } from "./normalize.js";
 import { normalizeTopic } from "./normalize.js";
+import { sendWithReactionButtons, type ReactionButtonOption } from "./reaction-buttons.js";
 import { addZulipReaction, removeZulipReaction } from "./reactions.js";
 import { sendZulipStreamMessage } from "./send.js";
 import { parseZulipTarget } from "./targets.js";
@@ -129,9 +130,73 @@ async function handleSend(params: ActionParams, cfg: unknown, accountId?: string
   return { ok: true, action: "send", messageId: String(result.id ?? "unknown") };
 }
 
+// -- Send With Reactions --
+
+async function handleSendWithReactions(
+  params: ActionParams,
+  cfg: unknown,
+  accountId?: string | null,
+) {
+  const { auth, account } = resolveAuth(cfg, accountId);
+  const target = requireString(params, "target");
+  const message = requireString(params, "message");
+  const optionsRaw = params.options;
+  const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 5 * 60 * 1000; // 5 minutes default
+
+  const parsed = parseZulipTarget(target);
+  if (!parsed) {
+    throw new Error(`Invalid Zulip target: ${target}. Use stream:<name>#<topic>`);
+  }
+  const stream = normalizeStreamName(parsed.stream);
+  const topic = normalizeTopic(parsed.topic) || account.defaultTopic;
+  if (!stream) throw new Error("Missing stream name");
+
+  // Parse options
+  let options: ReactionButtonOption[];
+  if (Array.isArray(optionsRaw)) {
+    options = optionsRaw
+      .map((opt) => {
+        if (typeof opt === "string") {
+          return { label: opt, value: opt };
+        }
+        if (opt && typeof opt === "object") {
+          const label = (opt as Record<string, unknown>).label;
+          const value = (opt as Record<string, unknown>).value;
+          if (typeof label === "string") {
+            return { label, value: typeof value === "string" ? value : label };
+          }
+        }
+        return null;
+      })
+      .filter((opt): opt is ReactionButtonOption => opt !== null);
+  } else {
+    throw new Error("options must be an array of strings or {label, value} objects");
+  }
+
+  if (options.length === 0) {
+    throw new Error("At least one option is required");
+  }
+
+  const result = await sendWithReactionButtons({
+    auth,
+    stream,
+    topic,
+    message,
+    options,
+    timeoutMs,
+  });
+
+  return {
+    ok: true,
+    action: "sendWithReactions",
+    messageId: String(result.messageId),
+    options: options.map((opt, idx) => ({ index: idx, label: opt.label, value: opt.value })),
+  };
+}
+
 // -- Adapter --
 
-const SUPPORTED_ACTIONS = ["send", "edit", "delete", "react"] as const;
+const SUPPORTED_ACTIONS = ["send", "sendWithReactions", "edit", "delete", "react"] as const;
 
 export const zulipMessageActions: ChannelMessageActionAdapter = {
   listActions: () => [...SUPPORTED_ACTIONS],
@@ -147,6 +212,9 @@ export const zulipMessageActions: ChannelMessageActionAdapter = {
     switch (action) {
       case "send":
         result = await handleSend(params, cfg, accountId);
+        break;
+      case "sendWithReactions":
+        result = await handleSendWithReactions(params, cfg, accountId);
         break;
       case "edit":
         result = await handleEdit(params, cfg, accountId);
