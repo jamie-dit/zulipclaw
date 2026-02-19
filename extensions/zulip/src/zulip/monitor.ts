@@ -2,7 +2,12 @@ import crypto from "node:crypto";
 import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk";
 import { createReplyPrefixOptions } from "openclaw/plugin-sdk";
 import { getZulipRuntime } from "../runtime.js";
-import { resolveZulipAccount, type ResolvedZulipAccount } from "./accounts.js";
+import {
+  resolveZulipAccount,
+  type ResolvedZulipAccount,
+  type ResolvedZulipReactions,
+  type ZulipReactionWorkflowStage,
+} from "./accounts.js";
 import type { ZulipAuth } from "./client.js";
 import type { ZulipHttpError } from "./client.js";
 import { zulipRequest } from "./client.js";
@@ -511,6 +516,144 @@ async function bestEffortReaction(params: {
   }
 }
 
+type ReactionTransitionController = {
+  transition: (
+    stage: ZulipReactionWorkflowStage,
+    options?: { abortSignal?: AbortSignal; force?: boolean },
+  ) => Promise<void>;
+};
+
+function resolveStageEmoji(params: {
+  reactions: ResolvedZulipReactions;
+  stage: ZulipReactionWorkflowStage;
+}): string {
+  if (params.reactions.workflow.enabled) {
+    const stageEmoji = params.reactions.workflow.stages[params.stage];
+    return stageEmoji ?? "";
+  }
+  switch (params.stage) {
+    case "queued":
+    case "processing":
+    case "toolRunning":
+    case "retrying":
+      return params.reactions.onStart;
+    case "success":
+      return params.reactions.onSuccess;
+    case "partialSuccess":
+    case "failure":
+      return params.reactions.onFailure;
+    default:
+      return "";
+  }
+}
+
+function createReactionTransitionController(params: {
+  auth: ZulipAuth;
+  messageId: number;
+  reactions: ResolvedZulipReactions;
+  log?: (message: string) => void;
+  now?: () => number;
+}): ReactionTransitionController {
+  const now = params.now ?? (() => Date.now());
+  let activeEmoji = "";
+  let activeStage: ZulipReactionWorkflowStage | null = null;
+  let lastTransitionAt = 0;
+
+  return {
+    transition: async (stage, options) => {
+      const emojiName = resolveStageEmoji({ reactions: params.reactions, stage });
+      const force = options?.force === true;
+      const workflow = params.reactions.workflow;
+
+      if (workflow.enabled && !force) {
+        if (activeStage === stage) {
+          return;
+        }
+        if (workflow.minTransitionMs > 0 && lastTransitionAt > 0) {
+          const elapsed = now() - lastTransitionAt;
+          if (elapsed < workflow.minTransitionMs) {
+            return;
+          }
+        }
+      }
+
+      if (!emojiName) {
+        activeStage = stage;
+        if (force) {
+          lastTransitionAt = now();
+        }
+        return;
+      }
+
+      if (
+        workflow.enabled &&
+        workflow.replaceStageReaction &&
+        activeEmoji &&
+        activeEmoji !== emojiName
+      ) {
+        await bestEffortReaction({
+          auth: params.auth,
+          messageId: params.messageId,
+          op: "remove",
+          emojiName: activeEmoji,
+          log: params.log,
+          abortSignal: options?.abortSignal,
+        });
+      }
+
+      if (activeEmoji !== emojiName) {
+        await bestEffortReaction({
+          auth: params.auth,
+          messageId: params.messageId,
+          op: "add",
+          emojiName,
+          log: params.log,
+          abortSignal: options?.abortSignal,
+        });
+        activeEmoji = emojiName;
+      }
+
+      activeStage = stage;
+      lastTransitionAt = now();
+    },
+  };
+}
+
+function withWorkflowReactionStages<
+  T extends {
+    sendToolResult: (...args: unknown[]) => unknown;
+    sendBlockReply: (...args: unknown[]) => unknown;
+    sendFinalReply: (...args: unknown[]) => unknown;
+  },
+>(
+  dispatcher: T,
+  reactions: ResolvedZulipReactions,
+  controller: ReactionTransitionController,
+  abortSignal?: AbortSignal,
+): T {
+  return {
+    ...dispatcher,
+    sendToolResult: (...args: unknown[]) => {
+      if (reactions.workflow.stages.toolRunning) {
+        void controller.transition("toolRunning", { abortSignal });
+      }
+      return dispatcher.sendToolResult(...args);
+    },
+    sendBlockReply: (...args: unknown[]) => {
+      if (reactions.workflow.stages.processing) {
+        void controller.transition("processing", { abortSignal });
+      }
+      return dispatcher.sendBlockReply(...args);
+    },
+    sendFinalReply: (...args: unknown[]) => {
+      if (reactions.workflow.stages.processing) {
+        void controller.transition("processing", { abortSignal });
+      }
+      return dispatcher.sendFinalReply(...args);
+    },
+  };
+}
+
 async function deliverReply(params: {
   account: ResolvedZulipAccount;
   auth: ZulipAuth;
@@ -733,13 +876,25 @@ export async function monitorZulipProvider(
         onMainAbortShutdownNotice();
       }
 
-      const prefix = account.reactions;
-      if (prefix.enabled) {
+      const reactions = account.reactions;
+      const reactionController =
+        reactions.enabled && reactions.workflow.enabled
+          ? createReactionTransitionController({
+              auth,
+              messageId: msg.id,
+              reactions,
+              log: (m) => logger.debug?.(m),
+            })
+          : null;
+
+      if (reactionController) {
+        await reactionController.transition("queued", { abortSignal });
+      } else if (reactions.enabled) {
         await bestEffortReaction({
           auth,
           messageId: msg.id,
           op: "add",
-          emojiName: prefix.onStart,
+          emojiName: reactions.onStart,
           log: (m) => logger.debug?.(m),
           abortSignal,
         });
@@ -903,6 +1058,7 @@ export async function monitorZulipProvider(
         accountId: account.accountId,
       });
 
+      let successfulDeliveries = 0;
       const { dispatcher, replyOptions, markDispatchIdle } =
         core.channel.reply.createReplyDispatcherWithTyping({
           ...prefixOptions,
@@ -919,6 +1075,7 @@ export async function monitorZulipProvider(
               cfg,
               abortSignal: deliverySignal,
             });
+            successfulDeliveries += 1;
             opts.statusSink?.({ lastOutboundAt: Date.now() });
             core.channel.activity.record({
               channel: "zulip",
@@ -931,6 +1088,9 @@ export async function monitorZulipProvider(
             runtime.error?.(`zulip reply failed: ${String(err)}`);
           },
         });
+      const dispatchDriver = reactionController
+        ? withWorkflowReactionStages(dispatcher, reactions, reactionController, abortSignal)
+        : dispatcher;
 
       const stopKeepalive = startPeriodicKeepalive({
         sendPing: async (elapsedMs) => {
@@ -950,10 +1110,13 @@ export async function monitorZulipProvider(
       try {
         for (let attempt = 0; attempt <= MAX_DISPATCH_RETRIES; attempt++) {
           try {
+            if (reactionController) {
+              await reactionController.transition("processing", { abortSignal });
+            }
             await core.channel.reply.dispatchReplyFromConfig({
               ctx: ctxPayload,
               cfg,
-              dispatcher,
+              dispatcher: dispatchDriver,
               replyOptions: {
                 ...replyOptions,
                 disableBlockStreaming: true,
@@ -970,6 +1133,9 @@ export async function monitorZulipProvider(
               attempt < MAX_DISPATCH_RETRIES &&
               !(err instanceof Error && err.name === "AbortError");
             if (isRetryable) {
+              if (reactionController) {
+                await reactionController.transition("retrying", { abortSignal });
+              }
               runtime.error?.(
                 `zulip dispatch failed (attempt ${attempt + 1}/${MAX_DISPATCH_RETRIES + 1}, retrying in 2s): ${String(err)}`,
               );
@@ -1032,26 +1198,38 @@ export async function monitorZulipProvider(
 
           // Use deliverySignal for final reactions so they can still be posted
           // during graceful shutdown (the grace period covers these too).
-          if (account.reactions.enabled) {
-            if (account.reactions.clearOnFinish) {
+          if (reactions.enabled) {
+            if (reactionController) {
+              const finalStage: ZulipReactionWorkflowStage = ok
+                ? "success"
+                : successfulDeliveries > 0
+                  ? "partialSuccess"
+                  : "failure";
+              await reactionController.transition(finalStage, {
+                abortSignal: deliverySignal,
+                force: true,
+              });
+            } else {
+              if (reactions.clearOnFinish) {
+                await bestEffortReaction({
+                  auth,
+                  messageId: msg.id,
+                  op: "remove",
+                  emojiName: reactions.onStart,
+                  log: (m) => logger.debug?.(m),
+                  abortSignal: deliverySignal,
+                });
+              }
+              const finalEmoji = ok ? reactions.onSuccess : reactions.onFailure;
               await bestEffortReaction({
                 auth,
                 messageId: msg.id,
-                op: "remove",
-                emojiName: account.reactions.onStart,
+                op: "add",
+                emojiName: finalEmoji,
                 log: (m) => logger.debug?.(m),
                 abortSignal: deliverySignal,
               });
             }
-            const finalEmoji = ok ? account.reactions.onSuccess : account.reactions.onFailure;
-            await bestEffortReaction({
-              auth,
-              messageId: msg.id,
-              op: "add",
-              emojiName: finalEmoji,
-              log: (m) => logger.debug?.(m),
-              abortSignal: deliverySignal,
-            });
           }
 
           try {

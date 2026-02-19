@@ -100,6 +100,64 @@ describe("zulipPlugin", () => {
     expect(account.reactions.clearOnFinish).toBe(false);
   });
 
+  it("keeps workflow reactions disabled by default", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        zulip: {
+          enabled: true,
+          baseUrl: "https://zulip.example.com",
+          email: "bot@example.com",
+          apiKey: "key",
+          streams: ["marcel-ai"],
+        },
+      },
+    };
+    const account = resolveZulipAccount({ cfg, accountId: "default" });
+    expect(account.reactions.workflow.enabled).toBe(false);
+    expect(account.reactions.workflow.stages.queued).toBe(account.reactions.onStart);
+    expect(account.reactions.workflow.stages.success).toBe(account.reactions.onSuccess);
+    expect(account.reactions.workflow.stages.failure).toBe(account.reactions.onFailure);
+  });
+
+  it("supports opt-in workflow reactions with stage overrides", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        zulip: {
+          enabled: true,
+          baseUrl: "https://zulip.example.com",
+          email: "bot@example.com",
+          apiKey: "key",
+          streams: ["marcel-ai"],
+          reactions: {
+            onStart: "eyes",
+            onSuccess: "check",
+            onFailure: "warning",
+            workflow: {
+              enabled: true,
+              replaceStageReaction: false,
+              minTransitionMs: 0,
+              stages: {
+                queued: "hourglass",
+                toolRunning: "hammer",
+                partialSuccess: "construction",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const account = resolveZulipAccount({ cfg, accountId: "default" });
+    expect(account.reactions.workflow.enabled).toBe(true);
+    expect(account.reactions.workflow.replaceStageReaction).toBe(false);
+    expect(account.reactions.workflow.minTransitionMs).toBe(0);
+    expect(account.reactions.workflow.stages.queued).toBe("hourglass");
+    expect(account.reactions.workflow.stages.processing).toBe("eyes");
+    expect(account.reactions.workflow.stages.toolRunning).toBe("hammer");
+    expect(account.reactions.workflow.stages.partialSuccess).toBe("construction");
+    expect(account.reactions.workflow.stages.failure).toBe("warning");
+  });
+
   it("can require mentions when alwaysReply=false", () => {
     const cfg: OpenClawConfig = {
       channels: {
