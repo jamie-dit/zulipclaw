@@ -137,6 +137,7 @@ function createHarness(params?: {
   events?: ZulipEventMessage[];
   checkpoints?: Array<Record<string, unknown>>;
   staleCheckpoints?: boolean;
+  reactions?: Record<string, unknown>;
 }) {
   const dispatchReplyFromConfig = vi.fn(async () => undefined);
   const logger = {
@@ -206,7 +207,7 @@ function createHarness(params?: {
     defaultTopic: "general",
     alwaysReply: true,
     textChunkLimit: 10_000,
-    reactions: {
+    reactions: params?.reactions ?? {
       enabled: false,
       onStart: "eyes",
       onSuccess: "check",
@@ -359,6 +360,68 @@ describe("monitorZulipProvider recovery checkpoints", () => {
         content: ZULIP_RECOVERY_NOTICE,
       }),
     );
+
+    monitor.stop();
+    await (monitor as { done: Promise<void> }).done;
+  });
+
+  it("supports workflow-stage reactions when enabled", async () => {
+    const event: ZulipEventMessage = {
+      id: 6001,
+      type: "stream",
+      sender_id: 55,
+      sender_full_name: "Tester",
+      display_recipient: "marcel",
+      stream_id: 42,
+      subject: "general",
+      content: "hello",
+      timestamp: Math.floor(Date.now() / 1000),
+    };
+
+    const { dispatchReplyFromConfig } = createHarness({
+      events: [event],
+      reactions: {
+        enabled: true,
+        onStart: "eyes",
+        onSuccess: "check",
+        onFailure: "warning",
+        clearOnFinish: true,
+        workflow: {
+          enabled: true,
+          replaceStageReaction: true,
+          minTransitionMs: 0,
+          stages: {
+            queued: "hourglass",
+            processing: "gear",
+            success: "check",
+            partialSuccess: "construction",
+            failure: "warning",
+          },
+        },
+      },
+    });
+
+    const monitor = await monitorZulipProvider({
+      config: {} as never,
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    });
+
+    await waitForCondition(() => dispatchReplyFromConfig.mock.calls.length > 0);
+    await waitForCondition(() => mocks.addZulipReaction.mock.calls.length >= 3);
+
+    const addedEmojis = mocks.addZulipReaction.mock.calls.map(
+      ([arg]) => (arg as { emojiName: string }).emojiName,
+    );
+    const removedEmojis = mocks.removeZulipReaction.mock.calls.map(
+      ([arg]) => (arg as { emojiName: string }).emojiName,
+    );
+
+    expect(addedEmojis).toEqual(["hourglass", "gear", "check"]);
+    expect(removedEmojis).toEqual(["hourglass", "gear"]);
 
     monitor.stop();
     await (monitor as { done: Promise<void> }).done;

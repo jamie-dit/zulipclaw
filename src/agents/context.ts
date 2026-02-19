@@ -3,6 +3,10 @@
 
 import { loadConfig } from "../config/config.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import {
+  applyKnownModelContextWindow,
+  lookupKnownModelContextWindow,
+} from "./model-context-overrides.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
 type ModelEntry = { id: string; contextWindow?: number };
@@ -27,11 +31,30 @@ export function applyDiscoveredContextWindows(params: {
     if (!contextWindow || contextWindow <= 0) {
       continue;
     }
+
+    const effectiveContextWindow = applyKnownModelContextWindow({
+      modelId: model.id,
+      contextWindow,
+    });
+    if (!effectiveContextWindow || effectiveContextWindow <= 0) {
+      continue;
+    }
+
     const existing = params.cache.get(model.id);
+    const knownOverride = lookupKnownModelContextWindow(model.id);
+    if (knownOverride) {
+      // Keep known vendor context upgrades (e.g. Claude 4.6 @ 1M) even when
+      // an older catalog revision still reports smaller values.
+      if (existing === undefined || effectiveContextWindow > existing) {
+        params.cache.set(model.id, effectiveContextWindow);
+      }
+      continue;
+    }
+
     // When multiple providers expose the same model id with different limits,
     // prefer the smaller window so token budgeting is fail-safe (no overestimation).
-    if (existing === undefined || contextWindow < existing) {
-      params.cache.set(model.id, contextWindow);
+    if (existing === undefined || effectiveContextWindow < existing) {
+      params.cache.set(model.id, effectiveContextWindow);
     }
   }
 }
@@ -107,5 +130,5 @@ export function lookupContextTokens(modelId?: string): number | undefined {
   }
   // Best-effort: kick off loading, but don't block.
   void loadPromise;
-  return MODEL_CACHE.get(modelId);
+  return MODEL_CACHE.get(modelId) ?? lookupKnownModelContextWindow(modelId);
 }

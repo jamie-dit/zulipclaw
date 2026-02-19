@@ -1465,6 +1465,29 @@ Settings can be defined globally in `tools.loopDetection` and overridden per-age
 - `detectors.pingPong`: warn/block on alternating no-progress pair patterns.
 - If `warningThreshold >= criticalThreshold` or `criticalThreshold >= globalCircuitBreakerThreshold`, validation fails.
 
+### `tools.delegationNudge`
+
+Adds soft nudges and hard limits for tool-heavy turns in depth-0 main sessions.
+
+```json5
+{
+  tools: {
+    delegationNudge: {
+      enabled: true,
+      softThreshold: 3,
+      hardThreshold: 6,
+      firstTurnHardThreshold: 10,
+      exemptTools: ["sessions_spawn", "subagents", "message", "session_status"],
+    },
+  },
+}
+```
+
+- `softThreshold`: append a nudge to tool results once this per-turn call count is reached.
+- `hardThreshold`: block non-exempt tools on normal turns at/above this count.
+- `firstTurnHardThreshold`: higher hard cap used only on the first depth-0 main turn.
+- `exemptTools`: tools that remain callable when hard thresholds are exceeded.
+
 ### `tools.web`
 
 ```json5
