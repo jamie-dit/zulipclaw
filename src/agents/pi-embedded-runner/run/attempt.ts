@@ -28,6 +28,7 @@ import {
   resolveChannelMessageToolHints,
 } from "../../channel-tools.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
+import { resetDelegationNudgeCounter } from "../../delegation-nudge.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
@@ -47,7 +48,11 @@ import {
   resolveCompactionReserveTokensFloor,
 } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
-import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
+import {
+  createOpenClawCodingTools,
+  resolveDelegationNudgeConfig,
+  resolveToolLoopDetectionConfig,
+} from "../../pi-tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
@@ -230,6 +235,10 @@ export async function runEmbeddedAttempt(
   await fs.mkdir(resolvedWorkspace, { recursive: true });
 
   const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
+
+  // Reset delegation nudge counters for each new run/turn.
+  resetDelegationNudgeCounter(sandboxSessionKey);
+
   const sandbox = await resolveSandboxContext({
     config: params.config,
     sessionKey: sandboxSessionKey,
@@ -476,9 +485,13 @@ export async function runEmbeddedAttempt(
       await prewarmSessionFile(params.sessionFile);
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
-        sessionKey: params.sessionKey,
+        sessionKey: params.sessionKey ?? params.sessionId,
         inputProvenance: params.inputProvenance,
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+        delegationNudge: resolveDelegationNudgeConfig({
+          cfg: params.config,
+          agentId: sessionAgentId,
+        }),
       });
       trackSessionManagerAccess(params.sessionFile);
 
