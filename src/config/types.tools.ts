@@ -162,6 +162,17 @@ export type ToolLoopDetectionConfig = {
   detectors?: ToolLoopDetectionDetectorConfig;
 };
 
+export type DelegationNudgeConfig = {
+  /** Enable delegation nudge (default: false). */
+  enabled?: boolean;
+  /** Tool call count after which a soft warning is appended to results (default: 3). */
+  softThreshold?: number;
+  /** Tool call count after which non-exempt tools are blocked (default: 6). */
+  hardThreshold?: number;
+  /** Tools exempt from blocking (always allowed). */
+  exemptTools?: string[];
+};
+
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
 
 export type ToolPolicyConfig = {
@@ -261,6 +272,8 @@ export type AgentToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /** Delegation nudge for excessive direct tool use in main session. */
+  delegationNudge?: DelegationNudgeConfig;
   sandbox?: {
     tools?: {
       allow?: string[];
@@ -523,6 +536,8 @@ export type ToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /** Delegation nudge for excessive direct tool use in main session. */
+  delegationNudge?: DelegationNudgeConfig;
   /** Sub-agent tool policy defaults (deny wins). */
   subagents?: {
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
