@@ -13,6 +13,13 @@ const mocks = vi.hoisted(() => ({
   removeZulipReaction: vi.fn(),
   buildZulipQueuePlan: vi.fn(),
   buildZulipRegisterNarrow: vi.fn(),
+  loadZulipInFlightCheckpoints: vi.fn(),
+  writeZulipInFlightCheckpoint: vi.fn(),
+  clearZulipInFlightCheckpoint: vi.fn(),
+  isZulipCheckpointStale: vi.fn(),
+  prepareZulipCheckpointForRecovery: vi.fn(),
+  markZulipCheckpointFailure: vi.fn(),
+  buildZulipCheckpointId: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk", async (importOriginal) => {
@@ -55,11 +62,37 @@ vi.mock("./queue-plan.js", () => ({
   buildZulipRegisterNarrow: mocks.buildZulipRegisterNarrow,
 }));
 
+vi.mock("./inflight-checkpoints.js", () => ({
+  ZULIP_INFLIGHT_CHECKPOINT_VERSION: 1,
+  ZULIP_INFLIGHT_MAX_RETRY_COUNT: 25,
+  loadZulipInFlightCheckpoints: mocks.loadZulipInFlightCheckpoints,
+  writeZulipInFlightCheckpoint: mocks.writeZulipInFlightCheckpoint,
+  clearZulipInFlightCheckpoint: mocks.clearZulipInFlightCheckpoint,
+  isZulipCheckpointStale: mocks.isZulipCheckpointStale,
+  prepareZulipCheckpointForRecovery: mocks.prepareZulipCheckpointForRecovery,
+  markZulipCheckpointFailure: mocks.markZulipCheckpointFailure,
+  buildZulipCheckpointId: mocks.buildZulipCheckpointId,
+}));
+
 import { monitorZulipProvider } from "./monitor.js";
 
 describe("monitorZulipProvider cleanup race", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.loadZulipInFlightCheckpoints.mockResolvedValue([]);
+    mocks.isZulipCheckpointStale.mockReturnValue(false);
+    mocks.prepareZulipCheckpointForRecovery.mockImplementation(
+      ({ checkpoint }: { checkpoint: Record<string, unknown> }) => checkpoint,
+    );
+    mocks.markZulipCheckpointFailure.mockImplementation(
+      ({ checkpoint }: { checkpoint: Record<string, unknown> }) => checkpoint,
+    );
+    mocks.buildZulipCheckpointId.mockImplementation(
+      ({ accountId, messageId }: { accountId: string; messageId: number }) =>
+        `${accountId}:${messageId}`,
+    );
+    mocks.writeZulipInFlightCheckpoint.mockResolvedValue(undefined);
+    mocks.clearZulipInFlightCheckpoint.mockResolvedValue(undefined);
   });
 
   it("waits for dispatcher idle before cleanup so final reply is not aborted", async () => {

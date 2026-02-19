@@ -7,6 +7,18 @@ import type { ZulipAuth } from "./client.js";
 import type { ZulipHttpError } from "./client.js";
 import { zulipRequest } from "./client.js";
 import { createDedupeCache } from "./dedupe.js";
+import {
+  buildZulipCheckpointId,
+  clearZulipInFlightCheckpoint,
+  isZulipCheckpointStale,
+  loadZulipInFlightCheckpoints,
+  markZulipCheckpointFailure,
+  prepareZulipCheckpointForRecovery,
+  type ZulipInFlightCheckpoint,
+  ZULIP_INFLIGHT_CHECKPOINT_VERSION,
+  ZULIP_INFLIGHT_MAX_RETRY_COUNT,
+  writeZulipInFlightCheckpoint,
+} from "./inflight-checkpoints.js";
 import { normalizeStreamName, normalizeTopic } from "./normalize.js";
 import { buildZulipQueuePlan, buildZulipRegisterNarrow } from "./queue-plan.js";
 import { addZulipReaction, removeZulipReaction } from "./reactions.js";
@@ -70,6 +82,7 @@ type ZulipMeResponse = {
 export const DEFAULT_DISPATCH_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
 export const KEEPALIVE_INITIAL_DELAY_MS = 25_000;
 export const KEEPALIVE_REPEAT_INTERVAL_MS = 60_000;
+export const ZULIP_RECOVERY_NOTICE = "🔄 Gateway restarted - resuming the previous task now...";
 
 function formatKeepaliveElapsed(elapsedMs: number): string {
   const totalSeconds = Math.max(1, Math.floor(elapsedMs / 1000));
@@ -638,7 +651,10 @@ export async function monitorZulipProvider(
     // Track DM senders we've already notified to avoid spam.
     const dmNotifiedSenders = new Set<number>();
 
-    const handleMessage = async (msg: ZulipEventMessage) => {
+    const handleMessage = async (
+      msg: ZulipEventMessage,
+      messageOptions?: { recoveryCheckpoint?: ZulipInFlightCheckpoint },
+    ) => {
       if (typeof msg.id !== "number") {
         return;
       }
@@ -650,11 +666,17 @@ export async function monitorZulipProvider(
         return;
       }
 
+      const isRecovery = Boolean(messageOptions?.recoveryCheckpoint);
       const stream = normalizeStreamName(msg.display_recipient);
       const topic = normalizeTopic(msg.subject) || account.defaultTopic;
       const content = msg.content ?? "";
       if (!stream) {
         return;
+      }
+      if (isRecovery) {
+        logger.warn(
+          `[zulip:${account.accountId}] replaying recovery checkpoint for message ${msg.id} (${stream}#${topic})`,
+        );
       }
       // Defer the definitive empty-content check until after upload processing —
       // image-only messages have content (upload URLs) that gets stripped later,
@@ -834,6 +856,46 @@ export async function monitorZulipProvider(
         CommandAuthorized: true,
       });
 
+      const nowMs = Date.now();
+      let checkpoint: ZulipInFlightCheckpoint = messageOptions?.recoveryCheckpoint
+        ? prepareZulipCheckpointForRecovery({
+            checkpoint: messageOptions.recoveryCheckpoint,
+            nowMs,
+          })
+        : {
+            version: ZULIP_INFLIGHT_CHECKPOINT_VERSION,
+            checkpointId: buildZulipCheckpointId({
+              accountId: account.accountId,
+              messageId: msg.id,
+            }),
+            accountId: account.accountId,
+            stream,
+            topic,
+            messageId: msg.id,
+            senderId: String(msg.sender_id),
+            senderName,
+            senderEmail: msg.sender_email,
+            cleanedContent,
+            body,
+            sessionKey,
+            from,
+            to,
+            wasMentioned,
+            streamId: msg.stream_id,
+            timestampMs: typeof msg.timestamp === "number" ? msg.timestamp * 1000 : undefined,
+            mediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
+            mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
+            mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
+            createdAtMs: nowMs,
+            updatedAtMs: nowMs,
+            retryCount: 0,
+          };
+      try {
+        await writeZulipInFlightCheckpoint({ checkpoint });
+      } catch (err) {
+        runtime.error?.(`[zulip] failed to persist in-flight checkpoint: ${String(err)}`);
+      }
+
       const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
         cfg,
         agentId: route.agentId,
@@ -883,6 +945,7 @@ export async function monitorZulipProvider(
       });
 
       let ok = false;
+      let lastDispatchError: unknown;
       const MAX_DISPATCH_RETRIES = 2;
       try {
         for (let attempt = 0; attempt <= MAX_DISPATCH_RETRIES; attempt++) {
@@ -898,9 +961,11 @@ export async function monitorZulipProvider(
               },
             });
             ok = true;
+            lastDispatchError = undefined;
             break;
           } catch (err) {
             ok = false;
+            lastDispatchError = err;
             const isRetryable =
               attempt < MAX_DISPATCH_RETRIES &&
               !(err instanceof Error && err.name === "AbortError");
@@ -988,6 +1053,92 @@ export async function monitorZulipProvider(
               abortSignal: deliverySignal,
             });
           }
+
+          try {
+            if (ok) {
+              await clearZulipInFlightCheckpoint({ checkpointId: checkpoint.checkpointId });
+            } else {
+              checkpoint = markZulipCheckpointFailure({
+                checkpoint,
+                error: lastDispatchError ?? "dispatch failed",
+              });
+              await writeZulipInFlightCheckpoint({ checkpoint });
+            }
+          } catch (err) {
+            runtime.error?.(`[zulip] failed to update in-flight checkpoint: ${String(err)}`);
+          }
+        }
+      }
+    };
+
+    const resumedCheckpointIds = new Set<string>();
+
+    const replayPendingCheckpoints = async () => {
+      const checkpoints = await loadZulipInFlightCheckpoints({ accountId: account.accountId });
+      for (const checkpoint of checkpoints) {
+        if (resumedCheckpointIds.has(checkpoint.checkpointId)) {
+          continue;
+        }
+        resumedCheckpointIds.add(checkpoint.checkpointId);
+
+        if (checkpoint.retryCount >= ZULIP_INFLIGHT_MAX_RETRY_COUNT) {
+          logger.warn(
+            `[zulip:${account.accountId}] dropping exhausted in-flight checkpoint ${checkpoint.checkpointId} (retryCount=${checkpoint.retryCount})`,
+          );
+          await clearZulipInFlightCheckpoint({ checkpointId: checkpoint.checkpointId }).catch(
+            () => undefined,
+          );
+          continue;
+        }
+
+        if (isZulipCheckpointStale({ checkpoint })) {
+          logger.warn(
+            `[zulip:${account.accountId}] skipping stale in-flight checkpoint ${checkpoint.checkpointId}`,
+          );
+          await clearZulipInFlightCheckpoint({ checkpointId: checkpoint.checkpointId }).catch(
+            () => undefined,
+          );
+          continue;
+        }
+
+        await sendZulipStreamMessage({
+          auth,
+          stream: checkpoint.stream,
+          topic: checkpoint.topic,
+          content: ZULIP_RECOVERY_NOTICE,
+          abortSignal,
+        }).catch((err) => {
+          logger.warn(
+            `[zulip:${account.accountId}] failed to send recovery notice for ${checkpoint.checkpointId}: ${String(err)}`,
+          );
+        });
+
+        const syntheticMessage: ZulipEventMessage = {
+          id: checkpoint.messageId,
+          type: "stream",
+          sender_id: Number(checkpoint.senderId) || 0,
+          sender_full_name: checkpoint.senderName,
+          sender_email: checkpoint.senderEmail,
+          display_recipient: checkpoint.stream,
+          stream_id: checkpoint.streamId,
+          subject: checkpoint.topic,
+          content: checkpoint.cleanedContent,
+          timestamp:
+            typeof checkpoint.timestampMs === "number"
+              ? Math.floor(checkpoint.timestampMs / 1000)
+              : undefined,
+        };
+
+        try {
+          await handleMessage(syntheticMessage, { recoveryCheckpoint: checkpoint });
+        } catch (err) {
+          runtime.error?.(
+            `[zulip:${account.accountId}] recovery replay failed for ${checkpoint.checkpointId}: ${String(err)}`,
+          );
+          const failedCheckpoint = markZulipCheckpointFailure({ checkpoint, error: err });
+          await writeZulipInFlightCheckpoint({ checkpoint: failedCheckpoint }).catch(
+            () => undefined,
+          );
         }
       }
     };
@@ -1253,6 +1404,8 @@ export async function monitorZulipProvider(
         }
       }
     };
+
+    await replayPendingCheckpoints();
 
     const plan = buildZulipQueuePlan(account.streams);
     if (plan.length === 0) {
