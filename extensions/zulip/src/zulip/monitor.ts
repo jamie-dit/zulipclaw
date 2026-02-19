@@ -67,6 +67,8 @@ type ZulipMeResponse = {
   full_name?: string;
 };
 
+export const DEFAULT_DISPATCH_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
+
 export function computeZulipMonitorBackoffMs(params: {
   attempt: number;
   status: number | null;
@@ -103,6 +105,34 @@ function sleep(ms: number, abortSignal?: AbortSignal): Promise<void> {
       abortSignal.addEventListener("abort", onAbort, { once: true });
     }
   });
+}
+
+export async function waitForDispatcherIdleWithTimeout(params: {
+  waitForIdle: () => Promise<void>;
+  timeoutMs: number;
+  onTimeout?: () => void;
+}): Promise<void> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const idlePromise = params.waitForIdle();
+  try {
+    const outcome = await Promise.race<"idle" | "timeout">([
+      idlePromise.then(() => "idle"),
+      new Promise<"timeout">((resolve) => {
+        timeoutHandle = setTimeout(() => resolve("timeout"), params.timeoutMs);
+        timeoutHandle.unref?.();
+      }),
+    ]);
+
+    if (outcome === "timeout") {
+      params.onTimeout?.();
+      // Avoid unhandled rejections after timeout while cleanup continues.
+      idlePromise.catch(() => undefined);
+    }
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
 }
 
 function extractZulipHttpStatus(err: unknown): number | null {
@@ -791,67 +821,77 @@ export async function monitorZulipProvider(
           }
         }
       } finally {
-        markDispatchIdle();
-        // Clean up keepalive timer
-        clearTimeout(keepaliveTimer);
-        // Clean up typing refresh interval (before stopTypingIndicator)
-        clearInterval(typingRefreshInterval);
-        // Clean up delivery abort controller
-        clearTimeout(deliveryTimer);
-        abortSignal.removeEventListener("abort", onMainAbortForDelivery);
+        // Ensure all queued outbound sends are flushed before cleanup.
+        dispatcher.markComplete();
+        try {
+          await waitForDispatcherIdleWithTimeout({
+            waitForIdle: () => dispatcher.waitForIdle(),
+            timeoutMs: DEFAULT_DISPATCH_WAIT_FOR_IDLE_TIMEOUT_MS,
+            onTimeout: () => {
+              logger.warn(
+                `[zulip] dispatcher.waitForIdle timed out after ${DEFAULT_DISPATCH_WAIT_FOR_IDLE_TIMEOUT_MS}ms; continuing cleanup`,
+              );
+            },
+          });
+        } finally {
+          markDispatchIdle();
+          // Clean up keepalive timer
+          clearTimeout(keepaliveTimer);
+          // Clean up typing refresh interval (before stopTypingIndicator)
+          clearInterval(typingRefreshInterval);
+          // Clean up delivery abort controller listener/timer (do not hard-abort here).
+          clearTimeout(deliveryTimer);
+          abortSignal.removeEventListener("abort", onMainAbortForDelivery);
 
-        // Stop typing indicator now that the reply has been sent.
-        if (typeof msg.stream_id === "number") {
-          stopTypingIndicator({
-            auth,
-            streamId: msg.stream_id,
-            topic,
-            abortSignal: deliverySignal,
-          }).catch(() => undefined);
-        }
-
-        // Visible failure message: post an actual user-visible message when dispatch fails
-        if (ok === false) {
-          try {
-            await sendZulipStreamMessage({
+          // Stop typing indicator now that the reply has been sent.
+          if (typeof msg.stream_id === "number") {
+            stopTypingIndicator({
               auth,
-              stream,
+              streamId: msg.stream_id,
               topic,
-              content:
-                "⚠️ I ran into an error processing your message — please try again. (Error has been logged)",
               abortSignal: deliverySignal,
-            });
-          } catch {
-            // Best effort — if this fails, at least the reaction emoji will show the failure
+            }).catch(() => undefined);
           }
-        }
 
-        // Use deliverySignal for final reactions so they can still be posted
-        // during graceful shutdown (the grace period covers these too).
-        if (account.reactions.enabled) {
-          if (account.reactions.clearOnFinish) {
+          // Visible failure message: post an actual user-visible message when dispatch fails
+          if (ok === false) {
+            try {
+              await sendZulipStreamMessage({
+                auth,
+                stream,
+                topic,
+                content:
+                  "⚠️ I ran into an error processing your message — please try again. (Error has been logged)",
+                abortSignal: deliverySignal,
+              });
+            } catch {
+              // Best effort — if this fails, at least the reaction emoji will show the failure
+            }
+          }
+
+          // Use deliverySignal for final reactions so they can still be posted
+          // during graceful shutdown (the grace period covers these too).
+          if (account.reactions.enabled) {
+            if (account.reactions.clearOnFinish) {
+              await bestEffortReaction({
+                auth,
+                messageId: msg.id,
+                op: "remove",
+                emojiName: account.reactions.onStart,
+                log: (m) => logger.debug?.(m),
+                abortSignal: deliverySignal,
+              });
+            }
+            const finalEmoji = ok ? account.reactions.onSuccess : account.reactions.onFailure;
             await bestEffortReaction({
               auth,
               messageId: msg.id,
-              op: "remove",
-              emojiName: account.reactions.onStart,
+              op: "add",
+              emojiName: finalEmoji,
               log: (m) => logger.debug?.(m),
               abortSignal: deliverySignal,
             });
           }
-          const finalEmoji = ok ? account.reactions.onSuccess : account.reactions.onFailure;
-          await bestEffortReaction({
-            auth,
-            messageId: msg.id,
-            op: "add",
-            emojiName: finalEmoji,
-            log: (m) => logger.debug?.(m),
-            abortSignal: deliverySignal,
-          });
-        }
-        // Hard-abort delivery controller if it hasn't fired yet (cleanup)
-        if (!deliveryController.signal.aborted) {
-          deliveryController.abort();
         }
       }
     };
