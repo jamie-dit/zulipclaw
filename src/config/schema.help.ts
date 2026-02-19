@@ -80,6 +80,16 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.loopDetection.detectors.knownPollNoProgress":
     "Enable known poll tool no-progress loop detection (default: true).",
   "tools.loopDetection.detectors.pingPong": "Enable ping-pong loop detection (default: true).",
+  "tools.delegationNudge.enabled":
+    "Enable delegation nudge soft warnings and hard-limit handling (default: false).",
+  "tools.delegationNudge.softThreshold":
+    "Soft warning threshold for tool calls per turn (default: 3).",
+  "tools.delegationNudge.hardThreshold":
+    "Hard block threshold for non-exempt tools on normal turns (default: 6).",
+  "tools.delegationNudge.firstTurnHardThreshold":
+    "Hard block threshold for only the first depth-0 main turn (default: 10).",
+  "tools.delegationNudge.exemptTools":
+    "Tool names exempt from delegation hard-limit blocking/auto-delegation.",
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions enqueue a system event and request a heartbeat on exit.",
   "tools.exec.notifyOnExitEmptySuccess":

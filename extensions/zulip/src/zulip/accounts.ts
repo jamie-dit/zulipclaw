@@ -7,12 +7,37 @@ export type ZulipTokenSource = "env" | "config" | "none";
 export type ZulipBaseUrlSource = "env" | "config" | "none";
 export type ZulipEmailSource = "env" | "config" | "none";
 
+export type ZulipReactionWorkflowStage =
+  | "queued"
+  | "processing"
+  | "toolRunning"
+  | "retrying"
+  | "success"
+  | "partialSuccess"
+  | "failure";
+
+export type ResolvedZulipReactionWorkflow = {
+  enabled: boolean;
+  replaceStageReaction: boolean;
+  minTransitionMs: number;
+  stages: {
+    queued?: string;
+    processing?: string;
+    toolRunning?: string;
+    retrying?: string;
+    success: string;
+    partialSuccess?: string;
+    failure: string;
+  };
+};
+
 export type ResolvedZulipReactions = {
   enabled: boolean;
   onStart: string;
   onSuccess: string;
   onFailure: string;
   clearOnFinish: boolean;
+  workflow: ResolvedZulipReactionWorkflow;
 };
 
 export type ResolvedZulipAccount = {
@@ -43,6 +68,18 @@ const DEFAULT_REACTIONS: ResolvedZulipReactions = {
   onSuccess: "check",
   onFailure: "warning",
   clearOnFinish: true,
+  workflow: {
+    enabled: true,
+    replaceStageReaction: true,
+    minTransitionMs: 1500,
+    stages: {
+      queued: "eyes",
+      processing: "eyes",
+      success: "check",
+      partialSuccess: "warning",
+      failure: "warning",
+    },
+  },
 };
 
 function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
@@ -93,6 +130,13 @@ function normalizeStreamAllowlist(streams?: string[]): string[] {
   return Array.from(new Set(normalized));
 }
 
+function resolveWorkflowMinTransitionMs(raw?: number): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) {
+    return DEFAULT_REACTIONS.workflow.minTransitionMs;
+  }
+  return Math.floor(raw);
+}
+
 function resolveReactions(config: ZulipReactionConfig | undefined): ResolvedZulipReactions {
   if (!config) {
     return DEFAULT_REACTIONS;
@@ -102,7 +146,24 @@ function resolveReactions(config: ZulipReactionConfig | undefined): ResolvedZuli
   const onSuccess = normalizeEmojiName(config.onSuccess) || DEFAULT_REACTIONS.onSuccess;
   const onFailure = normalizeEmojiName(config.onFailure) || DEFAULT_REACTIONS.onFailure;
   const clearOnFinish = config.clearOnFinish !== false;
-  return { enabled, onStart, onSuccess, onFailure, clearOnFinish };
+
+  const workflowStages = config.workflow?.stages;
+  const workflow = {
+    enabled: config.workflow?.enabled === true,
+    replaceStageReaction: config.workflow?.replaceStageReaction !== false,
+    minTransitionMs: resolveWorkflowMinTransitionMs(config.workflow?.minTransitionMs),
+    stages: {
+      queued: normalizeEmojiName(workflowStages?.queued) || onStart,
+      processing: normalizeEmojiName(workflowStages?.processing) || onStart,
+      toolRunning: normalizeEmojiName(workflowStages?.toolRunning) || undefined,
+      retrying: normalizeEmojiName(workflowStages?.retrying) || undefined,
+      success: normalizeEmojiName(workflowStages?.success) || onSuccess,
+      partialSuccess: normalizeEmojiName(workflowStages?.partialSuccess) || onFailure,
+      failure: normalizeEmojiName(workflowStages?.failure) || onFailure,
+    },
+  } satisfies ResolvedZulipReactionWorkflow;
+
+  return { enabled, onStart, onSuccess, onFailure, clearOnFinish, workflow };
 }
 
 export function resolveZulipAccount(params: {

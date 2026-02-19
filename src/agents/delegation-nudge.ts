@@ -2,7 +2,13 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { DelegationNudgeConfig } from "../config/types.tools.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 
-const turnToolCallCounts = new Map<string, number>();
+type DelegationNudgeTurnState = {
+  toolCallCount: number;
+  isFirstTurn: boolean;
+  autoDelegationStarted: boolean;
+};
+
+const turnStateBySession = new Map<string, DelegationNudgeTurnState>();
 const MAX_TRACKED_SESSIONS = 1024;
 const DELEGATION_NUDGE_MARKER = "⚠️ DELEGATION NUDGE:";
 
@@ -23,13 +29,32 @@ function shouldApplyDelegationNudge(params: {
 }
 
 function trimCounterMapIfNeeded(): void {
-  if (turnToolCallCounts.size <= MAX_TRACKED_SESSIONS) {
+  if (turnStateBySession.size <= MAX_TRACKED_SESSIONS) {
     return;
   }
-  const oldest = turnToolCallCounts.keys().next().value;
+  const oldest = turnStateBySession.keys().next().value;
   if (oldest) {
-    turnToolCallCounts.delete(oldest);
+    turnStateBySession.delete(oldest);
   }
+}
+
+function getOrCreateTurnState(sessionKey?: string): DelegationNudgeTurnState | null {
+  const key = normalizeSessionKey(sessionKey);
+  if (!key) {
+    return null;
+  }
+  const existing = turnStateBySession.get(key);
+  if (existing) {
+    return existing;
+  }
+  const created: DelegationNudgeTurnState = {
+    toolCallCount: 0,
+    isFirstTurn: false,
+    autoDelegationStarted: false,
+  };
+  turnStateBySession.set(key, created);
+  trimCounterMapIfNeeded();
+  return created;
 }
 
 function hasDelegationNudge(content: unknown): boolean {
@@ -111,31 +136,64 @@ function appendTextToToolResultMessage(message: AgentMessage, appendText: string
   } as AgentMessage;
 }
 
+export function startDelegationNudgeTurn(params: {
+  sessionKey?: string;
+  isFirstTurn?: boolean;
+}): void {
+  const key = normalizeSessionKey(params.sessionKey);
+  if (!key) {
+    return;
+  }
+  turnStateBySession.set(key, {
+    toolCallCount: 0,
+    isFirstTurn: params.isFirstTurn === true,
+    autoDelegationStarted: false,
+  });
+  trimCounterMapIfNeeded();
+}
+
 export function resetDelegationNudgeCounter(sessionKey?: string): void {
   const key = normalizeSessionKey(sessionKey);
   if (!key) {
     return;
   }
-  turnToolCallCounts.delete(key);
+  turnStateBySession.delete(key);
 }
 
 export function incrementDelegationNudgeCounter(sessionKey?: string): number {
-  const key = normalizeSessionKey(sessionKey);
-  if (!key) {
+  const state = getOrCreateTurnState(sessionKey);
+  if (!state) {
     return 0;
   }
-  const next = (turnToolCallCounts.get(key) ?? 0) + 1;
-  turnToolCallCounts.set(key, next);
-  trimCounterMapIfNeeded();
-  return next;
+  state.toolCallCount += 1;
+  return state.toolCallCount;
 }
 
 export function getDelegationNudgeCounter(sessionKey?: string): number {
-  const key = normalizeSessionKey(sessionKey);
-  if (!key) {
+  const state = getOrCreateTurnState(sessionKey);
+  if (!state) {
     return 0;
   }
-  return turnToolCallCounts.get(key) ?? 0;
+  return state.toolCallCount;
+}
+
+export function isDelegationNudgeFirstTurn(sessionKey?: string): boolean {
+  const state = getOrCreateTurnState(sessionKey);
+  return state?.isFirstTurn === true;
+}
+
+export function markDelegationNudgeAutoDelegated(sessionKey?: string): boolean {
+  const state = getOrCreateTurnState(sessionKey);
+  if (!state || state.autoDelegationStarted) {
+    return false;
+  }
+  state.autoDelegationStarted = true;
+  return true;
+}
+
+export function hasDelegationNudgeAutoDelegated(sessionKey?: string): boolean {
+  const state = getOrCreateTurnState(sessionKey);
+  return state?.autoDelegationStarted === true;
 }
 
 export function applyDelegationNudgeToToolResultMessage(params: {
@@ -165,5 +223,5 @@ export function applyDelegationNudgeToToolResultMessage(params: {
 }
 
 export const __testing = {
-  turnToolCallCounts,
+  turnStateBySession,
 };

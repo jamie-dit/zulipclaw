@@ -1,3 +1,24 @@
+export type ZulipReactionWorkflowStageConfig = {
+  queued?: string;
+  processing?: string;
+  toolRunning?: string;
+  retrying?: string;
+  success?: string;
+  partialSuccess?: string;
+  failure?: string;
+};
+
+export type ZulipReactionWorkflowConfig = {
+  /** Enable stage-based workflow reactions. Defaults to false for backward compatibility. */
+  enabled?: boolean;
+  /** Remove previous stage emoji before posting the next stage emoji. Defaults to true. */
+  replaceStageReaction?: boolean;
+  /** Minimum delay between stage transitions in milliseconds. Defaults to 1500ms. */
+  minTransitionMs?: number;
+  /** Emoji mapping by workflow stage. */
+  stages?: ZulipReactionWorkflowStageConfig;
+};
+
 export type ZulipReactionConfig = {
   enabled?: boolean;
   onStart?: string;
@@ -8,6 +29,11 @@ export type ZulipReactionConfig = {
    * Set to false to leave the `onStart` reaction (e.g. ":eyes:") on the message.
    */
   clearOnFinish?: boolean;
+  /**
+   * Optional stage-based reactions for richer status signaling.
+   * Disabled by default so legacy behavior remains unchanged.
+   */
+  workflow?: ZulipReactionWorkflowConfig;
 };
 
 export type ZulipAccountConfig = {
@@ -47,7 +73,7 @@ export type ZulipAccountConfig = {
   /**
    * Require @mention to respond in streams (default: false).
    * When true, the bot only replies when mentioned by name or @-syntax.
-   * If unset, derived from `alwaysReply` (default true → requireMention false).
+   * If unset, derived from `alwaysReply` (default true -> requireMention false).
    */
   requireMention?: boolean;
 };
