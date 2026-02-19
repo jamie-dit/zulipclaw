@@ -46,6 +46,19 @@ export function resolvePreferredOpenClawTmpDir(
   const tmpdir = options.tmpdir ?? os.tmpdir;
   const uid = getuid();
 
+  // ZulipClaw: if OPENCLAW_HOME is set, namespace logs under it to isolate
+  // multiple instances (e.g. canary vs production) from sharing one log dir.
+  const openclawHome = process.env.OPENCLAW_HOME;
+  if (openclawHome) {
+    const homeLogDir = path.join(openclawHome, ".openclaw", "logs");
+    try {
+      mkdirSync(homeLogDir, { recursive: true, mode: 0o700 });
+      return homeLogDir;
+    } catch {
+      // fall through to default resolution
+    }
+  }
+
   const isSecureDirForUser = (st: { mode?: number; uid?: number }): boolean => {
     if (uid === undefined) {
       return true;
