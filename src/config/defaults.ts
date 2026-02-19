@@ -291,6 +291,11 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
+/**
+ * ZulipClaw fork note:
+ * Subagent relay defaults here are tuned for Zulip-only delivery and are not
+ * intended to represent multi-platform relay behavior.
+ */
 export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const agents = cfg.agents;
   const defaults = agents?.defaults;
@@ -299,7 +304,9 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const hasSubMax =
     typeof defaults?.subagents?.maxConcurrent === "number" &&
     Number.isFinite(defaults.subagents.maxConcurrent);
-  if (hasMax && hasSubMax) {
+  const hasRelayEnabled = typeof defaults?.subagents?.relay?.enabled === "boolean";
+  const hasRelayLevel = typeof defaults?.subagents?.relay?.level === "string";
+  if (hasMax && hasSubMax && hasRelayEnabled && hasRelayLevel) {
     return cfg;
   }
 
@@ -315,6 +322,17 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
     nextSubagents.maxConcurrent = DEFAULT_SUBAGENT_MAX_CONCURRENT;
     mutated = true;
   }
+
+  const nextSubagentRelay = nextSubagents.relay ? { ...nextSubagents.relay } : {};
+  if (!hasRelayEnabled) {
+    nextSubagentRelay.enabled = true;
+    mutated = true;
+  }
+  if (!hasRelayLevel) {
+    nextSubagentRelay.level = "tools";
+    mutated = true;
+  }
+  nextSubagents.relay = nextSubagentRelay;
 
   if (!mutated) {
     return cfg;

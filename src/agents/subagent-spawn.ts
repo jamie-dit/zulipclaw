@@ -286,6 +286,11 @@ export async function spawnSubagentDirect(
     childSessionKey,
     requesterSessionKey: requesterInternalKey,
     requesterOrigin,
+    requesterDeliveryContext: {
+      channel: requesterOrigin?.channel,
+      to: requesterOrigin?.to,
+      accountId: requesterOrigin?.accountId,
+    },
     requesterDisplayKey,
     task,
     cleanup,

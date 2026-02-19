@@ -163,6 +163,15 @@ export const AgentDefaultsSchema = z
         archiveAfterMinutes: z.number().int().positive().optional(),
         model: AgentModelSchema.optional(),
         thinking: z.string().optional(),
+        relay: z
+          .object({
+            enabled: z.boolean().optional(),
+            level: z
+              .union([z.literal("tools"), z.literal("full"), z.literal("summary")])
+              .optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
