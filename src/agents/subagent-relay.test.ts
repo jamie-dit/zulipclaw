@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { formatToolElapsed, formatToolLine } from "./subagent-relay.js";
+import {
+  formatRelayFooter,
+  formatRelayUpdatedTime,
+  formatToolElapsed,
+  formatToolLine,
+} from "./subagent-relay.js";
 
 describe("subagent-relay", () => {
   describe("formatToolElapsed", () => {
@@ -42,6 +47,31 @@ describe("subagent-relay", () => {
     it("keeps hour-style elapsed formatting in the bracket prefix", () => {
       const line = formatToolLine("exec", { command: "echo hi" }, 1_000, 3_662_000);
       expect(line.startsWith("[+1:01:01]")).toBe(true);
+    });
+  });
+
+  describe("relay footer", () => {
+    it("formats updated time in local timezone with concise time", () => {
+      const ts = Date.UTC(2026, 1, 19, 8, 28, 0);
+      const expected = new Intl.DateTimeFormat("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(new Date(ts));
+      expect(formatRelayUpdatedTime(ts)).toBe(expected);
+    });
+
+    it("includes elapsed, tool count, and updated time", () => {
+      const footer = formatRelayFooter(
+        {
+          startedAt: 1_000,
+          toolCount: 5,
+          status: "running",
+          lastUpdatedAt: 8_000,
+        },
+        32_000,
+      );
+      expect(footer).toContain("⏱️ 31s · 5 tool calls · updated ");
+      expect(footer).toMatch(/updated\s+\d{1,2}:\d{2}/);
     });
   });
 });
