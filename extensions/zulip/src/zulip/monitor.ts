@@ -1,10 +1,10 @@
-import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk";
 import crypto from "node:crypto";
+import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk";
 import { createReplyPrefixOptions } from "openclaw/plugin-sdk";
-import type { ZulipAuth } from "./client.js";
-import type { ZulipHttpError } from "./client.js";
 import { getZulipRuntime } from "../runtime.js";
 import { resolveZulipAccount, type ResolvedZulipAccount } from "./accounts.js";
+import type { ZulipAuth } from "./client.js";
+import type { ZulipHttpError } from "./client.js";
 import { zulipRequest } from "./client.js";
 import { createDedupeCache } from "./dedupe.js";
 import { normalizeStreamName, normalizeTopic } from "./normalize.js";
@@ -396,6 +396,8 @@ async function deliverReply(params: {
   abortSignal?: AbortSignal;
 }) {
   const core = getZulipRuntime();
+  const logger = core.logging.getChildLogger({ channel: "zulip" });
+
   const topicDirective = extractZulipTopicDirective(params.payload.text ?? "");
   const topic = topicDirective.topic ?? params.topic;
   const text = topicDirective.text;
@@ -411,18 +413,23 @@ async function deliverReply(params: {
       if (!chunk) {
         continue;
       }
-      await sendZulipStreamMessage({
+      const response = await sendZulipStreamMessage({
         auth: params.auth,
         stream: params.stream,
         topic,
         content: chunk,
         abortSignal: params.abortSignal,
       });
+      // Delivery receipt verification: check message ID in response
+      if (!response || typeof response.id !== "number") {
+        logger.warn(`[zulip] sendZulipStreamMessage returned invalid or missing message ID`);
+      }
     }
   };
 
   const trimmedText = text.trim();
   if (!trimmedText && mediaUrls.length === 0) {
+    logger.debug(`[zulip] deliverReply: empty response (no text, no media) — skipping`);
     return;
   }
   if (mediaUrls.length === 0) {
@@ -452,13 +459,17 @@ async function deliverReply(params: {
       abortSignal: params.abortSignal,
     });
     const content = caption ? `${caption}\n\n${uploadedUrl}` : uploadedUrl;
-    await sendZulipStreamMessage({
+    const response = await sendZulipStreamMessage({
       auth: params.auth,
       stream: params.stream,
       topic,
       content,
       abortSignal: params.abortSignal,
     });
+    // Delivery receipt verification: check message ID in response
+    if (!response || typeof response.id !== "number") {
+      logger.warn(`[zulip] sendZulipStreamMessage returned invalid or missing message ID`);
+    }
     caption = "";
   }
 }
@@ -579,11 +590,22 @@ export async function monitorZulipProvider(
         });
       }
 
-      // Send typing indicator while the agent processes.
+      // Typing indicator refresh: Zulip expires typing indicators after ~15s server-side
+      let typingRefreshInterval: ReturnType<typeof setInterval> | undefined;
+      // Keepalive message for long-running agent turns (fires once after 30s)
+      let keepaliveSent = false;
+      let keepaliveTimer: ReturnType<typeof setTimeout> | undefined;
+
+      // Send typing indicator while the agent processes, and refresh every 10s.
       if (typeof msg.stream_id === "number") {
         sendTypingIndicator({ auth, streamId: msg.stream_id, topic, abortSignal }).catch(
           () => undefined,
         );
+        typingRefreshInterval = setInterval(() => {
+          sendTypingIndicator({ auth, streamId: msg.stream_id, topic, abortSignal }).catch(
+            () => undefined,
+          );
+        }, 10_000);
       }
 
       const inboundUploads = await downloadZulipUploads({
@@ -718,8 +740,25 @@ export async function monitorZulipProvider(
           },
         });
 
+      keepaliveTimer = setTimeout(async () => {
+        if (!keepaliveSent) {
+          try {
+            await sendZulipStreamMessage({
+              auth,
+              stream,
+              topic,
+              content: "🔧 Still working on this...",
+              abortSignal: deliverySignal,
+            });
+            keepaliveSent = true;
+          } catch {
+            // Best effort — keepalive is non-critical
+          }
+        }
+      }, 30_000);
+
       let ok = false;
-      const MAX_DISPATCH_RETRIES = 1;
+      const MAX_DISPATCH_RETRIES = 2;
       try {
         for (let attempt = 0; attempt <= MAX_DISPATCH_RETRIES; attempt++) {
           try {
@@ -753,6 +792,10 @@ export async function monitorZulipProvider(
         }
       } finally {
         markDispatchIdle();
+        // Clean up keepalive timer
+        clearTimeout(keepaliveTimer);
+        // Clean up typing refresh interval (before stopTypingIndicator)
+        clearInterval(typingRefreshInterval);
         // Clean up delivery abort controller
         clearTimeout(deliveryTimer);
         abortSignal.removeEventListener("abort", onMainAbortForDelivery);
@@ -766,6 +809,23 @@ export async function monitorZulipProvider(
             abortSignal: deliverySignal,
           }).catch(() => undefined);
         }
+
+        // Visible failure message: post an actual user-visible message when dispatch fails
+        if (ok === false) {
+          try {
+            await sendZulipStreamMessage({
+              auth,
+              stream,
+              topic,
+              content:
+                "⚠️ I ran into an error processing your message — please try again. (Error has been logged)",
+              abortSignal: deliverySignal,
+            });
+          } catch {
+            // Best effort — if this fails, at least the reaction emoji will show the failure
+          }
+        }
+
         // Use deliverySignal for final reactions so they can still be posted
         // during graceful shutdown (the grace period covers these too).
         if (account.reactions.enabled) {
