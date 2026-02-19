@@ -68,6 +68,88 @@ type ZulipMeResponse = {
 };
 
 export const DEFAULT_DISPATCH_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
+export const KEEPALIVE_INITIAL_DELAY_MS = 25_000;
+export const KEEPALIVE_REPEAT_INTERVAL_MS = 60_000;
+
+function formatKeepaliveElapsed(elapsedMs: number): string {
+  const totalSeconds = Math.max(1, Math.floor(elapsedMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  if (minutes <= 0) {
+    return `${totalSeconds}s`;
+  }
+  if (seconds <= 0) {
+    return `${minutes}m`;
+  }
+  return `${minutes}m ${seconds}s`;
+}
+
+export function buildKeepaliveMessageContent(elapsedMs: number): string {
+  return `🔧 Still working... (${formatKeepaliveElapsed(elapsedMs)} elapsed)`;
+}
+
+export function startPeriodicKeepalive(params: {
+  sendPing: (elapsedMs: number) => Promise<void>;
+  initialDelayMs?: number;
+  repeatIntervalMs?: number;
+  now?: () => number;
+}): () => void {
+  const initialDelayMs = params.initialDelayMs ?? KEEPALIVE_INITIAL_DELAY_MS;
+  const repeatIntervalMs = params.repeatIntervalMs ?? KEEPALIVE_REPEAT_INTERVAL_MS;
+  const now = params.now ?? (() => Date.now());
+
+  const startedAt = now();
+  let stopped = false;
+  let repeatTimer: ReturnType<typeof setInterval> | undefined;
+
+  const firePing = () => {
+    if (stopped) {
+      return;
+    }
+    void params.sendPing(Math.max(0, now() - startedAt)).catch(() => undefined);
+  };
+
+  const initialTimer = setTimeout(() => {
+    firePing();
+    if (stopped) {
+      return;
+    }
+    repeatTimer = setInterval(() => {
+      firePing();
+    }, repeatIntervalMs);
+    repeatTimer.unref?.();
+  }, initialDelayMs);
+
+  initialTimer.unref?.();
+
+  return () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    clearTimeout(initialTimer);
+    if (repeatTimer) {
+      clearInterval(repeatTimer);
+    }
+  };
+}
+
+export function createBestEffortShutdownNoticeSender(params: {
+  sendNotice: () => Promise<void>;
+  log?: (message: string) => void;
+}): () => void {
+  let sent = false;
+  return () => {
+    if (sent) {
+      return;
+    }
+    sent = true;
+    void params.sendNotice().catch((err) => {
+      params.log?.(`[zulip] shutdown notice failed: ${String(err)}`);
+    });
+  };
+}
 
 export function computeZulipMonitorBackoffMs(params: {
   attempt: number;
@@ -608,6 +690,27 @@ export async function monitorZulipProvider(
       };
       abortSignal.addEventListener("abort", onMainAbortForDelivery, { once: true });
 
+      const sendShutdownNoticeOnce = createBestEffortShutdownNoticeSender({
+        sendNotice: async () => {
+          await sendZulipStreamMessage({
+            auth,
+            stream,
+            topic,
+            content:
+              "♻️ Gateway restart in progress - reconnecting now. If this turn is interrupted, please resend in a moment.",
+            abortSignal: deliverySignal,
+          });
+        },
+        log: (message) => logger.debug?.(message),
+      });
+      const onMainAbortShutdownNotice = () => {
+        sendShutdownNoticeOnce();
+      };
+      abortSignal.addEventListener("abort", onMainAbortShutdownNotice, { once: true });
+      if (abortSignal.aborted) {
+        onMainAbortShutdownNotice();
+      }
+
       const prefix = account.reactions;
       if (prefix.enabled) {
         await bestEffortReaction({
@@ -622,9 +725,6 @@ export async function monitorZulipProvider(
 
       // Typing indicator refresh: Zulip expires typing indicators after ~15s server-side
       let typingRefreshInterval: ReturnType<typeof setInterval> | undefined;
-      // Keepalive message for long-running agent turns (fires once after 30s)
-      let keepaliveSent = false;
-      let keepaliveTimer: ReturnType<typeof setTimeout> | undefined;
 
       // Send typing indicator while the agent processes, and refresh every 10s.
       if (typeof msg.stream_id === "number") {
@@ -770,22 +870,17 @@ export async function monitorZulipProvider(
           },
         });
 
-      keepaliveTimer = setTimeout(async () => {
-        if (!keepaliveSent) {
-          try {
-            await sendZulipStreamMessage({
-              auth,
-              stream,
-              topic,
-              content: "🔧 Still working on this...",
-              abortSignal: deliverySignal,
-            });
-            keepaliveSent = true;
-          } catch {
-            // Best effort — keepalive is non-critical
-          }
-        }
-      }, 30_000);
+      const stopKeepalive = startPeriodicKeepalive({
+        sendPing: async (elapsedMs) => {
+          await sendZulipStreamMessage({
+            auth,
+            stream,
+            topic,
+            content: buildKeepaliveMessageContent(elapsedMs),
+            abortSignal: deliverySignal,
+          });
+        },
+      });
 
       let ok = false;
       const MAX_DISPATCH_RETRIES = 2;
@@ -835,13 +930,14 @@ export async function monitorZulipProvider(
           });
         } finally {
           markDispatchIdle();
-          // Clean up keepalive timer
-          clearTimeout(keepaliveTimer);
+          // Clean up periodic keepalive timers.
+          stopKeepalive();
           // Clean up typing refresh interval (before stopTypingIndicator)
           clearInterval(typingRefreshInterval);
           // Clean up delivery abort controller listener/timer (do not hard-abort here).
           clearTimeout(deliveryTimer);
           abortSignal.removeEventListener("abort", onMainAbortForDelivery);
+          abortSignal.removeEventListener("abort", onMainAbortShutdownNotice);
 
           // Stop typing indicator now that the reply has been sent.
           if (typeof msg.stream_id === "number") {
