@@ -33,6 +33,11 @@ type HourRunSummary = {
   outputPath?: string;
   uploaded: boolean;
   dryRunUpload: boolean;
+  diagnostics: {
+    reportedRecords: number;
+    reportedZeroRecords: number;
+    missingUsageRecords: number;
+  };
   uploadResult?: {
     ok: true;
     importedRows: number;
@@ -280,6 +285,7 @@ async function main(): Promise<void> {
       outputPath,
       uploaded: Boolean(uploadResult),
       dryRunUpload: args.upload && args.dryRun,
+      diagnostics: result.diagnostics,
       uploadResult,
     });
   }
@@ -365,6 +371,19 @@ async function main(): Promise<void> {
               (sum, hour) => sum + (hour.uploadResult?.importedRows ?? 0),
               0,
             ),
+            reportedRecords: runSummaries.reduce(
+              (sum, hour) => sum + hour.diagnostics.reportedRecords,
+              0,
+            ),
+            reportedZeroRecords: runSummaries.reduce(
+              (sum, hour) => sum + hour.diagnostics.reportedZeroRecords,
+              0,
+            ),
+            missingUsageRecords: runSummaries.reduce(
+              (sum, hour) => sum + hour.diagnostics.missingUsageRecords,
+              0,
+            ),
+            missingUsageFallbackEnabled: true,
           },
           hoursDetail: runSummaries,
         },

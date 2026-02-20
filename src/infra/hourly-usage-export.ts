@@ -14,20 +14,31 @@ import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format
 
 const HOUR_MS = 60 * 60 * 1000;
 
+export type UsageProvenance = "reported" | "reported_zero" | "missing_usage";
+
 export type UsageRecord = {
   timestampMs: number;
   sessionKey: string;
   model: string;
+  modelProvider: string;
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
   costUsd?: number;
+  provenance: UsageProvenance;
+};
+
+export type UsageDiagnostics = {
+  reportedRecords: number;
+  reportedZeroRecords: number;
+  missingUsageRecords: number;
 };
 
 export type HourlyUsageCsvRow = {
   timestamp_hour: string;
   session_key: string;
   model: string;
+  model_provider: string;
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
@@ -167,14 +178,61 @@ export function resolveHourSelection(params: {
   };
 }
 
+async function discoverTranscriptTimestampBounds(filePath: string): Promise<{
+  earliestMs: number;
+  latestMs: number;
+} | null> {
+  const stream = fs.createReadStream(filePath, { encoding: "utf-8" });
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+
+  let earliestMs: number | undefined;
+  let latestMs: number | undefined;
+
+  try {
+    for await (const line of rl) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        continue;
+      }
+      if (!parsed || typeof parsed !== "object") {
+        continue;
+      }
+
+      const timestampMs = parseTimestampMs(parsed as Record<string, unknown>);
+      if (!Number.isFinite(timestampMs)) {
+        continue;
+      }
+
+      earliestMs = earliestMs === undefined ? timestampMs : Math.min(earliestMs, timestampMs);
+      latestMs = latestMs === undefined ? timestampMs : Math.max(latestMs, timestampMs);
+    }
+  } finally {
+    rl.close();
+    stream.destroy();
+  }
+
+  if (earliestMs === undefined || latestMs === undefined) {
+    return null;
+  }
+
+  return { earliestMs, latestMs };
+}
+
 export async function discoverTranscriptHourBounds(params?: {
   config?: OpenClawConfig;
 }): Promise<{ earliestHour: Date; latestHour: Date } | undefined> {
   const config = params?.config ?? loadConfig();
   const agents = listAgentsForGateway(config).agents;
 
-  let earliestMtimeMs: number | undefined;
-  let latestMtimeMs: number | undefined;
+  let earliestMs: number | undefined;
+  let latestMs: number | undefined;
 
   for (const agent of agents) {
     const sessionsDir = resolveSessionTranscriptsDirForAgent(agent.id);
@@ -185,39 +243,59 @@ export async function discoverTranscriptHourBounds(params?: {
         continue;
       }
 
-      const stats = await fs.promises.stat(path.join(sessionsDir, entry.name)).catch(() => null);
-      if (!stats) {
+      const filePath = path.join(sessionsDir, entry.name);
+      const bounds = await discoverTranscriptTimestampBounds(filePath);
+      if (bounds) {
+        earliestMs =
+          earliestMs === undefined ? bounds.earliestMs : Math.min(earliestMs, bounds.earliestMs);
+        latestMs = latestMs === undefined ? bounds.latestMs : Math.max(latestMs, bounds.latestMs);
         continue;
       }
 
-      const mtimeMs = stats.mtimeMs;
+      const stats = await fs.promises.stat(filePath).catch(() => null);
+      const mtimeMs = stats?.mtimeMs;
       if (!Number.isFinite(mtimeMs)) {
         continue;
       }
-
-      earliestMtimeMs =
-        earliestMtimeMs === undefined ? mtimeMs : Math.min(earliestMtimeMs, mtimeMs);
-      latestMtimeMs = latestMtimeMs === undefined ? mtimeMs : Math.max(latestMtimeMs, mtimeMs);
+      earliestMs = earliestMs === undefined ? mtimeMs : Math.min(earliestMs, mtimeMs);
+      latestMs = latestMs === undefined ? mtimeMs : Math.max(latestMs, mtimeMs);
     }
   }
 
-  if (earliestMtimeMs === undefined || latestMtimeMs === undefined) {
+  if (earliestMs === undefined || latestMs === undefined) {
     return undefined;
   }
 
   return {
-    earliestHour: parseHourStart(new Date(earliestMtimeMs).toISOString()),
-    latestHour: parseHourStart(new Date(latestMtimeMs).toISOString()),
+    earliestHour: parseHourStart(new Date(earliestMs).toISOString()),
+    latestHour: parseHourStart(new Date(latestMs).toISOString()),
   };
 }
 
-function formatModel(provider: string | undefined, model: string | undefined): string {
+function resolveModelIdentity(
+  provider: string | undefined,
+  model: string | undefined,
+): {
+  model: string;
+  modelProvider: string;
+} {
   const normalizedModel = model?.trim() || "unknown";
-  const normalizedProvider = provider?.trim();
-  if (!normalizedProvider || normalizedModel.includes("/")) {
-    return normalizedModel;
+  const providerFromModel = normalizedModel.includes("/")
+    ? normalizedModel.slice(0, normalizedModel.indexOf("/")).trim() || undefined
+    : undefined;
+  const normalizedProvider = provider?.trim() || providerFromModel || "unknown";
+
+  if (normalizedModel.includes("/")) {
+    return {
+      model: normalizedModel,
+      modelProvider: normalizedProvider,
+    };
   }
-  return `${normalizedProvider}/${normalizedModel}`;
+
+  return {
+    model: `${normalizedProvider}/${normalizedModel}`,
+    modelProvider: normalizedProvider,
+  };
 }
 
 function parseTimestampMs(entry: Record<string, unknown>): number | undefined {
@@ -305,9 +383,34 @@ function buildSessionLookup(config: OpenClawConfig): SessionLookup {
   return { byAgentAndSessionId, byAgentAndFileBase };
 }
 
-function buildRecordKey(timestampMs: number, sessionKey: string, model: string): string {
+function buildRecordKey(
+  timestampMs: number,
+  sessionKey: string,
+  modelProvider: string,
+  model: string,
+): string {
   const hourMs = Math.floor(timestampMs / HOUR_MS) * HOUR_MS;
-  return `${hourMs}|${sessionKey}|${model}`;
+  return `${hourMs}|${sessionKey}|${modelProvider}|${model}`;
+}
+
+export function summarizeUsageDiagnostics(records: UsageRecord[]): UsageDiagnostics {
+  return records.reduce<UsageDiagnostics>(
+    (summary, record) => {
+      if (record.provenance === "reported") {
+        summary.reportedRecords += 1;
+      } else if (record.provenance === "reported_zero") {
+        summary.reportedZeroRecords += 1;
+      } else {
+        summary.missingUsageRecords += 1;
+      }
+      return summary;
+    },
+    {
+      reportedRecords: 0,
+      reportedZeroRecords: 0,
+      missingUsageRecords: 0,
+    },
+  );
 }
 
 export function aggregateUsageRecords(records: UsageRecord[]): HourlyUsageCsvRow[] {
@@ -317,6 +420,7 @@ export function aggregateUsageRecords(records: UsageRecord[]): HourlyUsageCsvRow
       hourMs: number;
       sessionKey: string;
       model: string;
+      modelProvider: string;
       inputTokens: number;
       outputTokens: number;
       totalTokens: number;
@@ -326,12 +430,18 @@ export function aggregateUsageRecords(records: UsageRecord[]): HourlyUsageCsvRow
   >();
 
   for (const record of records) {
-    const key = buildRecordKey(record.timestampMs, record.sessionKey, record.model);
+    const key = buildRecordKey(
+      record.timestampMs,
+      record.sessionKey,
+      record.modelProvider,
+      record.model,
+    );
     const hourMs = Math.floor(record.timestampMs / HOUR_MS) * HOUR_MS;
     const bucket = grouped.get(key) ?? {
       hourMs,
       sessionKey: record.sessionKey,
       model: record.model,
+      modelProvider: record.modelProvider,
       inputTokens: 0,
       outputTokens: 0,
       totalTokens: 0,
@@ -357,6 +467,7 @@ export function aggregateUsageRecords(records: UsageRecord[]): HourlyUsageCsvRow
       timestamp_hour: formatHourStartIso(new Date(bucket.hourMs)),
       session_key: bucket.sessionKey,
       model: bucket.model,
+      model_provider: bucket.modelProvider,
       input_tokens: bucket.inputTokens,
       output_tokens: bucket.outputTokens,
       total_tokens: bucket.totalTokens,
@@ -370,6 +481,10 @@ export function aggregateUsageRecords(records: UsageRecord[]): HourlyUsageCsvRow
       const sessionCmp = a.session_key.localeCompare(b.session_key);
       if (sessionCmp !== 0) {
         return sessionCmp;
+      }
+      const providerCmp = a.model_provider.localeCompare(b.model_provider);
+      if (providerCmp !== 0) {
+        return providerCmp;
       }
       return a.model.localeCompare(b.model);
     });
@@ -401,6 +516,7 @@ export function buildHourlyUsageCsv(rows: HourlyUsageCsvRow[]): string {
   const header = [
     "timestamp_hour",
     "session_key",
+    "model_provider",
     "model",
     "input_tokens",
     "output_tokens",
@@ -414,6 +530,7 @@ export function buildHourlyUsageCsv(rows: HourlyUsageCsvRow[]): string {
       [
         escapeCsvCell(row.timestamp_hour),
         escapeCsvCell(row.session_key),
+        escapeCsvCell(row.model_provider),
         escapeCsvCell(row.model),
         escapeCsvCell(row.input_tokens),
         escapeCsvCell(row.output_tokens),
@@ -476,20 +593,14 @@ export async function collectUsageRecordsFromTranscriptFile(params: {
       }
 
       const messageRecord = message as Record<string, unknown>;
-      const usageRaw =
-        (messageRecord.usage as UsageLike | undefined) ?? (entry.usage as UsageLike | undefined);
-      const usage = normalizeUsage(usageRaw);
-      if (!usage) {
+      const role = typeof messageRecord.role === "string" ? messageRecord.role : undefined;
+      if (role !== "assistant") {
         continue;
       }
 
-      const input = usage.input ?? 0;
-      const output = usage.output ?? 0;
-      const total =
-        usage.total ?? input + output + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-      if (total <= 0) {
-        continue;
-      }
+      const usageRaw =
+        (messageRecord.usage as UsageLike | undefined) ?? (entry.usage as UsageLike | undefined);
+      const usage = normalizeUsage(usageRaw);
 
       const rawProvider =
         (typeof messageRecord.provider === "string" ? messageRecord.provider : undefined) ??
@@ -499,26 +610,43 @@ export async function collectUsageRecordsFromTranscriptFile(params: {
         (typeof messageRecord.model === "string" ? messageRecord.model : undefined) ??
         (typeof entry.model === "string" ? entry.model : undefined) ??
         params.defaultModel;
-      const model = formatModel(rawProvider, rawModel);
+      const identity = resolveModelIdentity(rawProvider, rawModel);
 
-      let costUsd = parseCostTotal(usageRaw);
-      if (costUsd === undefined) {
-        const costConfig = resolveModelCostConfig({
-          provider: rawProvider,
-          model: rawModel,
-          config: params.config,
-        });
-        costUsd = estimateUsageCost({ usage, cost: costConfig });
+      let input = 0;
+      let output = 0;
+      let total = 0;
+      let costUsd: number | undefined;
+      let provenance: UsageProvenance = "missing_usage";
+
+      if (usage) {
+        input = usage.input ?? 0;
+        output = usage.output ?? 0;
+        const computedTotal =
+          usage.total ?? input + output + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+        total = computedTotal > 0 ? computedTotal : 0;
+        provenance = total > 0 ? "reported" : "reported_zero";
+
+        costUsd = parseCostTotal(usageRaw);
+        if (costUsd === undefined) {
+          const costConfig = resolveModelCostConfig({
+            provider: rawProvider,
+            model: rawModel,
+            config: params.config,
+          });
+          costUsd = estimateUsageCost({ usage, cost: costConfig });
+        }
       }
 
       records.push({
         timestampMs,
         sessionKey: params.sessionKey,
-        model,
+        model: identity.model,
+        modelProvider: identity.modelProvider,
         inputTokens: input,
         outputTokens: output,
         totalTokens: total,
         costUsd,
+        provenance,
       });
     }
   } finally {
@@ -584,18 +712,26 @@ export async function exportHourlyUsageCsv(params?: {
   hourStartIso?: string;
   now?: Date;
   config?: OpenClawConfig;
-}): Promise<{ hourStart: Date; hourStartIso: string; rows: HourlyUsageCsvRow[]; csv: string }> {
+}): Promise<{
+  hourStart: Date;
+  hourStartIso: string;
+  rows: HourlyUsageCsvRow[];
+  csv: string;
+  diagnostics: UsageDiagnostics;
+}> {
   const hourStart =
     params?.hourStart ?? parseHourStart(params?.hourStartIso, params?.now ?? new Date());
   const records = await collectUsageRecordsForHour({ hourStart, config: params?.config });
   const rows = aggregateUsageRecords(records);
   const csv = buildHourlyUsageCsv(rows);
+  const diagnostics = summarizeUsageDiagnostics(records);
 
   return {
     hourStart,
     hourStartIso: formatHourStartIso(hourStart),
     rows,
     csv,
+    diagnostics,
   };
 }
 
@@ -682,5 +818,5 @@ export const __test = {
   parseCostTotal,
   buildSessionLookup,
   deriveSessionIdFromFile,
-  formatModel,
+  resolveModelIdentity,
 };
