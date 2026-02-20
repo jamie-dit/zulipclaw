@@ -67,6 +67,138 @@ export function splitModelRef(ref?: string) {
   return { provider: undefined, model: trimmed };
 }
 
+const MODEL_SELECTION_SECTION_HEADER = "## Model Selection (MANDATORY)";
+const REPLY_ROUTING_SECTION_HEADER = "## Reply Routing (MANDATORY)";
+const PROGRESS_UPDATES_SECTION_HEADER = "## Progress Updates (MANDATORY)";
+
+const MODEL_SELECTION_SECTION = [
+  MODEL_SELECTION_SECTION_HEADER,
+  'Use model="gpt53spark" by default.',
+  'Switch to model="c-glm" only for very short, lightweight text tasks.',
+  'Switch to model="glm" for medium-depth text tasks that may need more context reliability.',
+  'Switch to model="gpt53" for large context, coding-heavy, or image/screenshot work.',
+  "Switch to Opus only for complex planning/review.",
+  "If switched from default, state why in one sentence in the first progress update.",
+  'First progress update must include: "Using model: <model> - reason: <one line>".',
+].join("\n");
+
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function hasSection(task: string, heading: string): boolean {
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|\\n)\\s*${escaped}(?=\\n|$)`, "i").test(task);
+}
+
+function parseZulipTopicTarget(
+  channel?: string,
+  to?: string,
+): { target: string; stream: string; topic: string } | undefined {
+  if ((channel || "").trim().toLowerCase() !== "zulip") {
+    return undefined;
+  }
+  const rawTo = (to || "").trim();
+  if (!rawTo) {
+    return undefined;
+  }
+
+  const withoutPrefix = rawTo.replace(/^zulip:/i, "").trim();
+  if (!/^stream:/i.test(withoutPrefix)) {
+    return undefined;
+  }
+  const streamWithTopic = withoutPrefix.replace(/^stream:/i, "").trim();
+  const topicIndex = streamWithTopic.indexOf("#");
+  if (topicIndex <= 0 || topicIndex >= streamWithTopic.length - 1) {
+    return undefined;
+  }
+
+  const streamRaw = streamWithTopic.slice(0, topicIndex).trim();
+  const topicRaw = streamWithTopic.slice(topicIndex + 1).trim();
+  if (!streamRaw || !topicRaw) {
+    return undefined;
+  }
+
+  const stream = safeDecodeURIComponent(streamRaw);
+  const topic = safeDecodeURIComponent(topicRaw);
+  return {
+    target: `stream:${stream}#${topic}`,
+    stream,
+    topic,
+  };
+}
+
+function buildReplyRoutingSection(zulipRoute: {
+  target: string;
+  stream: string;
+  topic: string;
+}): string {
+  return [
+    REPLY_ROUTING_SECTION_HEADER,
+    `Origin topic: ${zulipRoute.topic}`,
+    "For every Zulip update/final message, send to:",
+    `message(action="send", channel="zulip", target="${zulipRoute.target}", message="...")`,
+    `Never send to bare stream:${zulipRoute.stream}.`,
+    "Never omit topic.",
+  ].join("\n");
+}
+
+function buildProgressUpdatesSection(zulipTarget?: string): string {
+  const lines = [
+    PROGRESS_UPDATES_SECTION_HEADER,
+    "Send progress updates via the message tool:",
+    '1. Immediately when starting: "🔧 Starting: {brief description}..."',
+    "2. Every 1 minute during active work with current stage",
+    "3. When complete: final result message",
+  ];
+
+  if (zulipTarget) {
+    lines.push(
+      `Use message(action="send", channel="zulip", target="${zulipTarget}", message="...")`,
+    );
+  } else {
+    lines.push("Use the requester channel/target specified by the task context.");
+  }
+
+  lines.push("Never go silent for more than 90 seconds during active work.");
+  return lines.join("\n");
+}
+
+export function appendMandatorySpawnTaskBlocks(args: {
+  task: string;
+  requesterChannel?: string;
+  requesterTo?: string;
+}): string {
+  const trimmedTask = args.task.trimEnd();
+  const blocks: string[] = [];
+
+  if (!hasSection(trimmedTask, MODEL_SELECTION_SECTION_HEADER)) {
+    blocks.push(MODEL_SELECTION_SECTION);
+  }
+
+  const zulipRoute = parseZulipTopicTarget(args.requesterChannel, args.requesterTo);
+  if (zulipRoute && !hasSection(trimmedTask, REPLY_ROUTING_SECTION_HEADER)) {
+    blocks.push(buildReplyRoutingSection(zulipRoute));
+  }
+
+  if (!hasSection(trimmedTask, PROGRESS_UPDATES_SECTION_HEADER)) {
+    blocks.push(buildProgressUpdatesSection(zulipRoute?.target));
+  }
+
+  if (blocks.length === 0) {
+    return args.task;
+  }
+
+  if (!trimmedTask) {
+    return blocks.join("\n\n");
+  }
+  return `${trimmedTask}\n\n${blocks.join("\n\n")}`;
+}
+
 export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
@@ -83,6 +215,11 @@ export async function spawnSubagentDirect(
     accountId: ctx.agentAccountId,
     to: ctx.agentTo,
     threadId: ctx.agentThreadId,
+  });
+  const taskWithMandatoryBlocks = appendMandatorySpawnTaskBlocks({
+    task,
+    requesterChannel: requesterOrigin?.channel,
+    requesterTo: requesterOrigin?.to,
   });
   const runTimeoutSeconds =
     typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
@@ -238,7 +375,7 @@ export async function spawnSubagentDirect(
   });
   const childTaskMessage = [
     `[Subagent Context] You are running as a subagent (depth ${childDepth}/${maxSpawnDepth}). Results auto-announce to your requester; do not busy-poll for status.`,
-    `[Subagent Task]: ${task}`,
+    `[Subagent Task]: ${taskWithMandatoryBlocks}`,
   ].join("\n\n");
 
   const childIdem = crypto.randomUUID();
