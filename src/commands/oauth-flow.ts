@@ -16,6 +16,7 @@ export function createVpsAwareOAuthHandlers(params: {
 }): {
   onAuth: (event: { url: string }) => Promise<void>;
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
+  onManualCodeInput?: () => Promise<string>;
 } {
   const manualPromptMessage = params.manualPromptMessage ?? "Paste the redirect URL";
   let manualCodePromise: Promise<string> | undefined;
@@ -49,5 +50,6 @@ export function createVpsAwareOAuthHandlers(params: {
       });
       return String(code);
     },
+    onManualCodeInput: manualCodePromise ? () => manualCodePromise! : undefined,
   };
 }

@@ -30,7 +30,7 @@ export async function loginOpenAICodexOAuth(params: {
 
   const spin = prompter.progress("Starting OAuth flow…");
   try {
-    const { onAuth, onPrompt } = createVpsAwareOAuthHandlers({
+    const { onAuth, onPrompt, onManualCodeInput } = createVpsAwareOAuthHandlers({
       isRemote,
       prompter,
       runtime,
@@ -43,6 +43,7 @@ export async function loginOpenAICodexOAuth(params: {
       onAuth,
       onPrompt,
       onProgress: (msg) => spin.update(msg),
+      ...(onManualCodeInput && { onManualCodeInput }),
     });
     spin.stop("OpenAI OAuth complete");
     return creds ?? null;
