@@ -2,20 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { resetDelegationNudgeCounter, startDelegationNudgeTurn } from "./delegation-nudge.js";
 import { runBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
-import { spawnSubagentDirect } from "./subagent-spawn.js";
 
 const { mockCallGateway } = vi.hoisted(() => ({
   mockCallGateway: vi.fn(),
 }));
 
 vi.mock("../plugins/hook-runner-global.js");
-vi.mock("./subagent-spawn.js");
 vi.mock("../gateway/call.js", () => ({
   callGateway: mockCallGateway,
 }));
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
-const mockSpawnSubagentDirect = vi.mocked(spawnSubagentDirect);
 
 describe("delegation nudge hard-threshold behavior", () => {
   beforeEach(() => {
@@ -25,7 +22,6 @@ describe("delegation nudge hard-threshold behavior", () => {
     };
     // oxlint-disable-next-line typescript/no-explicit-any
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
-    mockSpawnSubagentDirect.mockReset();
     mockCallGateway.mockReset();
   });
 
@@ -111,16 +107,9 @@ describe("delegation nudge hard-threshold behavior", () => {
     expect(blocked.blocked ? blocked.reason : "").toContain("(6/6)");
   });
 
-  it("auto-delegates once on hard-limit breach and guards against recursive spawning", async () => {
+  it("returns an explicit manual-delegation block message at hard limit", async () => {
     const sessionKey = "agent:main:zulip:channel:auto-delegate";
     startDelegationNudgeTurn({ sessionKey, isFirstTurn: false });
-
-    mockSpawnSubagentDirect.mockResolvedValue({
-      status: "accepted",
-      childSessionKey: "agent:main:subagent:auto-child",
-      runId: "run-1",
-    });
-    mockCallGateway.mockResolvedValue({ ok: true, result: { id: "msg-1" } });
 
     const ctx = {
       agentId: "main",
@@ -151,18 +140,36 @@ describe("delegation nudge hard-threshold behavior", () => {
     });
     expect(second).toMatchObject({ blocked: true });
     expect(second.blocked ? second.reason : "").toContain(
-      "Auto-delegation started in child session agent:main:subagent:auto-child",
+      "Manual delegation required: use sessions_spawn to delegate this work to a sub-agent.",
     );
-    expect(mockSpawnSubagentDirect).toHaveBeenCalledTimes(1);
-    expect(mockCallGateway).toHaveBeenCalledTimes(1);
+    expect(second.blocked ? second.reason : "").toContain("(2/2)");
+  });
 
-    const third = await runBeforeToolCallHook({
+  it("does not create an implicit auto-delegation run on hard-limit breach", async () => {
+    const sessionKey = "agent:main:zulip:channel:auto-delegate";
+    startDelegationNudgeTurn({ sessionKey, isFirstTurn: false });
+
+    const ctx = {
+      agentId: "main",
+      sessionKey,
+      messageChannel: "zulip",
+      messageTo: "stream:marcel#zulipclaw",
+      messageThreadId: "zulipclaw",
+      delegationNudge: {
+        enabled: true,
+        hardThreshold: 1,
+        firstTurnHardThreshold: 10,
+        exemptTools: [],
+      },
+    };
+
+    const blocked = await runBeforeToolCallHook({
       toolName: "read",
-      params: { path: "/tmp/3.txt" },
+      params: { path: "/tmp/1.txt" },
       ctx,
     });
-    expect(third).toMatchObject({ blocked: true });
-    expect(mockSpawnSubagentDirect).toHaveBeenCalledTimes(1);
+    expect(blocked).toMatchObject({ blocked: true });
+    expect(mockCallGateway).not.toHaveBeenCalled();
   });
 
   it("does not apply first-turn limits to subagent sessions", async () => {
