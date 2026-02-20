@@ -85,10 +85,23 @@ type ZulipReactionEvent = {
   message?: ZulipEventMessage;
 };
 
+type ZulipUpdateMessageEvent = {
+  id?: number;
+  type: "update_message";
+  subject?: string;
+  orig_subject?: string;
+  topic?: string;
+  orig_topic?: string;
+};
+
 type ZulipEvent = {
   id?: number;
   type?: string;
   message?: ZulipEventMessage;
+  subject?: string;
+  orig_subject?: string;
+  topic?: string;
+  orig_topic?: string;
 } & Partial<ZulipReactionEvent>;
 
 type ZulipEventsResponse = {
@@ -293,6 +306,101 @@ function buildTopicKey(topic: string): string {
   return `${encoded.slice(0, 64)}~${digest}`;
 }
 
+function isZulipUpdateMessageEvent(event: ZulipEvent): event is ZulipUpdateMessageEvent {
+  return event.type === "update_message";
+}
+
+function parseTopicRenameEvent(
+  event: ZulipEvent,
+): { fromTopic: string; toTopic: string } | undefined {
+  if (!isZulipUpdateMessageEvent(event)) {
+    return undefined;
+  }
+
+  const fromTopic = normalizeTopic(event.orig_topic ?? event.orig_subject);
+  const toTopic = normalizeTopic(event.topic ?? event.subject);
+  if (!fromTopic || !toTopic) {
+    return undefined;
+  }
+
+  if (buildTopicKey(fromTopic) === buildTopicKey(toTopic)) {
+    return undefined;
+  }
+
+  return { fromTopic, toTopic };
+}
+
+function resolveCanonicalTopicSessionKey(params: {
+  aliasesByStream: Map<string, Map<string, string>>;
+  stream: string;
+  topic: string;
+}): string {
+  const aliases = params.aliasesByStream.get(params.stream);
+  const topicKey = buildTopicKey(params.topic);
+  if (!aliases) {
+    return topicKey;
+  }
+
+  let canonicalKey = topicKey;
+  const visited = new Set<string>();
+  const visitedOrder: string[] = [];
+
+  while (true) {
+    const next = aliases.get(canonicalKey);
+    if (!next || next === canonicalKey || visited.has(canonicalKey)) {
+      break;
+    }
+    visited.add(canonicalKey);
+    visitedOrder.push(canonicalKey);
+    canonicalKey = next;
+  }
+
+  if (visitedOrder.length > 0) {
+    for (const alias of visitedOrder) {
+      aliases.set(alias, canonicalKey);
+    }
+  }
+
+  return canonicalKey;
+}
+
+function recordTopicRenameAlias(params: {
+  aliasesByStream: Map<string, Map<string, string>>;
+  stream: string;
+  fromTopic: string;
+  toTopic: string;
+}): boolean {
+  const fromTopic = normalizeTopic(params.fromTopic);
+  const toTopic = normalizeTopic(params.toTopic);
+  if (!fromTopic || !toTopic) {
+    return false;
+  }
+
+  const fromCanonicalKey = resolveCanonicalTopicSessionKey({
+    aliasesByStream: params.aliasesByStream,
+    stream: params.stream,
+    topic: fromTopic,
+  });
+  const toCanonicalKey = resolveCanonicalTopicSessionKey({
+    aliasesByStream: params.aliasesByStream,
+    stream: params.stream,
+    topic: toTopic,
+  });
+
+  if (fromCanonicalKey === toCanonicalKey) {
+    return false;
+  }
+
+  let aliases = params.aliasesByStream.get(params.stream);
+  if (!aliases) {
+    aliases = new Map<string, string>();
+    params.aliasesByStream.set(params.stream, aliases);
+  }
+
+  aliases.set(toCanonicalKey, fromCanonicalKey);
+  return true;
+}
+
 function extractZulipTopicDirective(text: string): { topic?: string; text: string } {
   const raw = text ?? "";
   // Allow an agent to create/switch topics by prefixing a reply with:
@@ -332,7 +440,7 @@ async function registerQueue(params: {
     method: "POST",
     path: "/api/v1/register",
     form: {
-      event_types: JSON.stringify(["message", "reaction"]),
+      event_types: JSON.stringify(["message", "reaction", "update_message"]),
       apply_markdown: "false",
       narrow,
     },
@@ -819,6 +927,8 @@ export async function monitorZulipProvider(
 
     // Track DM senders we've already notified to avoid spam.
     const dmNotifiedSenders = new Set<number>();
+    // Topic-rename alias map per stream: renamed-topic-key -> canonical-topic-key.
+    const topicAliasesByStream = new Map<string, Map<string, string>>();
 
     const handleMessage = async (
       msg: ZulipEventMessage,
@@ -979,7 +1089,12 @@ export async function monitorZulipProvider(
         peer: { kind: "channel", id: stream },
       });
       const baseSessionKey = route.sessionKey;
-      const sessionKey = `${baseSessionKey}:topic:${buildTopicKey(topic)}`;
+      const canonicalTopicKey = resolveCanonicalTopicSessionKey({
+        aliasesByStream: topicAliasesByStream,
+        stream,
+        topic,
+      });
+      const sessionKey = `${baseSessionKey}:topic:${canonicalTopicKey}`;
 
       const to = `stream:${stream}#${topic}`;
       const from = `zulip:channel:${stream}`;
@@ -1775,6 +1890,24 @@ export async function monitorZulipProvider(
           logger.warn(
             `[zulip-debug][${account.accountId}] poll returned ${list.length} events (messages: ${list.filter((e) => e.message).length}, lastEventId=${lastEventId})`,
           );
+
+          for (const evt of list) {
+            const rename = parseTopicRenameEvent(evt);
+            if (!rename) {
+              continue;
+            }
+            const mapped = recordTopicRenameAlias({
+              aliasesByStream: topicAliasesByStream,
+              stream,
+              fromTopic: rename.fromTopic,
+              toTopic: rename.toTopic,
+            });
+            if (mapped) {
+              logger.info(
+                `[zulip:${account.accountId}] mapped topic rename alias for stream "${stream}": "${rename.toTopic}" -> "${rename.fromTopic}"`,
+              );
+            }
+          }
 
           const messages = list
             .map((evt) => evt.message)
