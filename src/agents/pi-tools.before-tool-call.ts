@@ -256,6 +256,8 @@ function buildAutoDelegationTask(args: {
   const promptSummary = summarizeTurnPrompt(args.turnPrompt);
   const sections = [
     "Continue the active requester task from the parent session.",
+    "Plan (short step-by-step):\n1. Review parent context and objective.\n2. Execute the required work with focused tool calls.\n3. Validate results (tests/checks as needed).\n4. Report completion back to the parent requester session.",
+    "Task checklist (actionable items):\n- [ ] Parse parent context fields below before acting.\n- [ ] Complete the requested work end-to-end.\n- [ ] Run and summarize relevant validation/testing.\n- [ ] Send concise completion summary with risks/follow-ups.",
     args.sessionKey ? `Parent session key: ${args.sessionKey}` : undefined,
     `Triggering parent tool: ${args.toolName}`,
     `Intended tool params:\n${summarizeToolParams(args.params)}`,

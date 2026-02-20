@@ -236,6 +236,8 @@ describe("delegation nudge hard-threshold behavior", () => {
     expect(mockCallGateway).toHaveBeenCalledTimes(1);
 
     const [spawnParams] = mockSpawnSubagentDirect.mock.calls[0] ?? [];
+    expect(spawnParams?.task).toContain("Plan (short step-by-step)");
+    expect(spawnParams?.task).toContain("Task checklist (actionable items)");
     expect(spawnParams?.task).toContain(`Parent session key: ${sessionKey}`);
     expect(spawnParams?.task).toContain("Triggering parent tool: read");
     expect(spawnParams?.task).toContain("Intended tool params");
