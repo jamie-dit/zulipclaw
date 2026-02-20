@@ -62,6 +62,25 @@ describe("message tool gatewayUrl SSRF hardening", () => {
     expect(mocks.runMessageAction).not.toHaveBeenCalled();
   });
 
+  it("rejects unsafe gatewayUrl protocols", async () => {
+    mockSendResult();
+    mocks.loadConfig.mockReturnValue({});
+    mocks.resolveGatewayPort.mockReturnValue(18789);
+
+    const tool = createMessageTool({ config: {} as never });
+
+    await expect(
+      tool.execute("1", {
+        action: "send",
+        target: "telegram:123",
+        message: "hi",
+        gatewayUrl: "file:///etc/passwd",
+      }),
+    ).rejects.toThrow(/invalid gatewayUrl protocol/i);
+
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+  });
+
   it("rejects gatewayUrl values with non-root paths", async () => {
     mockSendResult();
     mocks.loadConfig.mockReturnValue({});
