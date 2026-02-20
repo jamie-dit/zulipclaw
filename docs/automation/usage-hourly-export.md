@@ -14,6 +14,7 @@ The exporter groups usage by:
 
 - `timestamp_hour` (UTC hour bucket)
 - `session_key`
+- `model_provider`
 - `model`
 
 ## CSV schema
@@ -21,14 +22,15 @@ The exporter groups usage by:
 Header:
 
 ```text
-timestamp_hour,session_key,model,input_tokens,output_tokens,total_tokens,cost_usd
+timestamp_hour,session_key,model_provider,model,input_tokens,output_tokens,total_tokens,cost_usd
 ```
 
 Columns:
 
 - `timestamp_hour`: UTC hour start (`YYYY-MM-DDTHH:00:00Z`)
 - `session_key`: OpenClaw/ZulipClaw session key (`agent:<agentId>:<sessionId>`)
-- `model`: runtime model (`provider/model` when provider is known)
+- `model_provider`: runtime provider (for example `openai`, `anthropic`, `openclaw`)
+- `model`: runtime model identifier (legacy `provider/model` values are preserved when already present)
 - `input_tokens`: aggregated input tokens
 - `output_tokens`: aggregated output tokens
 - `total_tokens`: aggregated total tokens
@@ -132,6 +134,9 @@ Example cron entry (run at 5 minutes past each hour):
 
 ## Notes
 
-- Source of truth is transcript runtime usage per turn (`message.usage` / `entry.usage`).
+- Source of truth is transcript runtime usage per assistant turn (`message.usage` / `entry.usage`).
+- If an assistant turn is missing usage, the exporter still emits a fallback row segment with `0` tokens so backfills preserve session/hour coverage.
+- `--json` output includes diagnostics (`reportedRecords`, `reportedZeroRecords`, `missingUsageRecords`) so you can track fallback provenance without changing the ingest CSV contract (`reportedZeroRecords` is commonly synthetic mirror/error traffic with explicit zero token usage).
 - Cost uses provider-reported `usage.cost.total` when present; otherwise it falls back to configured model cost estimation when possible.
 - If cost is unavailable for any grouped segment, `cost_usd` is left blank for that CSV row.
+- `--all-hours` backfill can only cover transcript files currently present under `~/.openclaw/agents/*/sessions`; data outside retained transcripts (for example pre-migration/OpenClaw-era files not in this store) cannot be reconstructed exactly.

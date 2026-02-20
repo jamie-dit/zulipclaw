@@ -11,6 +11,7 @@ import {
   iterateHourStartsInclusive,
   parseHourStart,
   resolveHourSelection,
+  summarizeUsageDiagnostics,
   uploadHourlyUsageCsv,
 } from "./hourly-usage-export.js";
 
@@ -80,28 +81,34 @@ describe("hourly usage export", () => {
       {
         timestampMs: Date.parse("2026-02-20T01:05:00Z"),
         sessionKey: "agent:main:s1",
+        modelProvider: "openai",
         model: "openai/gpt-5",
         inputTokens: 100,
         outputTokens: 50,
         totalTokens: 150,
         costUsd: 0.1,
+        provenance: "reported",
       },
       {
         timestampMs: Date.parse("2026-02-20T01:20:00Z"),
         sessionKey: "agent:main:s1",
+        modelProvider: "openai",
         model: "openai/gpt-5",
         inputTokens: 20,
         outputTokens: 5,
         totalTokens: 25,
+        provenance: "reported",
       },
       {
         timestampMs: Date.parse("2026-02-20T01:25:00Z"),
         sessionKey: "agent:main:s2",
+        modelProvider: "anthropic",
         model: "anthropic/claude-sonnet-4-20250514",
         inputTokens: 10,
         outputTokens: 5,
         totalTokens: 15,
         costUsd: 0.02,
+        provenance: "reported",
       },
     ]);
 
@@ -109,6 +116,7 @@ describe("hourly usage export", () => {
       {
         timestamp_hour: "2026-02-20T01:00:00Z",
         session_key: "agent:main:s1",
+        model_provider: "openai",
         model: "openai/gpt-5",
         input_tokens: 120,
         output_tokens: 55,
@@ -118,6 +126,7 @@ describe("hourly usage export", () => {
       {
         timestamp_hour: "2026-02-20T01:00:00Z",
         session_key: "agent:main:s2",
+        model_provider: "anthropic",
         model: "anthropic/claude-sonnet-4-20250514",
         input_tokens: 10,
         output_tokens: 5,
@@ -127,11 +136,53 @@ describe("hourly usage export", () => {
     ]);
   });
 
+  it("summarizes usage provenance diagnostics", () => {
+    const diagnostics = summarizeUsageDiagnostics([
+      {
+        timestampMs: Date.parse("2026-02-20T01:05:00Z"),
+        sessionKey: "agent:main:s1",
+        modelProvider: "openai",
+        model: "openai/gpt-5",
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15,
+        provenance: "reported",
+      },
+      {
+        timestampMs: Date.parse("2026-02-20T01:07:00Z"),
+        sessionKey: "agent:main:s1",
+        modelProvider: "openai",
+        model: "openai/gpt-5",
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        provenance: "reported_zero",
+      },
+      {
+        timestampMs: Date.parse("2026-02-20T01:08:00Z"),
+        sessionKey: "agent:main:s1",
+        modelProvider: "openai",
+        model: "openai/gpt-5",
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        provenance: "missing_usage",
+      },
+    ]);
+
+    expect(diagnostics).toEqual({
+      reportedRecords: 1,
+      reportedZeroRecords: 1,
+      missingUsageRecords: 1,
+    });
+  });
+
   it("builds CSV with escaped values and blank cost cells", () => {
     const csv = buildHourlyUsageCsv([
       {
         timestamp_hour: "2026-02-20T01:00:00Z",
         session_key: "agent:main:sess,one",
+        model_provider: "openai",
         model: 'openai/"gpt"',
         input_tokens: 1,
         output_tokens: 2,
@@ -139,6 +190,11 @@ describe("hourly usage export", () => {
       },
     ]);
 
+    expect(
+      csv.startsWith(
+        "timestamp_hour,session_key,model_provider,model,input_tokens,output_tokens,total_tokens,cost_usd\n",
+      ),
+    ).toBe(true);
     expect(csv).toContain('"agent:main:sess,one"');
     expect(csv).toContain('"openai/""gpt"""');
     expect(csv.trimEnd().endsWith(",")).toBe(true);
@@ -177,6 +233,28 @@ describe("hourly usage export", () => {
           },
         }),
         JSON.stringify({
+          timestamp: "2026-02-20T05:40:00.000Z",
+          message: {
+            role: "assistant",
+            provider: "openai",
+            model: "gpt-5",
+            content: "fallback row with no usage payload",
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-02-20T05:50:00.000Z",
+          message: {
+            role: "assistant",
+            provider: "openclaw",
+            model: "delivery-mirror",
+            usage: {
+              input_tokens: 0,
+              output_tokens: 0,
+              total_tokens: 0,
+            },
+          },
+        }),
+        JSON.stringify({
           timestamp: "2026-02-20T06:00:00.000Z",
           message: {
             role: "assistant",
@@ -199,10 +277,15 @@ describe("hourly usage export", () => {
       config: {} as never,
     });
 
-    expect(records).toHaveLength(2);
+    expect(records).toHaveLength(4);
     expect(records[0]?.totalTokens).toBe(125);
     expect(records[0]?.costUsd).toBe(0.12);
+    expect(records[0]?.modelProvider).toBe("openai");
     expect(records[1]?.totalTokens).toBe(25);
+    expect(records[2]?.totalTokens).toBe(0);
+    expect(records[2]?.provenance).toBe("missing_usage");
+    expect(records[3]?.totalTokens).toBe(0);
+    expect(records[3]?.provenance).toBe("reported_zero");
   });
 
   it("uploads CSV to Helix with required headers", async () => {
@@ -216,7 +299,7 @@ describe("hourly usage export", () => {
 
     const result = await uploadHourlyUsageCsv({
       hourStartIso: "2026-02-20T05:00:00Z",
-      csv: "timestamp_hour,session_key,model,input_tokens,output_tokens,total_tokens,cost_usd\n",
+      csv: "timestamp_hour,session_key,model_provider,model,input_tokens,output_tokens,total_tokens,cost_usd\n",
       ingestUrl: "https://helix.example.com/api/usage/zulipclaw/hourly",
       token: "token-123",
       fetchImpl,
