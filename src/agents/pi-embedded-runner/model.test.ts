@@ -191,6 +191,29 @@ describe("resolveModel", () => {
     });
   });
 
+  it("upgrades discovered anthropic claude-opus-4-6 context to 1M", () => {
+    mockDiscoveredModel({
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      templateModel: buildForwardCompatTemplate({
+        id: "claude-opus-4-6",
+        name: "Claude Opus 4.6",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com",
+        contextWindow: 200000,
+      }),
+    });
+
+    const result = resolveModel("anthropic", "claude-opus-4-6", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "anthropic",
+      id: "claude-opus-4-6",
+      contextWindow: 1_000_000,
+    });
+  });
+
   it("builds an anthropic forward-compat fallback for claude-opus-4-6", () => {
     mockDiscoveredModel({
       provider: "anthropic",
@@ -213,6 +236,7 @@ describe("resolveModel", () => {
         api: "anthropic-messages",
         baseUrl: "https://api.anthropic.com",
         reasoning: true,
+        contextWindow: 1_000_000,
       },
     });
   });
@@ -239,6 +263,7 @@ describe("resolveModel", () => {
         api: "anthropic-messages",
         baseUrl: "https://api.anthropic.com",
         reasoning: true,
+        contextWindow: 1_000_000,
       },
     });
   });
