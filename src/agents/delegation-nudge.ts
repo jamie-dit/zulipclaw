@@ -208,14 +208,13 @@ export function applyDelegationNudgeToToolResultMessage(params: {
 
   const toolCallCount = getDelegationNudgeCounter(params.sessionKey);
   const softThreshold = params.config?.softThreshold ?? 3;
-  const hardThreshold = params.config?.hardThreshold ?? 6;
 
-  if (toolCallCount < softThreshold || toolCallCount >= hardThreshold) {
+  if (toolCallCount < softThreshold || toolCallCount < 10 || toolCallCount % 10 !== 0) {
     return params.message;
   }
 
   const nudge =
-    `\n\n${DELEGATION_NUDGE_MARKER} You have made ${toolCallCount} tool calls in this turn. ` +
+    `\n\n${DELEGATION_NUDGE_MARKER} Total tool calls in this turn: ${toolCallCount}. ` +
     "You SHOULD delegate remaining work to a sub-agent using sessions_spawn. " +
     "Direct tool use in the main session should be minimal.";
 
