@@ -52,6 +52,7 @@ describe("loginOpenAICodexOAuth", () => {
     mocks.createVpsAwareOAuthHandlers.mockReturnValue({
       onAuth: vi.fn(),
       onPrompt: vi.fn(),
+      onManualCodeInput: undefined,
     });
     mocks.loginOpenAICodex.mockResolvedValue(creds);
 
@@ -74,6 +75,7 @@ describe("loginOpenAICodexOAuth", () => {
     mocks.createVpsAwareOAuthHandlers.mockReturnValue({
       onAuth: vi.fn(),
       onPrompt: vi.fn(),
+      onManualCodeInput: undefined,
     });
     mocks.loginOpenAICodex.mockRejectedValue(new Error("oauth failed"));
 
