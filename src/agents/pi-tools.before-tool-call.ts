@@ -346,6 +346,18 @@ async function autoDelegateOnHardLimit(args: {
     recentToolCallSummary: summarizeRecentToolCalls(args.sessionState),
   });
 
+  // Double-check race condition guard: another concurrent tool call may have
+  // already triggered auto-delegation between the initial mark and now.
+  if (hasDelegationNudgeAutoDelegated(sessionKey)) {
+    // This check is intentionally after buildAutoDelegationTask to avoid
+    // unnecessary work if another call already won the race.
+    // We still return failure since we didn't actually delegate.
+    return {
+      delegated: false,
+      blockReason: "another auto-delegation already completed",
+    };
+  }
+
   try {
     const result = await spawnSubagentDirect(
       {
