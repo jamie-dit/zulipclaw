@@ -1,4 +1,6 @@
+import crypto from "node:crypto";
 import type { DelegationNudgeConfig, ToolLoopDetectionConfig } from "../config/types.tools.js";
+import { callGateway } from "../gateway/call.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -6,9 +8,13 @@ import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.j
 import { isPlainObject } from "../utils.js";
 import {
   getDelegationNudgeCounter,
+  hasDelegationNudgeAutoDelegated,
   incrementDelegationNudgeCounter,
   isDelegationNudgeFirstTurn,
+  markDelegationNudgeAutoDelegated,
 } from "./delegation-nudge.js";
+import { spawnSubagentDirect } from "./subagent-spawn.js";
+import type { LoopDetectionResult } from "./tool-loop-detection.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -29,6 +35,12 @@ export type HookContext = {
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
+type AutoDelegationReadinessResult = { ready: true } | { ready: false; reason: string };
+type AutoDelegationAttemptResult = {
+  delegated: boolean;
+  childSessionKey?: string;
+  blockReason?: string;
+};
 
 const log = createSubsystemLogger("agents/tools");
 const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
@@ -36,6 +48,11 @@ const adjustedParamsByToolCallId = new Map<string, unknown>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
+const AUTO_DELEGATION_PROMPT_MAX_CHARS = 700;
+const AUTO_DELEGATION_TOOL_ARGS_MAX_CHARS = 600;
+const AUTO_DELEGATION_RECENT_TOOL_CALLS = 5;
+const AUTO_DELEGATION_RECENT_LINE_MAX_CHARS = 180;
+const AUTO_DELEGATION_TASK_MAX_CHARS = 4_000;
 
 function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: number): boolean {
   if (!state.toolLoopWarningBuckets) {
@@ -56,6 +73,164 @@ function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: n
   return true;
 }
 
+function truncateForPrompt(value: string, maxChars: number): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+  return `${value.slice(0, maxChars)}…`;
+}
+
+function summarizeToolParams(params: unknown): string {
+  try {
+    return truncateForPrompt(
+      JSON.stringify(params ?? {}, null, 2),
+      AUTO_DELEGATION_TOOL_ARGS_MAX_CHARS,
+    );
+  } catch {
+    return '{"note":"unable to serialize tool params"}';
+  }
+}
+
+function summarizeTurnPrompt(prompt: string | undefined): string | undefined {
+  const trimmed = prompt?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return truncateForPrompt(trimmed, AUTO_DELEGATION_PROMPT_MAX_CHARS);
+}
+
+function summarizeRecentToolCalls(state?: SessionState): string {
+  const history = state?.toolCallHistory;
+  if (!history || history.length === 0) {
+    return "Unavailable: no recent tool-call history in session diagnostics.";
+  }
+
+  const recent = history.slice(-AUTO_DELEGATION_RECENT_TOOL_CALLS);
+  const firstIndex = history.length - recent.length + 1;
+
+  return recent
+    .map((call, index) => {
+      const number = firstIndex + index;
+      const toolName = call.toolName || "unknown";
+      const argsHash = typeof call.argsHash === "string" ? call.argsHash.slice(0, 12) : "unknown";
+      const resultHash =
+        typeof call.resultHash === "string" && call.resultHash
+          ? call.resultHash.slice(0, 12)
+          : "pending";
+      return truncateForPrompt(
+        `${number}. ${toolName} argsHash=${argsHash} resultHash=${resultHash}`,
+        AUTO_DELEGATION_RECENT_LINE_MAX_CHARS,
+      );
+    })
+    .join("\n");
+}
+
+function normalizeChannel(value?: string): string | undefined {
+  const trimmed = value?.trim().toLowerCase();
+  return trimmed || undefined;
+}
+
+function normalizeMessageTarget(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+function validateZulipTarget(target: string): AutoDelegationReadinessResult {
+  const withoutPrefix = target.replace(/^zulip:/i, "").trim();
+  if (!withoutPrefix) {
+    return { ready: false, reason: "message target is missing for Zulip routing" };
+  }
+
+  if (/^stream:/i.test(withoutPrefix)) {
+    const streamWithTopic = withoutPrefix.replace(/^stream:/i, "").trim();
+    const topicIndex = streamWithTopic.indexOf("#");
+    if (topicIndex <= 0 || topicIndex >= streamWithTopic.length - 1) {
+      return {
+        ready: false,
+        reason: "zulip stream target must include a topic: stream:<stream>#<topic>",
+      };
+    }
+    const stream = streamWithTopic.slice(0, topicIndex).trim();
+    const topic = streamWithTopic.slice(topicIndex + 1).trim();
+    if (!stream || !topic) {
+      return {
+        ready: false,
+        reason: "zulip stream target is malformed; both stream and topic are required",
+      };
+    }
+    return { ready: true };
+  }
+
+  if (/^pm:/i.test(withoutPrefix)) {
+    const recipients = withoutPrefix.replace(/^pm:/i, "").trim();
+    if (!recipients) {
+      return { ready: false, reason: "zulip pm target is malformed" };
+    }
+    return { ready: true };
+  }
+
+  return {
+    ready: false,
+    reason: "zulip target is malformed; expected stream:<stream>#<topic> or pm:<recipient>",
+  };
+}
+
+function resolveAutoDelegationReadiness(args: {
+  ctx: HookContext;
+  sessionState: SessionState;
+  loopResult: LoopDetectionResult;
+}): AutoDelegationReadinessResult {
+  const prompt = args.ctx.turnPrompt?.trim();
+  if (!prompt) {
+    return {
+      ready: false,
+      reason: "turn prompt is empty; cannot build reliable child-task context",
+    };
+  }
+
+  const channel = normalizeChannel(args.ctx.messageChannel);
+  const target = normalizeMessageTarget(args.ctx.messageTo);
+
+  if (channel && !target) {
+    return {
+      ready: false,
+      reason: `message routing target is required for channel "${channel}"`,
+    };
+  }
+
+  if (!channel && target) {
+    return {
+      ready: false,
+      reason: "message channel is required when a routing target is provided",
+    };
+  }
+
+  if (channel === "zulip" && target) {
+    const validation = validateZulipTarget(target);
+    if (!validation.ready) {
+      return validation;
+    }
+  }
+
+  if (args.loopResult.stuck) {
+    const level = args.loopResult.level;
+    return {
+      ready: false,
+      reason: `session is already in a ${level} tool-loop state (${args.loopResult.detector})`,
+    };
+  }
+
+  const warningBuckets = args.sessionState.toolLoopWarningBuckets?.size ?? 0;
+  if (warningBuckets > 0) {
+    return {
+      ready: false,
+      reason: `session has active loop diagnostics (${warningBuckets} warning bucket${warningBuckets === 1 ? "" : "s"})`,
+    };
+  }
+
+  return { ready: true };
+}
+
 function resolveDelegationHardThreshold(params: {
   config: DelegationNudgeConfig;
   sessionKey?: string;
@@ -69,6 +244,161 @@ function resolveDelegationHardThreshold(params: {
     return normalHardThreshold;
   }
   return Math.max(normalHardThreshold, firstTurnHardThreshold);
+}
+
+function buildAutoDelegationTask(args: {
+  toolName: string;
+  params: unknown;
+  sessionKey?: string;
+  turnPrompt?: string;
+  recentToolCallSummary?: string;
+}): string {
+  const promptSummary = summarizeTurnPrompt(args.turnPrompt);
+  const sections = [
+    "Continue the active requester task from the parent session.",
+    args.sessionKey ? `Parent session key: ${args.sessionKey}` : undefined,
+    `Triggering parent tool: ${args.toolName}`,
+    `Intended tool params:\n${summarizeToolParams(args.params)}`,
+    promptSummary ? `Latest requester prompt excerpt:\n${promptSummary}` : undefined,
+    `Recent parent tool-call summary (most recent last):\n${args.recentToolCallSummary ?? "Unavailable"}`,
+    "Completion/reporting requirement: complete the requester task and report back to the parent requester session with a concise status summary (work completed, validation/tests, and any follow-up risks).",
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+
+  return truncateForPrompt(sections.join("\n\n"), AUTO_DELEGATION_TASK_MAX_CHARS);
+}
+
+async function sendAutoDelegationNotice(args: {
+  ctx: HookContext;
+  childSessionKey: string;
+  toolName: string;
+  toolCallCount: number;
+  hardThreshold: number;
+}): Promise<void> {
+  if (!args.ctx.messageChannel || !args.ctx.messageTo) {
+    return;
+  }
+
+  const threadId =
+    args.ctx.messageThreadId !== undefined && args.ctx.messageThreadId !== null
+      ? String(args.ctx.messageThreadId)
+      : undefined;
+
+  const message =
+    `🤖 Auto-delegation started after tool limit (${args.toolCallCount}/${args.hardThreshold}). ` +
+    `Attempted tool: ${args.toolName}. Child session: ${args.childSessionKey}.`;
+
+  await callGateway({
+    method: "send",
+    params: {
+      channel: args.ctx.messageChannel,
+      to: args.ctx.messageTo,
+      accountId: args.ctx.agentAccountId,
+      threadId,
+      sessionKey: args.ctx.sessionKey,
+      message,
+      idempotencyKey: crypto.randomUUID(),
+    },
+    timeoutMs: 10_000,
+  });
+}
+
+async function autoDelegateOnHardLimit(args: {
+  ctx: HookContext;
+  toolName: string;
+  params: unknown;
+  toolCallCount: number;
+  hardThreshold: number;
+  sessionState: SessionState;
+  loopResult: LoopDetectionResult;
+}): Promise<AutoDelegationAttemptResult> {
+  const sessionKey = args.ctx.sessionKey;
+  if (!sessionKey || hasDelegationNudgeAutoDelegated(sessionKey)) {
+    return { delegated: false };
+  }
+
+  const readiness = resolveAutoDelegationReadiness({
+    ctx: args.ctx,
+    sessionState: args.sessionState,
+    loopResult: args.loopResult,
+  });
+  if (!readiness.ready) {
+    return {
+      delegated: false,
+      blockReason: readiness.reason,
+    };
+  }
+
+  const marked = markDelegationNudgeAutoDelegated(sessionKey);
+  if (!marked) {
+    return {
+      delegated: false,
+      blockReason: "auto-delegation was already attempted for this turn",
+    };
+  }
+
+  const task = buildAutoDelegationTask({
+    toolName: args.toolName,
+    params: args.params,
+    sessionKey,
+    turnPrompt: args.ctx.turnPrompt,
+    recentToolCallSummary: summarizeRecentToolCalls(args.sessionState),
+  });
+
+  try {
+    const result = await spawnSubagentDirect(
+      {
+        task,
+        label: `Auto delegation (${args.toolName})`,
+        cleanup: "keep",
+        expectsCompletionMessage: true,
+      },
+      {
+        agentSessionKey: sessionKey,
+        agentChannel: args.ctx.messageChannel,
+        agentAccountId: args.ctx.agentAccountId,
+        agentTo: args.ctx.messageTo,
+        agentThreadId: args.ctx.messageThreadId,
+        agentGroupId: args.ctx.groupId ?? null,
+        agentGroupChannel: args.ctx.groupChannel ?? null,
+        agentGroupSpace: args.ctx.groupSpace ?? null,
+        requesterAgentIdOverride: args.ctx.agentId,
+      },
+    );
+
+    if (result.status !== "accepted" || !result.childSessionKey) {
+      return {
+        delegated: false,
+        blockReason: result.error
+          ? `subagent spawn was not accepted (${result.status}): ${result.error}`
+          : `subagent spawn was not accepted (${result.status})`,
+      };
+    }
+
+    try {
+      await sendAutoDelegationNotice({
+        ctx: args.ctx,
+        childSessionKey: result.childSessionKey,
+        toolName: args.toolName,
+        toolCallCount: args.toolCallCount,
+        hardThreshold: args.hardThreshold,
+      });
+    } catch (notifyErr) {
+      log.warn(
+        `delegation nudge auto-notice failed: session=${sessionKey} tool=${args.toolName} error=${String(notifyErr)}`,
+      );
+    }
+
+    return { delegated: true, childSessionKey: result.childSessionKey };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.warn(
+      `delegation nudge auto-delegation failed: session=${sessionKey} tool=${args.toolName} error=${message}`,
+    );
+    return {
+      delegated: false,
+      blockReason: `auto-delegation spawn failed: ${message}`,
+    };
+  }
 }
 
 async function recordLoopOutcome(args: {
@@ -192,10 +522,27 @@ export async function runBeforeToolCallHook(args: {
         toolCallCount > 0 ? toolCallCount : getDelegationNudgeCounter(args.ctx.sessionKey);
 
       if (effectiveToolCallCount >= hardThreshold && !exemptTools.has(toolName)) {
-        const reason =
-          `BLOCKED: Tool call limit exceeded (${effectiveToolCallCount}/${hardThreshold}). ` +
+        const autoDelegation = await autoDelegateOnHardLimit({
+          ctx: args.ctx,
+          toolName,
+          params,
+          toolCallCount: effectiveToolCallCount,
+          hardThreshold,
+          sessionState,
+          loopResult,
+        });
+
+        const manualDelegationInstruction =
           "Manual delegation required: use sessions_spawn to delegate this work to a sub-agent. " +
           "Only delegation tools (sessions_spawn, subagents, message) are allowed after this limit.";
+
+        const reason = autoDelegation.delegated
+          ? `BLOCKED: Tool call limit exceeded (${effectiveToolCallCount}/${hardThreshold}). Auto-delegation started in child session ${autoDelegation.childSessionKey}. Continue via that child session.`
+          : `BLOCKED: Tool call limit exceeded (${effectiveToolCallCount}/${hardThreshold}).${
+              autoDelegation.blockReason
+                ? ` Auto-delegation gate failed: ${autoDelegation.blockReason}.`
+                : ""
+            } ${manualDelegationInstruction}`;
         log.error(`Delegation nudge blocking ${toolName}: ${reason}`);
         return {
           blocked: true,
