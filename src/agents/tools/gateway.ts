@@ -1,3 +1,4 @@
+import { BlockList, isIP } from "node:net";
 import { loadConfig, resolveGatewayPort } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
@@ -11,6 +12,40 @@ export type GatewayCallOptions = {
   timeoutMs?: number;
 };
 
+type HostRisk = "localhost" | "loopback" | "private" | "link-local" | "metadata";
+
+type ParsedIpHost = {
+  address: string;
+  family: "ipv4" | "ipv6";
+};
+
+const LOOPBACK_IP_BLOCKLIST = new BlockList();
+LOOPBACK_IP_BLOCKLIST.addSubnet("127.0.0.0", 8, "ipv4");
+LOOPBACK_IP_BLOCKLIST.addAddress("::1", "ipv6");
+
+const LINK_LOCAL_IP_BLOCKLIST = new BlockList();
+LINK_LOCAL_IP_BLOCKLIST.addSubnet("169.254.0.0", 16, "ipv4");
+LINK_LOCAL_IP_BLOCKLIST.addSubnet("fe80::", 10, "ipv6");
+
+const PRIVATE_IP_BLOCKLIST = new BlockList();
+PRIVATE_IP_BLOCKLIST.addSubnet("0.0.0.0", 8, "ipv4");
+PRIVATE_IP_BLOCKLIST.addSubnet("10.0.0.0", 8, "ipv4");
+PRIVATE_IP_BLOCKLIST.addSubnet("100.64.0.0", 10, "ipv4");
+PRIVATE_IP_BLOCKLIST.addSubnet("172.16.0.0", 12, "ipv4");
+PRIVATE_IP_BLOCKLIST.addSubnet("192.168.0.0", 16, "ipv4");
+PRIVATE_IP_BLOCKLIST.addAddress("::", "ipv6");
+PRIVATE_IP_BLOCKLIST.addSubnet("fc00::", 7, "ipv6");
+
+const METADATA_IP_BLOCKLIST = new BlockList();
+METADATA_IP_BLOCKLIST.addAddress("169.254.169.254", "ipv4");
+METADATA_IP_BLOCKLIST.addAddress("fd00:ec2::254", "ipv6");
+
+const METADATA_HOSTNAMES = new Set([
+  "metadata",
+  "metadata.google.internal",
+  "metadata.aws.internal",
+]);
+
 export function readGatewayCallOptions(params: Record<string, unknown>): GatewayCallOptions {
   return {
     gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
@@ -19,7 +54,70 @@ export function readGatewayCallOptions(params: Record<string, unknown>): Gateway
   };
 }
 
-function canonicalizeToolGatewayWsUrl(raw: string): { origin: string; key: string } {
+function normalizeHostname(rawHostname: string): string {
+  const normalized = rawHostname.trim().toLowerCase().replace(/\.$/, "");
+  if (!normalized) {
+    throw new Error("invalid gatewayUrl: hostname is required");
+  }
+  if (normalized.includes("%")) {
+    throw new Error("invalid gatewayUrl: zone-scoped hosts are not allowed");
+  }
+  return normalized;
+}
+
+function parseIpHost(hostname: string): ParsedIpHost | undefined {
+  const unwrapped =
+    hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+  const version = isIP(unwrapped);
+  if (version === 4) {
+    return { address: unwrapped, family: "ipv4" };
+  }
+  if (version === 6) {
+    const mappedV4Prefix = "::ffff:";
+    if (unwrapped.toLowerCase().startsWith(mappedV4Prefix)) {
+      const maybeIpv4 = unwrapped.slice(mappedV4Prefix.length);
+      if (isIP(maybeIpv4) === 4) {
+        return { address: maybeIpv4, family: "ipv4" };
+      }
+    }
+    return { address: unwrapped, family: "ipv6" };
+  }
+  return undefined;
+}
+
+function classifyHostRisk(hostname: string): HostRisk | undefined {
+  if (hostname === "localhost" || hostname.endsWith(".localhost")) {
+    return "localhost";
+  }
+  if (METADATA_HOSTNAMES.has(hostname)) {
+    return "metadata";
+  }
+
+  const parsedIp = parseIpHost(hostname);
+  if (!parsedIp) {
+    return undefined;
+  }
+
+  if (METADATA_IP_BLOCKLIST.check(parsedIp.address, parsedIp.family)) {
+    return "metadata";
+  }
+  if (LOOPBACK_IP_BLOCKLIST.check(parsedIp.address, parsedIp.family)) {
+    return "loopback";
+  }
+  if (LINK_LOCAL_IP_BLOCKLIST.check(parsedIp.address, parsedIp.family)) {
+    return "link-local";
+  }
+  if (PRIVATE_IP_BLOCKLIST.check(parsedIp.address, parsedIp.family)) {
+    return "private";
+  }
+  return undefined;
+}
+
+function canonicalizeToolGatewayWsUrl(raw: string): {
+  origin: string;
+  key: string;
+  hostname: string;
+} {
   const input = raw.trim();
   let url: URL;
   try {
@@ -43,10 +141,11 @@ function canonicalizeToolGatewayWsUrl(raw: string): { origin: string; key: strin
     throw new Error("invalid gatewayUrl: path not allowed");
   }
 
+  const hostname = normalizeHostname(url.hostname);
   const origin = url.origin;
   // Key: protocol + host only, lowercased. (host includes IPv6 brackets + port when present)
   const key = `${url.protocol}//${url.host.toLowerCase()}`;
-  return { origin, key };
+  return { origin, key, hostname };
 }
 
 function validateGatewayUrlOverrideForAgentTools(urlOverride: string): string {
@@ -73,16 +172,28 @@ function validateGatewayUrlOverrideForAgentTools(urlOverride: string): string {
   }
 
   const parsed = canonicalizeToolGatewayWsUrl(urlOverride);
-  if (!allowed.has(parsed.key)) {
+  if (allowed.has(parsed.key)) {
+    return parsed.origin;
+  }
+
+  const hostRisk = classifyHostRisk(parsed.hostname);
+  if (hostRisk) {
     throw new Error(
       [
         "gatewayUrl override rejected.",
-        `Allowed: ws(s) loopback on port ${port} (127.0.0.1/localhost/[::1])`,
-        "Or: configure gateway.remote.url and omit gatewayUrl to use the configured remote gateway.",
+        `Blocked ${hostRisk} host: ${parsed.hostname}.`,
+        "Only allowlisted gateway endpoints are accepted for agent tools.",
       ].join(" "),
     );
   }
-  return parsed.origin;
+
+  throw new Error(
+    [
+      "gatewayUrl override rejected.",
+      `Allowed: ws(s) loopback on port ${port} (127.0.0.1/localhost/[::1])`,
+      "Or: configure gateway.remote.url and omit gatewayUrl to use the configured remote gateway.",
+    ].join(" "),
+  );
 }
 
 export function resolveGatewayOptions(opts?: GatewayCallOptions) {

@@ -19,6 +19,19 @@ export type ZulipReactionWorkflowConfig = {
   stages?: ZulipReactionWorkflowStageConfig;
 };
 
+export type ZulipGenericReactionCallbackConfig = {
+  /**
+   * Enable synthetic callbacks for non-button reactions.
+   * Defaults to false to keep existing behavior unchanged.
+   */
+  enabled?: boolean;
+  /**
+   * Include reaction removal events (`op: "remove"`).
+   * Defaults to false to avoid noise/loops.
+   */
+  includeRemoveOps?: boolean;
+};
+
 export type ZulipReactionConfig = {
   enabled?: boolean;
   onStart?: string;
@@ -34,6 +47,11 @@ export type ZulipReactionConfig = {
    * Disabled by default so legacy behavior remains unchanged.
    */
   workflow?: ZulipReactionWorkflowConfig;
+  /**
+   * Optional synthetic callback path for non-button reactions.
+   * Disabled by default for safety.
+   */
+  genericCallback?: ZulipGenericReactionCallbackConfig;
 };
 
 export type ZulipAccountConfig = {

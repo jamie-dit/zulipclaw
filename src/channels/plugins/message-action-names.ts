@@ -9,6 +9,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "unsend",
   "reply",
   "sendWithEffect",
+  "sendWithReactions",
   "renameGroup",
   "setGroupIcon",
   "addParticipant",
