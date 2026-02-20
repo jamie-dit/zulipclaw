@@ -31,6 +31,11 @@ export type ResolvedZulipReactionWorkflow = {
   };
 };
 
+export type ResolvedZulipGenericReactionCallback = {
+  enabled: boolean;
+  includeRemoveOps: boolean;
+};
+
 export type ResolvedZulipReactions = {
   enabled: boolean;
   onStart: string;
@@ -38,6 +43,7 @@ export type ResolvedZulipReactions = {
   onFailure: string;
   clearOnFinish: boolean;
   workflow: ResolvedZulipReactionWorkflow;
+  genericCallback: ResolvedZulipGenericReactionCallback;
 };
 
 export type ResolvedZulipAccount = {
@@ -79,6 +85,10 @@ const DEFAULT_REACTIONS: ResolvedZulipReactions = {
       partialSuccess: "warning",
       failure: "warning",
     },
+  },
+  genericCallback: {
+    enabled: false,
+    includeRemoveOps: false,
   },
 };
 
@@ -163,7 +173,12 @@ function resolveReactions(config: ZulipReactionConfig | undefined): ResolvedZuli
     },
   } satisfies ResolvedZulipReactionWorkflow;
 
-  return { enabled, onStart, onSuccess, onFailure, clearOnFinish, workflow };
+  const genericCallback = {
+    enabled: config.genericCallback?.enabled === true,
+    includeRemoveOps: config.genericCallback?.includeRemoveOps === true,
+  } satisfies ResolvedZulipGenericReactionCallback;
+
+  return { enabled, onStart, onSuccess, onFailure, clearOnFinish, workflow, genericCallback };
 }
 
 export function resolveZulipAccount(params: {

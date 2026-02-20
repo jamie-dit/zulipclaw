@@ -14,6 +14,7 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     unsend: "to",
     reply: "to",
     sendWithEffect: "to",
+    sendWithReactions: "to",
     renameGroup: "to",
     setGroupIcon: "to",
     addParticipant: "to",

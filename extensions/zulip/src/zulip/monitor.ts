@@ -27,6 +27,7 @@ import {
 import { normalizeStreamName, normalizeTopic } from "./normalize.js";
 import { buildZulipQueuePlan, buildZulipRegisterNarrow } from "./queue-plan.js";
 import {
+  getReactionButtonSession,
   handleReactionEvent,
   startReactionButtonSessionCleanup,
   stopReactionButtonSessionCleanup,
@@ -77,10 +78,11 @@ type ZulipReactionEvent = {
   emoji_code: string;
   user_id: number;
   user?: {
-    email: string;
-    full_name: string;
-    user_id: number;
+    email?: string;
+    full_name?: string;
+    user_id?: number;
   };
+  message?: ZulipEventMessage;
 };
 
 type ZulipEvent = {
@@ -522,6 +524,7 @@ async function bestEffortReaction(params: {
         messageId: params.messageId,
         emojiName,
         abortSignal: params.abortSignal,
+        log: params.log,
       });
       return;
     }
@@ -1274,31 +1277,190 @@ export async function monitorZulipProvider(
 
     const resumedCheckpointIds = new Set<string>();
 
-    // Handler for reaction events (reaction buttons)
-    const handleReaction = (reactionEvent: ZulipReactionEvent) => {
-      // Only process 'add' operations, not 'remove'
-      if (reactionEvent.op !== "add") {
+    const reactionMessageContexts = new Map<
+      number,
+      {
+        stream: string;
+        topic: string;
+        capturedAt: number;
+      }
+    >();
+    const REACTION_MESSAGE_CONTEXT_TTL_MS = 30 * 60 * 1000;
+    const REACTION_MESSAGE_CONTEXT_MAX = 1_000;
+
+    const normalizeReactionSourceFromMessage = (message?: ZulipEventMessage) => {
+      if (!message) {
+        return null;
+      }
+      if (message.type && message.type !== "stream") {
+        return null;
+      }
+      const stream = normalizeStreamName(
+        typeof message.display_recipient === "string" ? message.display_recipient : "",
+      );
+      const topic = normalizeTopic(message.subject) || account.defaultTopic;
+      if (!stream || !topic) {
+        return null;
+      }
+      return { stream, topic };
+    };
+
+    const rememberReactionMessageContext = (message: ZulipEventMessage) => {
+      if (typeof message.id !== "number") {
         return;
       }
+      const source = normalizeReactionSourceFromMessage(message);
+      if (!source) {
+        return;
+      }
+      reactionMessageContexts.set(message.id, {
+        ...source,
+        capturedAt: Date.now(),
+      });
+      if (reactionMessageContexts.size > REACTION_MESSAGE_CONTEXT_MAX) {
+        for (const [messageId] of reactionMessageContexts) {
+          reactionMessageContexts.delete(messageId);
+          if (reactionMessageContexts.size <= REACTION_MESSAGE_CONTEXT_MAX) {
+            break;
+          }
+        }
+      }
+    };
 
-      // Only process reactions on stream messages
+    const resolveReactionSource = (reactionEvent: ZulipReactionEvent) => {
+      const fromEvent = normalizeReactionSourceFromMessage(reactionEvent.message);
+      if (fromEvent) {
+        reactionMessageContexts.set(reactionEvent.message_id, {
+          ...fromEvent,
+          capturedAt: Date.now(),
+        });
+        return fromEvent;
+      }
+
+      const cached = reactionMessageContexts.get(reactionEvent.message_id);
+      if (!cached) {
+        return null;
+      }
+      if (Date.now() - cached.capturedAt > REACTION_MESSAGE_CONTEXT_TTL_MS) {
+        reactionMessageContexts.delete(reactionEvent.message_id);
+        return null;
+      }
+      return { stream: cached.stream, topic: cached.topic };
+    };
+
+    const toReactionCommandToken = (emojiName: string) => {
+      const normalized = emojiName
+        .trim()
+        .toLowerCase()
+        .replace(/^:/, "")
+        .replace(/:$/, "")
+        .replace(/[^a-z0-9_+-]+/g, "_")
+        .replace(/^_+|_+$/g, "");
+      return normalized || "emoji";
+    };
+
+    const dispatchSyntheticReactionContext = (params: {
+      stream: string;
+      topic: string;
+      body: string;
+      rawBody: string;
+      commandBody: string;
+      sessionKeySuffix: string;
+      userId: number;
+      userName: string;
+      messageSid: string;
+      systemPrompt: string;
+      errorLabel: string;
+    }) => {
+      const target = `stream:${params.stream}#${params.topic}`;
+      const ctxPayload = core.channel.reply.finalizeInboundContext({
+        Body: params.body,
+        RawBody: params.rawBody,
+        CommandBody: params.commandBody,
+        From: `zulip:user:${params.userId}`,
+        To: target,
+        SessionKey: `zulip:${account.accountId}:reaction:${params.sessionKeySuffix}`,
+        AccountId: account.accountId,
+        ChatType: "channel",
+        ThreadLabel: params.topic,
+        MessageThreadId: params.topic,
+        ConversationLabel: `${params.stream}#${params.topic}`,
+        GroupSubject: params.stream,
+        GroupChannel: `#${params.stream}`,
+        GroupSystemPrompt: params.systemPrompt,
+        Provider: "zulip" as const,
+        Surface: "zulip" as const,
+        SenderName: params.userName,
+        SenderId: String(params.userId),
+        MessageSid: params.messageSid,
+        WasMentioned: true,
+        OriginatingChannel: "zulip" as const,
+        OriginatingTo: target,
+        Timestamp: Date.now(),
+        CommandAuthorized: true,
+      });
+
+      void core.channel.reply
+        .dispatchReplyFromConfig({
+          ctx: ctxPayload,
+          cfg,
+          dispatcher: {
+            sendToolResult: () => Promise.resolve(),
+            sendBlockReply: async (payload: ReplyPayload) => {
+              if (payload.text) {
+                await sendZulipStreamMessage({
+                  auth,
+                  stream: params.stream,
+                  topic: params.topic,
+                  content: payload.text,
+                  abortSignal,
+                });
+              }
+            },
+            sendFinalReply: async (payload: ReplyPayload) => {
+              if (payload.text) {
+                await sendZulipStreamMessage({
+                  auth,
+                  stream: params.stream,
+                  topic: params.topic,
+                  content: payload.text,
+                  abortSignal,
+                });
+              }
+            },
+            markComplete: () => {},
+            waitForIdle: () => Promise.resolve(),
+          },
+          replyOptions: {
+            disableBlockStreaming: true,
+          },
+        })
+        .catch((err) => {
+          logger.error?.(`[zulip] ${params.errorLabel} dispatch failed: ${String(err)}`);
+        });
+    };
+
+    // Handler for reaction events (reaction buttons + optional generic callbacks)
+    const handleReaction = (reactionEvent: ZulipReactionEvent) => {
       if (typeof reactionEvent.message_id !== "number") {
         return;
       }
 
-      const result = handleReactionEvent({
-        messageId: reactionEvent.message_id,
-        emojiName: reactionEvent.emoji_name,
-        userId: reactionEvent.user_id,
-        botUserId,
-      });
+      const result =
+        reactionEvent.op === "add"
+          ? handleReactionEvent({
+              messageId: reactionEvent.message_id,
+              emojiName: reactionEvent.emoji_name,
+              userId: reactionEvent.user_id,
+              botUserId,
+            })
+          : null;
 
       if (result) {
         logger.info(
           `[zulip:${account.accountId}] reaction button clicked: messageId=${result.messageId}, index=${result.selectedIndex}, value=${result.selectedOption?.value}`,
         );
 
-        // Record the reaction button activity
         core.channel.activity.record({
           channel: "zulip",
           accountId: account.accountId,
@@ -1306,91 +1468,98 @@ export async function monitorZulipProvider(
           at: Date.now(),
         });
 
-        // Emit a synthetic message event that can be processed by the agent
-        // This allows the bot to respond to reaction button clicks
-        const stream = normalizeStreamName(reactionEvent.message?.stream_id?.toString() ?? "");
-        const topic = normalizeTopic(reactionEvent.message?.subject) || account.defaultTopic;
+        const buttonSession = getReactionButtonSession(result.messageId);
+        const source = buttonSession
+          ? { stream: buttonSession.stream, topic: buttonSession.topic }
+          : resolveReactionSource(reactionEvent);
 
-        if (stream) {
-          const buttonPayload = {
-            type: "reaction_button_click" as const,
-            messageId: result.messageId,
-            selectedIndex: result.selectedIndex,
-            selectedOption: result.selectedOption,
-            userId: reactionEvent.user_id,
-            userName: reactionEvent.user?.full_name ?? String(reactionEvent.user_id),
-          };
-
-          // Create a synthetic context payload for the reaction button
-          const ctxPayload = core.channel.reply.finalizeInboundContext({
-            Body: `[zulip reaction button click: messageId=${result.messageId}, option="${result.selectedOption?.label}" (${result.selectedOption?.value})]`,
-            RawBody: JSON.stringify(buttonPayload),
-            CommandBody: `reaction_button_${result.selectedIndex}`,
-            From: `zulip:user:${reactionEvent.user_id}`,
-            To: `stream:${stream}#${topic}`,
-            SessionKey: `zulip:${account.accountId}:reaction:${result.messageId}`,
-            AccountId: account.accountId,
-            ChatType: "channel",
-            ThreadLabel: topic,
-            MessageThreadId: topic,
-            ConversationLabel: `${stream}#${topic}`,
-            GroupSubject: stream,
-            GroupChannel: `#${stream}`,
-            GroupSystemPrompt:
-              "A user clicked a reaction button on a previous message. Respond to their selection.",
-            Provider: "zulip" as const,
-            Surface: "zulip" as const,
-            SenderName: reactionEvent.user?.full_name ?? String(reactionEvent.user_id),
-            SenderId: String(reactionEvent.user_id),
-            MessageSid: `reaction-${result.messageId}-${Date.now()}`,
-            WasMentioned: true,
-            OriginatingChannel: "zulip" as const,
-            OriginatingTo: `stream:${stream}#${topic}`,
-            Timestamp: Date.now(),
-            CommandAuthorized: true,
-          });
-
-          // Dispatch the reaction button click through the normal reply flow
-          void core.channel.reply
-            .dispatchReplyFromConfig({
-              ctx: ctxPayload,
-              cfg,
-              dispatcher: {
-                sendToolResult: () => Promise.resolve(),
-                sendBlockReply: async (payload: ReplyPayload) => {
-                  if (payload.text) {
-                    await sendZulipStreamMessage({
-                      auth,
-                      stream,
-                      topic,
-                      content: payload.text,
-                      abortSignal,
-                    });
-                  }
-                },
-                sendFinalReply: async (payload: ReplyPayload) => {
-                  if (payload.text) {
-                    await sendZulipStreamMessage({
-                      auth,
-                      stream,
-                      topic,
-                      content: payload.text,
-                      abortSignal,
-                    });
-                  }
-                },
-                markComplete: () => {},
-                waitForIdle: () => Promise.resolve(),
-              },
-              replyOptions: {
-                disableBlockStreaming: true,
-              },
-            })
-            .catch((err) => {
-              logger.error?.(`[zulip] reaction button dispatch failed: ${String(err)}`);
-            });
+        if (!source?.stream || !source.topic) {
+          logger.debug?.(
+            `[zulip:${account.accountId}] reaction button ignored: unresolved source for message ${result.messageId}`,
+          );
+          return;
         }
+
+        const buttonPayload = {
+          type: "reaction_button_click" as const,
+          messageId: result.messageId,
+          selectedIndex: result.selectedIndex,
+          selectedOption: result.selectedOption,
+          userId: reactionEvent.user_id,
+          userName: reactionEvent.user?.full_name ?? String(reactionEvent.user_id),
+        };
+
+        dispatchSyntheticReactionContext({
+          stream: source.stream,
+          topic: source.topic,
+          body: `[zulip reaction button click: messageId=${result.messageId}, option="${result.selectedOption?.label}" (${result.selectedOption?.value})]`,
+          rawBody: JSON.stringify(buttonPayload),
+          commandBody: `reaction_button_${result.selectedIndex}`,
+          sessionKeySuffix: String(result.messageId),
+          userId: reactionEvent.user_id,
+          userName: reactionEvent.user?.full_name ?? String(reactionEvent.user_id),
+          messageSid: `reaction-button-${result.messageId}-${Date.now()}`,
+          systemPrompt:
+            "A user clicked a reaction button on a previous message. Respond to their selection.",
+          errorLabel: "reaction button",
+        });
+        return;
       }
+
+      if (!account.reactions.genericCallback.enabled) {
+        return;
+      }
+      if (reactionEvent.user_id === botUserId) {
+        return;
+      }
+      if (reactionEvent.op === "remove" && !account.reactions.genericCallback.includeRemoveOps) {
+        return;
+      }
+
+      const source = resolveReactionSource(reactionEvent);
+      if (!source?.stream || !source.topic) {
+        logger.debug?.(
+          `[zulip:${account.accountId}] generic reaction ignored: unresolved source for message ${reactionEvent.message_id}`,
+        );
+        return;
+      }
+
+      if (account.streams.length > 0 && !account.streams.includes(source.stream)) {
+        return;
+      }
+
+      core.channel.activity.record({
+        channel: "zulip",
+        accountId: account.accountId,
+        direction: "inbound",
+        at: Date.now(),
+      });
+
+      const normalizedEmojiToken = toReactionCommandToken(reactionEvent.emoji_name);
+      const genericPayload = {
+        type: "reaction_event" as const,
+        op: reactionEvent.op,
+        emojiName: reactionEvent.emoji_name,
+        emojiCode: reactionEvent.emoji_code,
+        messageId: reactionEvent.message_id,
+        userId: reactionEvent.user_id,
+        userName: reactionEvent.user?.full_name ?? String(reactionEvent.user_id),
+      };
+
+      dispatchSyntheticReactionContext({
+        stream: source.stream,
+        topic: source.topic,
+        body: `[zulip reaction ${reactionEvent.op}: messageId=${reactionEvent.message_id}, emoji="${reactionEvent.emoji_name}"]`,
+        rawBody: JSON.stringify(genericPayload),
+        commandBody: `reaction_${reactionEvent.op}_${normalizedEmojiToken}`,
+        sessionKeySuffix: `${reactionEvent.message_id}:${reactionEvent.op}:${normalizedEmojiToken}`,
+        userId: reactionEvent.user_id,
+        userName: reactionEvent.user?.full_name ?? String(reactionEvent.user_id),
+        messageSid: `reaction-generic-${reactionEvent.message_id}-${Date.now()}`,
+        systemPrompt:
+          "A user added or removed a reaction in this topic. Treat this as an inbound signal and respond only if helpful.",
+        errorLabel: "generic reaction",
+      });
     };
 
     const replayPendingCheckpoints = async () => {
@@ -1610,6 +1779,10 @@ export async function monitorZulipProvider(
           const messages = list
             .map((evt) => evt.message)
             .filter((m): m is ZulipEventMessage => Boolean(m));
+
+          for (const msg of messages) {
+            rememberReactionMessageContext(msg);
+          }
 
           // Track highest message ID for freshness checker gap detection.
           for (const msg of messages) {

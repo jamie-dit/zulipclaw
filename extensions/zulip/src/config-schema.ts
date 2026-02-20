@@ -21,6 +21,13 @@ const ReactionWorkflowSchema = z
   })
   .strict();
 
+const GenericReactionCallbackSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    includeRemoveOps: z.boolean().optional(),
+  })
+  .strict();
+
 const ReactionSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -29,6 +36,7 @@ const ReactionSchema = z
     onFailure: z.string().optional(),
     clearOnFinish: z.boolean().optional(),
     workflow: ReactionWorkflowSchema.optional(),
+    genericCallback: GenericReactionCallbackSchema.optional(),
   })
   .strict();
 

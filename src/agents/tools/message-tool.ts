@@ -29,6 +29,7 @@ const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 const EXPLICIT_TARGET_ACTIONS = new Set<ChannelMessageActionName>([
   "send",
   "sendWithEffect",
+  "sendWithReactions",
   "sendAttachment",
   "reply",
   "thread-reply",

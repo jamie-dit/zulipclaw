@@ -89,6 +89,25 @@ type ZulipEventMessage = {
   timestamp?: number;
 };
 
+type ZulipReactionHarnessEvent = {
+  type: "reaction";
+  op: "add" | "remove";
+  message_id: number;
+  emoji_name: string;
+  emoji_code: string;
+  user_id: number;
+  user?: {
+    full_name?: string;
+  };
+  message?: {
+    type?: string;
+    display_recipient?: string;
+    subject?: string;
+  };
+};
+
+type ZulipHarnessEvent = ZulipEventMessage | ZulipReactionHarnessEvent;
+
 function makeCheckpoint(overrides?: Partial<Record<string, unknown>>) {
   const base = {
     version: 1,
@@ -134,7 +153,7 @@ function waitForCondition(condition: () => boolean, timeoutMs = 1_000): Promise<
 }
 
 function createHarness(params?: {
-  events?: ZulipEventMessage[];
+  events?: ZulipHarnessEvent[];
   checkpoints?: Array<Record<string, unknown>>;
   staleCheckpoints?: boolean;
   reactions?: Record<string, unknown>;
@@ -213,6 +232,10 @@ function createHarness(params?: {
       onSuccess: "check",
       onFailure: "warning",
       clearOnFinish: true,
+      genericCallback: {
+        enabled: false,
+        includeRemoveOps: false,
+      },
     },
   });
 
@@ -271,7 +294,12 @@ function createHarness(params?: {
         if (pollCount === 1 && eventList.length > 0) {
           return {
             result: "success",
-            events: eventList.map((message, index) => ({ id: 101 + index, message })),
+            events: eventList.map((event, index) => {
+              if (event.type === "reaction") {
+                return { id: 101 + index, ...event };
+              }
+              return { id: 101 + index, message: event };
+            }),
           };
         }
         return await new Promise<never>((_, reject) => {
@@ -422,6 +450,163 @@ describe("monitorZulipProvider recovery checkpoints", () => {
 
     expect(addedEmojis).toEqual(["hourglass", "gear", "check"]);
     expect(removedEmojis).toEqual(["hourglass", "gear"]);
+
+    monitor.stop();
+    await (monitor as { done: Promise<void> }).done;
+  });
+
+  it("keeps generic reaction callbacks disabled by default", async () => {
+    const { dispatchReplyFromConfig } = createHarness({
+      events: [
+        {
+          type: "reaction",
+          op: "add",
+          message_id: 7001,
+          emoji_name: "fire",
+          emoji_code: "1f525",
+          user_id: 55,
+          user: { full_name: "Tester" },
+          message: {
+            type: "stream",
+            display_recipient: "marcel",
+            subject: "general",
+          },
+        },
+      ],
+      reactions: {
+        enabled: false,
+        onStart: "eyes",
+        onSuccess: "check",
+        onFailure: "warning",
+        clearOnFinish: true,
+        genericCallback: {
+          enabled: false,
+          includeRemoveOps: false,
+        },
+      },
+    });
+
+    const monitor = await monitorZulipProvider({
+      config: {} as never,
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    });
+
+    await waitForCondition(() =>
+      mocks.zulipRequest.mock.calls.some(
+        ([arg]) => (arg as { path?: string }).path === "/api/v1/events",
+      ),
+    );
+
+    expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+
+    monitor.stop();
+    await (monitor as { done: Promise<void> }).done;
+  });
+
+  it("dispatches synthetic inbound context for generic reactions when enabled", async () => {
+    const { dispatchReplyFromConfig } = createHarness({
+      events: [
+        {
+          type: "reaction",
+          op: "add",
+          message_id: 7002,
+          emoji_name: "fire",
+          emoji_code: "1f525",
+          user_id: 55,
+          user: { full_name: "Tester" },
+          message: {
+            type: "stream",
+            display_recipient: "marcel",
+            subject: "general",
+          },
+        },
+      ],
+      reactions: {
+        enabled: false,
+        onStart: "eyes",
+        onSuccess: "check",
+        onFailure: "warning",
+        clearOnFinish: true,
+        genericCallback: {
+          enabled: true,
+          includeRemoveOps: false,
+        },
+      },
+    });
+
+    const monitor = await monitorZulipProvider({
+      config: {} as never,
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    });
+
+    await waitForCondition(() => dispatchReplyFromConfig.mock.calls.length > 0);
+
+    const call = dispatchReplyFromConfig.mock.calls[0]?.[0] as { ctx?: Record<string, unknown> };
+    expect(call?.ctx).toMatchObject({
+      CommandBody: "reaction_add_fire",
+      To: "stream:marcel#general",
+      SenderId: "55",
+    });
+
+    monitor.stop();
+    await (monitor as { done: Promise<void> }).done;
+  });
+
+  it("ignores generic reaction remove events unless explicitly enabled", async () => {
+    const { dispatchReplyFromConfig } = createHarness({
+      events: [
+        {
+          type: "reaction",
+          op: "remove",
+          message_id: 7003,
+          emoji_name: "fire",
+          emoji_code: "1f525",
+          user_id: 55,
+          user: { full_name: "Tester" },
+          message: {
+            type: "stream",
+            display_recipient: "marcel",
+            subject: "general",
+          },
+        },
+      ],
+      reactions: {
+        enabled: false,
+        onStart: "eyes",
+        onSuccess: "check",
+        onFailure: "warning",
+        clearOnFinish: true,
+        genericCallback: {
+          enabled: true,
+          includeRemoveOps: false,
+        },
+      },
+    });
+
+    const monitor = await monitorZulipProvider({
+      config: {} as never,
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    });
+
+    await waitForCondition(() =>
+      mocks.zulipRequest.mock.calls.some(
+        ([arg]) => (arg as { path?: string }).path === "/api/v1/events",
+      ),
+    );
+
+    expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
 
     monitor.stop();
     await (monitor as { done: Promise<void> }).done;
