@@ -337,15 +337,35 @@ export function resolveSubagentSpawnModelSelection(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
-  return (
+
+  const rawSelection =
     normalizeModelSelection(params.modelOverride) ??
     resolveSubagentConfiguredModelSelection({
       cfg: params.cfg,
       agentId: params.agentId,
     }) ??
-    normalizeModelSelection(params.cfg.agents?.defaults?.model?.primary) ??
-    `${runtimeDefault.provider}/${runtimeDefault.model}`
-  );
+    normalizeModelSelection(params.cfg.agents?.defaults?.model?.primary);
+
+  if (rawSelection) {
+    // Build alias index only when needed for resolution
+    const aliasIndex = buildModelAliasIndex({
+      cfg: params.cfg,
+      defaultProvider: runtimeDefault.provider,
+    });
+    // Resolve alias if present (e.g., "opus" -> "anthropic/claude-opus-4-6")
+    // Also handles full model refs like "anthropic/claude-opus-4-6" correctly
+    const resolved = resolveModelRefFromString({
+      raw: rawSelection,
+      defaultProvider: runtimeDefault.provider,
+      aliasIndex,
+    });
+    if (resolved) {
+      return `${resolved.ref.provider}/${resolved.ref.model}`;
+    }
+    // If resolveModelRefFromString returned null, fall through to default
+  }
+
+  return `${runtimeDefault.provider}/${runtimeDefault.model}`;
 }
 
 export function buildAllowedModelSet(params: {
