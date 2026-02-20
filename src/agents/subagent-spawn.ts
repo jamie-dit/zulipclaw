@@ -67,20 +67,8 @@ export function splitModelRef(ref?: string) {
   return { provider: undefined, model: trimmed };
 }
 
-const MODEL_SELECTION_SECTION_HEADER = "## Model Selection (MANDATORY)";
 const REPLY_ROUTING_SECTION_HEADER = "## Reply Routing (MANDATORY)";
 const PROGRESS_UPDATES_SECTION_HEADER = "## Progress Updates (MANDATORY)";
-
-const MODEL_SELECTION_SECTION = [
-  MODEL_SELECTION_SECTION_HEADER,
-  'Use model="gpt53spark" by default.',
-  'Switch to model="c-glm" only for very short, lightweight text tasks.',
-  'Switch to model="glm" for medium-depth text tasks that may need more context reliability.',
-  'Switch to model="gpt53" for large context, coding-heavy, or image/screenshot work.',
-  "Switch to Opus only for complex planning/review.",
-  "If switched from default, state why in one sentence in the first progress update.",
-  'First progress update must include: "Using model: <model> - reason: <one line>".',
-].join("\n");
 
 function safeDecodeURIComponent(value: string): string {
   try {
@@ -175,10 +163,6 @@ export function appendMandatorySpawnTaskBlocks(args: {
 }): string {
   const trimmedTask = args.task.trimEnd();
   const blocks: string[] = [];
-
-  if (!hasSection(trimmedTask, MODEL_SELECTION_SECTION_HEADER)) {
-    blocks.push(MODEL_SELECTION_SECTION);
-  }
 
   const zulipRoute = parseZulipTopicTarget(args.requesterChannel, args.requesterTo);
   if (zulipRoute && !hasSection(trimmedTask, REPLY_ROUTING_SECTION_HEADER)) {
