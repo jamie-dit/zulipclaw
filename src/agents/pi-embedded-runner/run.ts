@@ -398,6 +398,10 @@ export async function runEmbeddedPiAgent(
           authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
         } else {
           authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
+          // Also set env var for pi-ai to detect OAuth tokens
+          if (apiKeyInfo.mode === "oauth" && apiKeyInfo.apiKey?.includes("sk-ant-oat")) {
+            process.env.ANTHROPIC_OAUTH_TOKEN = apiKeyInfo.apiKey;
+          }
         }
         lastProfileId = apiKeyInfo.profileId;
       };
