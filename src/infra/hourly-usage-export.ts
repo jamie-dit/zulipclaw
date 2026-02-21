@@ -776,7 +776,8 @@ export async function uploadHourlyUsageCsv(params: {
   const response = await fetchImpl(ingestUrl, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${token}`, // Keep for backward compatibility
+      "x-zulipclaw-ingest-key": token, // NEW: Helix managed key support
       "Content-Type": "text/csv; charset=utf-8",
       "X-Usage-Hour": params.hourStartIso,
     },
