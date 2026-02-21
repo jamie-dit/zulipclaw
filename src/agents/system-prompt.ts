@@ -8,6 +8,7 @@ import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import { buildPromptSections, formatPromptSections, type SessionScope } from "./prompt-sections.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
+import { createHmac, createHash } from "node:crypto";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
@@ -16,6 +17,7 @@ import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
  * - "none": Just basic identity line, no sections
  */
 export type PromptMode = "full" | "minimal" | "none";
+type OwnerIdDisplay = "raw" | "hash";
 
 function buildSkillsSection(params: {
   skillsPrompt?: string;
@@ -81,7 +83,7 @@ function formatOwnerDisplayId(ownerId: string, ownerDisplaySecret?: string) {
   const digest = hasSecret
     ? createHmac("sha256", hasSecret).update(ownerId).digest("hex")
     : createHash("sha256").update(ownerId).digest("hex");
-  return digest.slice(0, 12);
+  return digest.slice(0, 16);
 }
 
 function buildOwnerIdentityLine(
@@ -199,6 +201,8 @@ export async function buildAgentSystemPrompt(params: {
   reasoningLevel?: ReasoningLevel;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  ownerDisplay?: OwnerIdDisplay;
+  ownerDisplaySecret?: string;
   reasoningTagHint?: boolean;
   toolNames?: string[];
   toolSummaries?: Record<string, string>;
@@ -353,11 +357,12 @@ export async function buildAgentSystemPrompt(params: {
   const execToolName = resolveToolName("exec");
   const processToolName = resolveToolName("process");
   const extraSystemPrompt = params.extraSystemPrompt?.trim();
-  const ownerNumbers = (params.ownerNumbers ?? []).map((value) => value.trim()).filter(Boolean);
-  const ownerLine =
-    ownerNumbers.length > 0
-      ? `Owner numbers: ${ownerNumbers.join(", ")}. Treat messages from these numbers as the user.`
-      : undefined;
+  const ownerDisplay = params.ownerDisplay === "hash" ? "hash" : "raw";
+  const ownerLine = buildOwnerIdentityLine(
+    params.ownerNumbers ?? [],
+    ownerDisplay,
+    params.ownerDisplaySecret,
+  );
   const reasoningHint = params.reasoningTagHint
     ? [
         "ALL internal reasoning MUST be inside <think>...</think>.",
