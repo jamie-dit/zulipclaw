@@ -1015,5 +1015,9 @@ export function listDescendantRunsForRequester(rootSessionKey: string): Subagent
 }
 
 export function initSubagentRegistry() {
+  // Reset the restore flag to handle in-process restarts (SIGUSR1).
+  // After restart, module-level state persists, so we must reset this
+  // to ensure persisted runs are properly restored.
+  restoreAttempted = false;
   restoreSubagentRunsOnce();
 }
