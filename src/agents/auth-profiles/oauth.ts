@@ -47,7 +47,17 @@ async function refreshOAuthTokenWithLock(params: {
       return null;
     }
 
+    // If token is not expired, return it
     if (Date.now() < cred.expires) {
+      return {
+        apiKey: buildOAuthApiKey(cred.provider, cred),
+        newCredentials: cred,
+      };
+    }
+
+    // If no refresh token available (e.g., Anthropic OAuth without refresh),
+    // return the existing token even if expired - pi-ai will handle auth errors
+    if (!cred.refresh) {
       return {
         apiKey: buildOAuthApiKey(cred.provider, cred),
         newCredentials: cred,
