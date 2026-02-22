@@ -9,6 +9,7 @@ import {
   consumeRestartSentinel,
   formatRestartSentinelMessage,
   summarizeRestartSentinel,
+  wrapInQuoteBlock,
 } from "../infra/restart-sentinel.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { deliveryContextFromSession, mergeDeliveryContext } from "../utils/delivery-context.js";
@@ -85,6 +86,9 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
     sessionThreadId ??
     (origin?.threadId != null ? String(origin.threadId) : undefined);
 
+  // Wrap in quote block so gateway messages are visually distinct from agent replies
+  const quotedMessage = wrapInQuoteBlock(message);
+
   try {
     await deliverOutboundPayloads({
       cfg,
@@ -92,7 +96,7 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
       to: resolved.to,
       accountId: origin?.accountId,
       threadId,
-      payloads: [{ text: message }],
+      payloads: [{ text: quotedMessage }],
       agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
       bestEffort: true,
     });

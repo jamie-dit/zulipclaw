@@ -8,6 +8,7 @@ import {
   readRestartSentinel,
   resolveRestartSentinelPath,
   trimLogTail,
+  wrapInQuoteBlock,
   writeRestartSentinel,
 } from "./restart-sentinel.js";
 
@@ -101,6 +102,19 @@ describe("restart sentinel", () => {
     const trimmed = trimLogTail(text, 8000);
     expect(trimmed?.length).toBeLessThanOrEqual(8001);
     expect(trimmed?.startsWith("…")).toBe(true);
+  });
+
+  it("wrapInQuoteBlock prefixes every line with '> '", () => {
+    expect(wrapInQuoteBlock("hello")).toBe("> hello");
+    expect(wrapInQuoteBlock("line1\nline2\nline3")).toBe("> line1\n> line2\n> line3");
+  });
+
+  it("wrapInQuoteBlock handles single-line messages", () => {
+    expect(wrapInQuoteBlock("Gateway restart update ok")).toBe("> Gateway restart update ok");
+  });
+
+  it("wrapInQuoteBlock preserves empty lines as quoted blanks", () => {
+    expect(wrapInQuoteBlock("a\n\nb")).toBe("> a\n> \n> b");
   });
 
   it("formats restart messages without volatile timestamps", () => {
