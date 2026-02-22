@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeForCodeFence, sanitizeInlineCodeName } from "./subagent-announce.js";
+import {
+  buildCompletionDeliveryMessage,
+  sanitizeForCodeFence,
+  sanitizeInlineCodeName,
+} from "./subagent-announce.js";
 
 describe("sanitizeForCodeFence", () => {
   it("returns plain text unchanged", () => {
@@ -61,5 +65,67 @@ describe("sanitizeInlineCodeName", () => {
 
   it("returns empty string unchanged", () => {
     expect(sanitizeInlineCodeName("")).toBe("");
+  });
+});
+
+describe("buildCompletionDeliveryMessage", () => {
+  it("uses subagentName as the header label", () => {
+    const result = buildCompletionDeliveryMessage({
+      findings: "All done",
+      subagentName: "fix-exec-summary",
+    });
+    expect(result).toContain("Sub-agent `fix-exec-summary`");
+    expect(result).not.toContain("Sub-agent `main`");
+  });
+
+  it("shows header only when findings are empty", () => {
+    const result = buildCompletionDeliveryMessage({
+      findings: "",
+      subagentName: "worker-1",
+    });
+    expect(result).toBe("✅ **Sub-agent `worker-1`** finished");
+  });
+
+  it("shows header only when findings are (no output)", () => {
+    const result = buildCompletionDeliveryMessage({
+      findings: "(no output)",
+      subagentName: "worker-1",
+    });
+    expect(result).toBe("✅ **Sub-agent `worker-1`** finished");
+  });
+
+  it("includes spoiler block when findings are present", () => {
+    const result = buildCompletionDeliveryMessage({
+      findings: "Found 3 issues",
+      subagentName: "audit-task",
+    });
+    expect(result).toContain("Sub-agent `audit-task`");
+    expect(result).toContain("```spoiler Sub-agent output");
+    expect(result).toContain("Found 3 issues");
+  });
+
+  it("sanitizes backticks in subagentName", () => {
+    const result = buildCompletionDeliveryMessage({
+      findings: "done",
+      subagentName: "te`st`name",
+    });
+    expect(result).toContain("Sub-agent `testname`");
+  });
+
+  it("sanitizes triple backticks in findings", () => {
+    const result = buildCompletionDeliveryMessage({
+      findings: "```python\nprint('hi')\n```",
+      subagentName: "code-task",
+    });
+    // Triple backticks in findings should be broken with zero-width spaces
+    expect(result).toContain("Sub-agent `code-task`");
+    // The findings section should not contain raw triple backticks (except the spoiler fence)
+    const spoilerStart = result.indexOf("```spoiler");
+    const spoilerEnd = result.lastIndexOf("```");
+    const findingsSection = result.substring(
+      spoilerStart + "```spoiler Sub-agent output\n".length,
+      spoilerEnd,
+    );
+    expect(findingsSection).not.toMatch(/`{3,}/);
   });
 });
