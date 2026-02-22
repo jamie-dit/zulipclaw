@@ -51,11 +51,11 @@ function buildCompletionDeliveryMessage(params: {
 }): string {
   const findingsText = params.findings.trim();
   const hasFindings = findingsText.length > 0 && findingsText !== "(no output)";
-  const header = `✅ Subagent ${params.subagentName} finished`;
+  const header = `✅ **Sub-agent \`${params.subagentName}\`** finished`;
   if (!hasFindings) {
     return header;
   }
-  return `${header}\n\n${findingsText}`;
+  return `${header}\n\n\`\`\`spoiler Sub-agent output\n${findingsText}\n\`\`\``;
 }
 
 function summarizeDeliveryError(error: unknown): string {
