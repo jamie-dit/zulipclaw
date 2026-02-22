@@ -298,6 +298,7 @@ function restoreSubagentRunsOnce() {
         label: entry.label,
         model: entry.model,
         startedAt: entry.startedAt,
+        childSessionKey: entry.childSessionKey,
         deliveryContext: resolveRelayDeliveryContextForRun({
           requesterDeliveryContext: entry.requesterDeliveryContext,
           requesterOrigin: entry.requesterOrigin,
@@ -406,6 +407,7 @@ function ensureListener() {
         label: entry.label,
         model: entry.model,
         startedAt: startedAt ?? entry.startedAt,
+        childSessionKey: entry.childSessionKey,
         deliveryContext: resolveRelayDeliveryContextForRun({
           requesterDeliveryContext: entry.requesterDeliveryContext,
           requesterOrigin: entry.requesterOrigin,
@@ -626,6 +628,7 @@ export function replaceSubagentRunAfterSteer(params: {
     label: next.label,
     model: next.model,
     startedAt: next.startedAt,
+    childSessionKey: next.childSessionKey,
     deliveryContext: resolveRelayDeliveryContextForRun({
       requesterDeliveryContext: next.requesterDeliveryContext,
       requesterOrigin: next.requesterOrigin,
@@ -688,6 +691,7 @@ export function registerSubagentRun(params: {
     label: params.label,
     model: params.model,
     startedAt: now,
+    childSessionKey: params.childSessionKey,
     deliveryContext: requesterDeliveryContext,
   });
   ensureListener();
