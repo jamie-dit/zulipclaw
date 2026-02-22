@@ -921,6 +921,7 @@ export async function monitorZulipProvider(
       throw new Error(me.msg || "Failed to fetch Zulip bot identity");
     }
     const botUserId = me.user_id;
+    const botDisplayName = me.full_name?.trim() || "Agent";
     logger.warn(`[zulip-debug][${account.accountId}] bot user_id=${botUserId}`);
 
     // Dedupe cache prevents reprocessing messages after queue re-registration or reconnect.
@@ -1205,6 +1206,7 @@ export async function monitorZulipProvider(
         auth,
         stream,
         topic,
+        name: botDisplayName,
         abortSignal: deliverySignal,
         log: (m) => logger.debug?.(m),
       });

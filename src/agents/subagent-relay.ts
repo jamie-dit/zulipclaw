@@ -245,14 +245,21 @@ function escapeMarkdown(value: string) {
   return value.replace(/[*_`]/g, "\\$&");
 }
 
+/**
+ * Sanitize text for inclusion inside a triple-backtick code fence.
+ * Breaks up runs of 3+ backticks with zero-width spaces so they
+ * don't prematurely close the fence.
+ */
+function sanitizeForCodeFence(text: string): string {
+  return text.replace(/`{3,}/g, (match) => match.split("").join("\u200B"));
+}
+
 function renderRelayMessage(state: RelayState) {
-  const header = `🧑‍💻 **Sub-agent: ${escapeMarkdown(state.label)}** (${escapeMarkdown(state.model)})`;
-  const lines: string[] = [header];
-  for (const line of state.toolLines) {
-    lines.push(`├ ${line}`);
-  }
-  lines.push(`└ ${formatRelayFooter(state)}`);
-  return lines.join("\n");
+  const callWord = state.toolCount === 1 ? "tool call" : "tool calls";
+  const updatedTime = formatRelayUpdatedTime(state.lastUpdatedAt);
+  const header = `🛠️ **\`${state.label}\`** · ${state.toolCount} ${callWord} · updated ${updatedTime}`;
+  const sanitizedLines = state.toolLines.map((line) => sanitizeForCodeFence(line));
+  return `${header}\n\n\`\`\`spoiler Tool calls\n${sanitizedLines.join("\n")}\n\`\`\``;
 }
 
 function parseMessageId(result: unknown): string | undefined {
