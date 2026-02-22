@@ -223,7 +223,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       sessionKey: "agent:main:main",
       channel: "whatsapp",
       to: "+123",
-      message: "✅ Subagent main finished\n\ndone",
+      message: "✅ **Sub-agent `main`** finished\n\n```spoiler Sub-agent output\ndone\n```",
     });
     expect(child.sessionKey?.startsWith("agent:main:subagent:")).toBe(true);
   });
@@ -305,7 +305,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       sessionKey: "agent:main:discord:group:req",
       channel: "discord",
       to: "discord:dm:u123",
-      message: "✅ Subagent main finished",
+      message: "✅ **Sub-agent `main`** finished",
     });
 
     expect(deletedKey?.startsWith("agent:main:subagent:")).toBe(true);
@@ -369,7 +369,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       sessionKey: "agent:main:discord:group:req",
       channel: "discord",
       to: "discord:dm:u123",
-      message: "✅ Subagent main finished\n\ndone",
+      message: "✅ **Sub-agent `main`** finished\n\n```spoiler Sub-agent output\ndone\n```",
     });
 
     // Session should be deleted
