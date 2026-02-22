@@ -236,9 +236,8 @@ export function formatRelayFooter(
   params: Pick<RelayState, "startedAt" | "toolCount" | "status" | "lastUpdatedAt">,
   now = Date.now(),
 ) {
-  const statusEmoji = params.status === "ok" ? "✅ " : params.status === "error" ? "❌ " : "";
   const callWord = params.toolCount === 1 ? "tool call" : "tool calls";
-  return `${statusEmoji}⏱️ ${formatElapsedShort(params.startedAt, now)} · ${params.toolCount} ${callWord} · updated ${formatRelayUpdatedTime(params.lastUpdatedAt)}`;
+  return `⏱️ ${formatElapsedShort(params.startedAt, now)} · ${params.toolCount} ${callWord} · updated ${formatRelayUpdatedTime(params.lastUpdatedAt)}`;
 }
 
 function escapeMarkdown(value: string) {
@@ -254,10 +253,17 @@ function sanitizeForCodeFence(text: string): string {
   return text.replace(/`{3,}/g, (match) => match.split("").join("\u200B"));
 }
 
+const RELAY_STATUS_EMOJI: Record<string, string> = {
+  running: "🔄",
+  ok: "✅",
+  error: "❌",
+};
+
 function renderRelayMessage(state: RelayState) {
   const callWord = state.toolCount === 1 ? "tool call" : "tool calls";
   const updatedTime = formatRelayUpdatedTime(state.lastUpdatedAt);
-  const header = `🛠️ **\`${state.label}\`** · ${state.toolCount} ${callWord} · updated ${updatedTime}`;
+  const emoji = RELAY_STATUS_EMOJI[state.status ?? "running"] ?? "🔄";
+  const header = `${emoji} **\`${state.label}\`** · ${state.toolCount} ${callWord} · updated ${updatedTime}`;
   const sanitizedLines = state.toolLines.map((line) => sanitizeForCodeFence(line));
   return `${header}\n\n\`\`\`spoiler Tool calls\n${sanitizedLines.join("\n")}\n\`\`\``;
 }

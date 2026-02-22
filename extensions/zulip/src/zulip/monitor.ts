@@ -1343,7 +1343,11 @@ export async function monitorZulipProvider(
         } finally {
           markDispatchIdle();
           // Finalize any remaining tool progress (best-effort final edit).
-          await toolProgress.finalize().catch((err) => {
+          // Use finalizeWithError() on failure so the header shows ❌ instead of ✅.
+          const finalizePromise = ok
+            ? toolProgress.finalize()
+            : toolProgress.finalizeWithError();
+          await finalizePromise.catch((err) => {
             logger.debug?.(`[zulip] tool progress finalize failed: ${String(err)}`);
           });
           // Clean up periodic keepalive timers.

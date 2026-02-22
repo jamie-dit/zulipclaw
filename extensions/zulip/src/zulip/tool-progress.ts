@@ -38,12 +38,21 @@ export type ToolProgressParams = {
  * Each line has a clock-time timestamp prefix.
  * Edits are debounced to avoid excessive API calls during rapid-fire tool use.
  */
+export type ToolProgressStatus = "running" | "success" | "error";
+
+const STATUS_EMOJI: Record<ToolProgressStatus, string> = {
+  running: "🔄",
+  success: "✅",
+  error: "❌",
+};
+
 export class ToolProgressAccumulator {
   private lines: string[] = [];
   private messageId: number | undefined;
   private editTimer: NodeJS.Timeout | undefined;
   private flushInFlight: Promise<void> | undefined;
   private finalized = false;
+  private status: ToolProgressStatus = "running";
   private readonly params: ToolProgressParams;
 
   /** Debounce interval for edits (ms). */
@@ -66,6 +75,19 @@ export class ToolProgressAccumulator {
   /** The Zulip message ID of the batched message (if sent). */
   get sentMessageId(): number | undefined {
     return this.messageId;
+  }
+
+  /** Current status of this accumulator. */
+  get currentStatus(): ToolProgressStatus {
+    return this.status;
+  }
+
+  /**
+   * Update the status (running/success/error). Does not trigger a flush;
+   * the next scheduled or explicit flush will pick up the change.
+   */
+  setStatus(status: ToolProgressStatus): void {
+    this.status = status;
   }
 
   /**
@@ -111,7 +133,8 @@ export class ToolProgressAccumulator {
     const count = this.lines.length;
     const callWord = count === 1 ? "tool call" : "tool calls";
     const lastTimestamp = formatClockTime(Date.now());
-    const header = `🛠️ **\`${name}\`** · ${count} ${callWord} · updated ${lastTimestamp}`;
+    const emoji = STATUS_EMOJI[this.status] ?? "🔄";
+    const header = `${emoji} **\`${name}\`** · ${count} ${callWord} · updated ${lastTimestamp}`;
     const sanitizedLines = this.lines.map((line) =>
       ToolProgressAccumulator.sanitizeForCodeFence(line),
     );
@@ -189,13 +212,37 @@ export class ToolProgressAccumulator {
   }
 
   /**
-   * Finalize the accumulator: cancel debounced edits, do a final flush,
-   * and mark as done. After finalization, no more lines can be added.
+   * Finalize the accumulator: cancel debounced edits, set status to "success",
+   * do a final flush, and mark as done. After finalization, no more lines can be added.
    */
   async finalize(): Promise<void> {
     if (this.finalized) {
       return;
     }
+    this.status = "success";
+    this.finalized = true;
+    this.cancelScheduledFlush();
+    if (this.lines.length > 0) {
+      await this.flush();
+    }
+  }
+
+  /**
+   * Finalize with error status: cancel debounced edits, set status to "error",
+   * do a final flush, and mark as done. If already finalized, updates the status
+   * to "error" and re-flushes to update the displayed emoji.
+   */
+  async finalizeWithError(): Promise<void> {
+    if (this.finalized) {
+      // Already finalized but status may need updating (e.g. dispatch failed
+      // after tool progress was flushed mid-turn).
+      if (this.status !== "error" && this.lines.length > 0) {
+        this.status = "error";
+        await this.flush();
+      }
+      return;
+    }
+    this.status = "error";
     this.finalized = true;
     this.cancelScheduledFlush();
     if (this.lines.length > 0) {
