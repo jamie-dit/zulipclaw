@@ -123,8 +123,8 @@ describe("subagent-restart-recovery", () => {
             ],
           };
         }
-        // message.send for Zulip summary
-        if ((opts as { method: string }).method === "message.send") {
+        // send for Zulip summary
+        if ((opts as { method: string }).method === "send") {
           return { ok: true };
         }
         return {};
@@ -254,15 +254,15 @@ describe("subagent-restart-recovery", () => {
       const { runSubagentRestartRecovery } = await import("./subagent-restart-recovery.js");
       await runSubagentRestartRecovery();
 
-      // Find the Zulip message.send call
+      // Find the Zulip send call
       const sendCalls = hoisted.callGatewayMock.mock.calls.filter(
-        (call: unknown[]) => (call[0] as { method: string }).method === "message.send",
+        (call: unknown[]) => (call[0] as { method: string }).method === "send",
       );
       expect(sendCalls.length).toBeGreaterThanOrEqual(1);
 
       const sendParams = (sendCalls[0][0] as { params: Record<string, string> }).params;
       expect(sendParams.channel).toBe("zulip");
-      expect(sendParams.target).toBe("stream:marcel#infra");
+      expect(sendParams.to).toBe("stream:marcel#infra");
       expect(sendParams.message).toContain("Gateway restarted");
       expect(sendParams.message).toContain("test-task");
     });
