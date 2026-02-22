@@ -530,6 +530,23 @@ export async function startGatewayServer(
     })().catch((err) => log.error(`Delivery recovery failed: ${String(err)}`));
   }
 
+  // Recover sub-agent runs interrupted by the restart (fire-and-forget).
+  if (!minimalTestGateway) {
+    void (async () => {
+      // Delay briefly to allow the gateway to finish initialising channels.
+      await new Promise((r) => setTimeout(r, 5_000));
+      const { runSubagentRestartRecovery } = await import(
+        "../agents/subagent-restart-recovery.js"
+      );
+      const outcomes = await runSubagentRestartRecovery();
+      if (outcomes.length > 0) {
+        log.info(
+          `subagent restart recovery: processed ${outcomes.length} orphaned run(s)`,
+        );
+      }
+    })().catch((err) => log.error(`Subagent restart recovery failed: ${String(err)}`));
+  }
+
   const execApprovalManager = new ExecApprovalManager();
   const execApprovalForwarder = createExecApprovalForwarder();
   const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
