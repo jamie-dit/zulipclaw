@@ -1194,12 +1194,19 @@ export async function monitorZulipProvider(
         runtime.error?.(`[zulip] failed to persist in-flight checkpoint: ${String(err)}`);
       }
 
-      const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
-        cfg,
-        agentId: route.agentId,
-        channel: "zulip",
-        accountId: account.accountId,
-      });
+      const { onModelSelected: originalOnModelSelected, ...prefixOptions } =
+        createReplyPrefixOptions({
+          cfg,
+          agentId: route.agentId,
+          channel: "zulip",
+          accountId: account.accountId,
+        });
+      const onModelSelected = (ctx: { model: string; provider?: string; thinkLevel?: string }) => {
+        originalOnModelSelected(ctx);
+        if (ctx.model) {
+          toolProgress.setModel(ctx.model);
+        }
+      };
 
       let successfulDeliveries = 0;
       const toolProgress = new ToolProgressAccumulator({
@@ -1344,9 +1351,7 @@ export async function monitorZulipProvider(
           markDispatchIdle();
           // Finalize any remaining tool progress (best-effort final edit).
           // Use finalizeWithError() on failure so the header shows ❌ instead of ✅.
-          const finalizePromise = ok
-            ? toolProgress.finalize()
-            : toolProgress.finalizeWithError();
+          const finalizePromise = ok ? toolProgress.finalize() : toolProgress.finalizeWithError();
           await finalizePromise.catch((err) => {
             logger.debug?.(`[zulip] tool progress finalize failed: ${String(err)}`);
           });

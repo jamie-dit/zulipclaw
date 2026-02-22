@@ -27,6 +27,8 @@ export type ToolProgressParams = {
   topic: string;
   /** Display name for the header (e.g. agent name or sub-agent label). */
   name?: string;
+  /** Model identifier shown in the header (e.g. "claude-opus-4-6"). */
+  model?: string;
   abortSignal?: AbortSignal;
   log?: (message: string) => void;
 };
@@ -91,6 +93,15 @@ export class ToolProgressAccumulator {
   }
 
   /**
+   * Set the model identifier shown in the header (e.g. "claude-opus-4-6").
+   * Does not trigger a flush; the next scheduled or explicit flush will pick
+   * up the change.
+   */
+  setModel(model: string): void {
+    this.params = { ...this.params, model };
+  }
+
+  /**
    * Add a tool progress line. The line text should already be formatted
    * (e.g. "🔧 exec: ls -la"). A clock-time timestamp is prepended automatically.
    */
@@ -130,11 +141,13 @@ export class ToolProgressAccumulator {
    */
   private renderMessage(): string {
     const name = this.params.name || "Agent";
+    const model = this.params.model;
+    const modelSegment = model ? ` · ${model}` : "";
     const count = this.lines.length;
     const callWord = count === 1 ? "tool call" : "tool calls";
     const lastTimestamp = formatClockTime(Date.now());
     const emoji = STATUS_EMOJI[this.status] ?? "🔄";
-    const header = `${emoji} **\`${name}\`** · ${count} ${callWord} · updated ${lastTimestamp}`;
+    const header = `${emoji} **\`${name}\`**${modelSegment} · ${count} ${callWord} · updated ${lastTimestamp}`;
     const sanitizedLines = this.lines.map((line) =>
       ToolProgressAccumulator.sanitizeForCodeFence(line),
     );
