@@ -24,7 +24,7 @@ import { spawnSubagentDirect } from "./subagent-spawn.js";
 export type RecoveryOutcome = {
   runId: string;
   label: string;
-  action: "respawned" | "completed-before-restart" | "skipped";
+  action: "respawned" | "skipped";
   detail: string;
 };
 
@@ -182,12 +182,7 @@ function buildZulipSummaryMessage(outcomes: RecoveryOutcome[]): string {
   lines.push("");
 
   for (const outcome of outcomes) {
-    const icon =
-      outcome.action === "respawned"
-        ? "🔁"
-        : outcome.action === "completed-before-restart"
-          ? "✅"
-          : "⏭️";
+    const icon = outcome.action === "respawned" ? "🔁" : "⏭️";
     lines.push(`- ${icon} \`${outcome.label}\` - ${outcome.detail}`);
   }
 
@@ -197,6 +192,10 @@ function buildZulipSummaryMessage(outcomes: RecoveryOutcome[]): string {
 /**
  * Send a summary to Zulip. Uses the outbound delivery system via callGateway
  * so it works from the gateway process context.
+ *
+ * The target is intentionally hardcoded to match the infra notification routing
+ * convention. If this needs to be configurable in the future, it should be
+ * pulled from the OpenClaw config under a dedicated restart-recovery section.
  */
 async function sendZulipSummary(message: string): Promise<void> {
   try {
