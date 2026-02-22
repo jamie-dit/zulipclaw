@@ -10,7 +10,6 @@
  * Called from `server.impl.ts` as a fire-and-forget step after `initSubagentRegistry()`.
  */
 
-import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { defaultRuntime } from "../runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.js";
@@ -53,7 +52,10 @@ async function readSessionProgressSummary(
       .slice(-5);
 
     if (assistantMessages.length === 0) {
-      return { hasHistory: true, progressSummary: "Session existed but no assistant output found." };
+      return {
+        hasHistory: true,
+        progressSummary: "Session existed but no assistant output found.",
+      };
     }
 
     const summaryParts: string[] = [];
@@ -200,16 +202,18 @@ function buildZulipSummaryMessage(outcomes: RecoveryOutcome[]): string {
 async function sendZulipSummary(message: string): Promise<void> {
   try {
     await callGateway({
-      method: "message.send",
+      method: "send",
       params: {
         channel: "zulip",
-        target: "stream:marcel#infra",
+        to: "stream:marcel#infra",
         message,
       },
       timeoutMs: 15_000,
     });
   } catch (err) {
-    defaultRuntime.log?.(`[warn] subagent restart recovery: failed to send Zulip summary: ${String(err)}`);
+    defaultRuntime.log?.(
+      `[warn] subagent restart recovery: failed to send Zulip summary: ${String(err)}`,
+    );
   }
 }
 
@@ -237,9 +241,7 @@ export async function runSubagentRestartRecovery(): Promise<RecoveryOutcome[]> {
     const label = run.label || run.runId.slice(0, 12);
     try {
       // Read session history to determine progress.
-      const { hasHistory, progressSummary } = await readSessionProgressSummary(
-        run.childSessionKey,
-      );
+      const { hasHistory, progressSummary } = await readSessionProgressSummary(run.childSessionKey);
 
       // Mark the old run as terminated regardless of whether we re-spawn.
       markRunTerminatedInRegistry(run.runId);
