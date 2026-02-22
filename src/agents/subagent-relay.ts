@@ -80,6 +80,8 @@ const WATCHDOG_EXEC_BUFFER_MS = 60_000;
 const WATCHDOG_PROCESS_TIMEOUT_MS = 10 * 60_000;
 /** Extended timeout for sessions_spawn/subagents (waiting for child). */
 const WATCHDOG_SPAWN_TIMEOUT_MS = 30 * 60_000;
+/** Debounce delay for writing mirror state to disk. */
+const MIRROR_STATE_SAVE_DEBOUNCE_MS = 500;
 
 const registrationsByRun = new Map<string, SubagentRelayRegistration>();
 const relayByRun = new Map<string, RelayState>();
@@ -147,7 +149,7 @@ function scheduleMirrorStateSave(): void {
   mirrorStateSaveTimer = setTimeout(() => {
     mirrorStateSaveTimer = undefined;
     void writeMirrorStateToDisk();
-  }, 500);
+  }, MIRROR_STATE_SAVE_DEBOUNCE_MS);
   mirrorStateSaveTimer.unref?.();
 }
 
@@ -188,6 +190,8 @@ export async function recoverMirrorState(): Promise<void> {
     );
 
     let changed = false;
+    let recoveredCount = 0;
+    let cleanedCount = 0;
 
     for (const runId of runIds) {
       const entry = entries[runId];
@@ -199,6 +203,7 @@ export async function recoverMirrorState(): Promise<void> {
       if (alive) {
         // Still running — store the message ID so getOrCreateRelayState can restore it
         recoveredMirrorMessageIds.set(runId, entry.mirrorMessageId);
+        recoveredCount += 1;
         defaultRuntime.log?.(
           `[info] subagent relay: run ${runId} still alive, restored mirrorMessageId`,
         );
@@ -230,12 +235,17 @@ export async function recoverMirrorState(): Promise<void> {
       }
       // Always remove from persisted state regardless of edit success
       delete persistedMirrorEntries[runId];
+      cleanedCount += 1;
       changed = true;
     }
 
     if (changed) {
       await writeMirrorStateToDisk();
     }
+
+    defaultRuntime.log?.(
+      `[info] subagent relay: recovery complete — ${recoveredCount} run(s) still active, ${cleanedCount} stale entr${cleanedCount === 1 ? "y" : "ies"} cleaned up`,
+    );
   } catch (err) {
     defaultRuntime.log?.(`[warn] subagent relay: recoverMirrorState failed: ${String(err)}`);
   }
