@@ -25,6 +25,8 @@ export type ToolProgressParams = {
   auth: ZulipAuth;
   stream: string;
   topic: string;
+  /** Display name for the header (e.g. agent name or sub-agent label). */
+  name?: string;
   abortSignal?: AbortSignal;
   log?: (message: string) => void;
 };
@@ -92,10 +94,28 @@ export class ToolProgressAccumulator {
   }
 
   /**
-   * Render the accumulated message content.
+   * Sanitize text for inclusion inside a triple-backtick code fence.
+   * Breaks up runs of 3+ backticks with zero-width spaces so they
+   * don't prematurely close the fence.
+   */
+  private static sanitizeForCodeFence(text: string): string {
+    return text.replace(/`{3,}/g, (match) => match.split("").join("\u200B"));
+  }
+
+  /**
+   * Render the accumulated message content wrapped in a Zulip spoiler
+   * block with a metadata header.
    */
   private renderMessage(): string {
-    return this.lines.join("\n");
+    const name = this.params.name || "Agent";
+    const count = this.lines.length;
+    const callWord = count === 1 ? "tool call" : "tool calls";
+    const lastTimestamp = formatClockTime(Date.now());
+    const header = `🛠️ **\`${name}\`** · ${count} ${callWord} · updated ${lastTimestamp}`;
+    const sanitizedLines = this.lines.map((line) =>
+      ToolProgressAccumulator.sanitizeForCodeFence(line),
+    );
+    return `${header}\n\n\`\`\`spoiler Tool calls\n${sanitizedLines.join("\n")}\n\`\`\``;
   }
 
   /**

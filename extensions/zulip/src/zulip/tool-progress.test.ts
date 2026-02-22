@@ -19,11 +19,12 @@ function makeAuth(): ZulipAuth {
   };
 }
 
-function makeAccumulator(overrides?: { log?: (m: string) => void }) {
+function makeAccumulator(overrides?: { log?: (m: string) => void; name?: string }) {
   return new ToolProgressAccumulator({
     auth: makeAuth(),
     stream: "test-stream",
     topic: "test-topic",
+    name: overrides?.name,
     log: overrides?.log,
   });
 }
@@ -69,7 +70,7 @@ describe("ToolProgressAccumulator", () => {
   it("sends a new message on first flush", async () => {
     vi.mocked(zulipRequestWithRetry).mockResolvedValueOnce({ result: "success", id: 999 });
 
-    const acc = makeAccumulator();
+    const acc = makeAccumulator({ name: "Marcel" });
     acc.addLine("🔧 exec: ls -la");
     await acc.flush();
 
@@ -80,10 +81,17 @@ describe("ToolProgressAccumulator", () => {
     expect(call.form?.type).toBe("stream");
     expect(call.form?.to).toBe("test-stream");
     expect(call.form?.topic).toBe("test-topic");
-    // Content should contain the tool line with a timestamp
+    // Content should contain the tool line with a timestamp inside a spoiler
     const content = String(call.form?.content ?? "");
     expect(content).toContain("🔧 exec: ls -la");
     expect(content).toMatch(/\[\d{1,2}:\d{2}\s*(AM|PM)\]/);
+    // Should have spoiler block
+    expect(content).toContain("```spoiler Tool calls");
+    expect(content).toMatch(/```$/);
+    // Should have header with name and count
+    expect(content).toContain("🛠️ **`Marcel`**");
+    expect(content).toContain("1 tool call");
+    expect(content).toContain("updated");
     expect(acc.hasSentMessage).toBe(true);
     expect(acc.sentMessageId).toBe(999);
   });
@@ -93,7 +101,7 @@ describe("ToolProgressAccumulator", () => {
       .mockResolvedValueOnce({ result: "success", id: 999 }) // send
       .mockResolvedValueOnce({ result: "success" }); // edit
 
-    const acc = makeAccumulator();
+    const acc = makeAccumulator({ name: "Marcel" });
     acc.addLine("🔧 exec: ls -la");
     await acc.flush();
 
@@ -107,6 +115,8 @@ describe("ToolProgressAccumulator", () => {
     const content = String(editCall.form?.content ?? "");
     expect(content).toContain("🔧 exec: ls -la");
     expect(content).toContain("📖 read: /path/to/file.ts");
+    // Header should show updated count
+    expect(content).toContain("2 tool calls");
   });
 
   it("debounces rapid edits", async () => {
@@ -129,6 +139,8 @@ describe("ToolProgressAccumulator", () => {
     expect(content).toContain("cmd1");
     expect(content).toContain("cmd2");
     expect(content).toContain("cmd3");
+    // Header should show 3 tool calls
+    expect(content).toContain("3 tool calls");
   });
 
   it("finalize cancels debounce and does a final flush", async () => {
@@ -184,20 +196,52 @@ describe("ToolProgressAccumulator", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("network error"));
   });
 
-  it("multiple lines each get a timestamp prefix", async () => {
+  it("multiple lines each get a timestamp prefix inside spoiler", async () => {
     vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 300 });
 
-    const acc = makeAccumulator();
+    const acc = makeAccumulator({ name: "TestBot" });
     acc.addLine("🔧 exec: cmd1");
     acc.addLine("📖 read: file.ts");
     await acc.flush();
 
     const content = String(vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "");
-    const lines = content.split("\n");
+    // Extract lines inside the spoiler block
+    const spoilerMatch = content.match(/```spoiler Tool calls\n([\s\S]*?)\n```/);
+    expect(spoilerMatch).not.toBeNull();
+    const spoilerContent = spoilerMatch![1]!;
+    const lines = spoilerContent.split("\n");
     expect(lines).toHaveLength(2);
     // Each line starts with a timestamp
     for (const line of lines) {
       expect(line).toMatch(/^\[\d{1,2}:\d{2}\s*(AM|PM)\]/);
     }
+  });
+
+  it("uses 'Agent' as default name when none provided", async () => {
+    vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 400 });
+
+    const acc = makeAccumulator();
+    acc.addLine("🔧 exec: test");
+    await acc.flush();
+
+    const content = String(vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "");
+    expect(content).toContain("**`Agent`**");
+  });
+
+  it("sanitizes triple backticks in tool lines", async () => {
+    vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 500 });
+
+    const acc = makeAccumulator({ name: "Marcel" });
+    acc.addLine("🔧 exec: echo ```hello```");
+    await acc.flush();
+
+    const content = String(vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "");
+    // The spoiler block should not be broken by the backticks in the tool line.
+    // The sanitizer inserts zero-width spaces between consecutive backticks.
+    const spoilerMatch = content.match(/```spoiler Tool calls\n([\s\S]*?)\n```$/);
+    expect(spoilerMatch).not.toBeNull();
+    // The inner content should NOT contain raw triple backticks
+    const inner = spoilerMatch![1]!;
+    expect(inner).not.toMatch(/`{3}/);
   });
 });
