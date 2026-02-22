@@ -45,17 +45,39 @@ type SubagentAnnounceDeliveryResult = {
   error?: string;
 };
 
+/**
+ * Sanitize text for safe inclusion inside a Zulip triple-backtick fence.
+ * Replaces runs of 3+ consecutive backticks with backticks separated by
+ * zero-width spaces (U+200B) so they don't prematurely close the code fence.
+ */
+export function sanitizeForCodeFence(text: string): string {
+  return text.replace(/`{3,}/g, (match) => match.split("").join("\u200B"));
+}
+
+/**
+ * Strip backticks from a name so it can be safely wrapped in an inline
+ * code span (`` `name` ``) without breaking markdown formatting.
+ */
+export function sanitizeInlineCodeName(name: string): string {
+  return name.replace(/`/g, "");
+}
+
+// NOTE: The spoiler block syntax (```spoiler ... ```) is Zulip-specific.
+// Other chat platforms (Discord, Slack, Telegram, etc.) use different syntax
+// for spoilers/collapsible sections and would need platform-specific adaptation.
 function buildCompletionDeliveryMessage(params: {
   findings: string;
   subagentName: string;
 }): string {
   const findingsText = params.findings.trim();
   const hasFindings = findingsText.length > 0 && findingsText !== "(no output)";
-  const header = `✅ **Sub-agent \`${params.subagentName}\`** finished`;
+  const safeName = sanitizeInlineCodeName(params.subagentName);
+  const header = `✅ **Sub-agent \`${safeName}\`** finished`;
   if (!hasFindings) {
     return header;
   }
-  return `${header}\n\n\`\`\`spoiler Sub-agent output\n${findingsText}\n\`\`\``;
+  const safeFindings = sanitizeForCodeFence(findingsText);
+  return `${header}\n\n\`\`\`spoiler Sub-agent output\n${safeFindings}\n\`\`\``;
 }
 
 function summarizeDeliveryError(error: unknown): string {
