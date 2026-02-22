@@ -27,7 +27,7 @@ export type SubagentRelayRegistration = {
 
 export type WatchdogStatus = "active" | "nudged" | "frozen";
 
-type RelayState = {
+export type RelayState = {
   runId: string;
   messageId?: string;
   label: string;
@@ -289,12 +289,13 @@ export function resolveWatchdogStatusEmoji(watchdogStatus?: WatchdogStatus): str
   }
 }
 
-function renderRelayMessage(state: RelayState) {
+export function renderRelayMessage(state: RelayState) {
   const callWord = state.toolCount === 1 ? "tool call" : "tool calls";
   const updatedTime = formatRelayUpdatedTime(state.lastUpdatedAt);
   const emoji = RELAY_STATUS_EMOJI[state.status ?? "running"] ?? "🔄";
   const watchdogEmoji = resolveWatchdogStatusEmoji(state.watchdogStatus);
-  const header = `${emoji} **\`${state.label}\`** · ${state.toolCount} ${callWord} · updated ${updatedTime}${watchdogEmoji}`;
+  const modelShort = state.model.includes("/") ? state.model.split("/").pop() : state.model;
+  const header = `${emoji} **\`${state.label}\`** · ${modelShort} · ${state.toolCount} ${callWord} · updated ${updatedTime}${watchdogEmoji}`;
   const sanitizedLines = state.toolLines.map((line) => sanitizeForCodeFence(line));
   return `${header}\n\n\`\`\`spoiler Tool calls\n${sanitizedLines.join("\n")}\n\`\`\``;
 }
