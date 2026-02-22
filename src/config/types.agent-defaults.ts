@@ -259,6 +259,12 @@ export type AgentDefaultsConfig = {
       enabled?: boolean;
       /** Relay detail level. */
       level?: "tools" | "full" | "summary";
+      /**
+       * Mirror all relay status messages to a dedicated topic for a consolidated dashboard.
+       * Format: "stream:STREAM_NAME#TOPIC_NAME" (e.g. "stream:marcel#sub-agents").
+       * Mirror failures are best-effort and never block the primary relay.
+       */
+      mirrorTopic?: string;
     };
   };
   /** Optional sandbox settings for non-main sessions. */

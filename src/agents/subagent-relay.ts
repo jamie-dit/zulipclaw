@@ -30,6 +30,8 @@ export type WatchdogStatus = "active" | "nudged" | "frozen";
 export type RelayState = {
   runId: string;
   messageId?: string;
+  /** Message ID of the mirrored relay message, if mirrorTopic is configured. */
+  mirrorMessageId?: string;
   label: string;
   model: string;
   toolLines: string[];
@@ -86,7 +88,21 @@ function resolveRelayConfig() {
   return {
     enabled: relay?.enabled ?? true,
     level: relay?.level ?? "tools",
+    mirrorTopic: relay?.mirrorTopic,
   } as const;
+}
+
+/**
+ * Extract the topic name from a stream:STREAM_NAME#TOPIC delivery target.
+ * Returns undefined if the format does not match.
+ */
+export function extractOriginTopic(to: string): string | undefined {
+  const hashIdx = to.indexOf("#");
+  if (hashIdx < 0) {
+    return undefined;
+  }
+  const topic = to.slice(hashIdx + 1).trim();
+  return topic || undefined;
 }
 
 function isRelayEnabled() {
@@ -289,13 +305,14 @@ export function resolveWatchdogStatusEmoji(watchdogStatus?: WatchdogStatus): str
   }
 }
 
-export function renderRelayMessage(state: RelayState) {
+export function renderRelayMessage(state: RelayState, originTopic?: string) {
   const callWord = state.toolCount === 1 ? "tool call" : "tool calls";
   const updatedTime = formatRelayUpdatedTime(state.lastUpdatedAt);
   const emoji = RELAY_STATUS_EMOJI[state.status ?? "running"] ?? "🔄";
   const watchdogEmoji = resolveWatchdogStatusEmoji(state.watchdogStatus);
   const modelShort = state.model.includes("/") ? state.model.split("/").pop() : state.model;
-  const header = `${emoji} **\`${state.label}\`** · ${modelShort} · ${state.toolCount} ${callWord} · updated ${updatedTime}${watchdogEmoji}`;
+  const originSuffix = originTopic ? ` · 📍 ${originTopic}` : "";
+  const header = `${emoji} **\`${state.label}\`** · ${modelShort} · ${state.toolCount} ${callWord} · updated ${updatedTime}${watchdogEmoji}${originSuffix}`;
   const sanitizedLines = state.toolLines.map((line) => sanitizeForCodeFence(line));
   return `${header}\n\n\`\`\`spoiler Tool calls\n${sanitizedLines.join("\n")}\n\`\`\``;
 }
@@ -387,6 +404,104 @@ async function editRelayMessage(state: RelayState, message: string) {
   }
 }
 
+/**
+ * Validate that a mirrorTopic string is in the expected stream:X#Y format.
+ * Returns false for empty strings or strings missing the '#' topic separator.
+ */
+function isValidMirrorTarget(mirrorTarget: string): boolean {
+  return typeof mirrorTarget === "string" && mirrorTarget.includes("#");
+}
+
+/**
+ * Send a new relay message to the mirror topic (best-effort: never throws).
+ * On success, sets state.mirrorMessageId.
+ */
+async function sendMirrorRelayMessage(
+  state: RelayState,
+  mirrorTarget: string,
+  message: string,
+): Promise<void> {
+  if (!isValidMirrorTarget(mirrorTarget)) {
+    defaultRuntime.log?.(
+      `[warn] subagent relay mirror: invalid mirrorTopic format "${mirrorTarget}" (expected stream:X#Y)`,
+    );
+    return;
+  }
+  try {
+    const cfg = loadConfig();
+    const result = await dispatchChannelMessageAction({
+      channel: "zulip",
+      action: "send",
+      cfg,
+      accountId: state.deliveryContext.accountId,
+      params: {
+        channel: "zulip",
+        target: mirrorTarget,
+        message,
+        accountId: state.deliveryContext.accountId,
+      },
+      dryRun: false,
+    });
+    if (!result) {
+      return;
+    }
+    const messageId = parseMessageId(result);
+    if (messageId) {
+      state.mirrorMessageId = messageId;
+    }
+  } catch (err) {
+    defaultRuntime.log?.(
+      `[warn] subagent relay mirror send failed for run ${state.runId}: ${String(err)}`,
+    );
+  }
+}
+
+/**
+ * Edit the existing mirror relay message (best-effort: never throws).
+ * Falls back to sending a new message if no mirrorMessageId exists or if edit fails.
+ * Resets mirrorMessageId on failure to allow recovery on the next flush.
+ */
+async function editMirrorRelayMessage(
+  state: RelayState,
+  mirrorTarget: string,
+  message: string,
+): Promise<void> {
+  if (!state.mirrorMessageId) {
+    return sendMirrorRelayMessage(state, mirrorTarget, message);
+  }
+  try {
+    const cfg = loadConfig();
+    const result = await dispatchChannelMessageAction({
+      channel: "zulip",
+      action: "edit",
+      cfg,
+      accountId: state.deliveryContext.accountId,
+      params: {
+        channel: "zulip",
+        messageId: state.mirrorMessageId,
+        message,
+        accountId: state.deliveryContext.accountId,
+      },
+      dryRun: false,
+    });
+    if (!result) {
+      defaultRuntime.log?.(
+        `[warn] subagent relay mirror edit returned no result for run ${state.runId}, will retry as send`,
+      );
+      // Reset so next flush attempts a fresh send instead of a failing edit
+      state.mirrorMessageId = undefined;
+      return sendMirrorRelayMessage(state, mirrorTarget, message);
+    }
+  } catch (err) {
+    defaultRuntime.log?.(
+      `[warn] subagent relay mirror edit failed for run ${state.runId}: ${String(err)}, will retry as send`,
+    );
+    // Reset so next flush attempts a fresh send instead of a failing edit
+    state.mirrorMessageId = undefined;
+    await sendMirrorRelayMessage(state, mirrorTarget, message);
+  }
+}
+
 async function flushRelayMessage(runId: string, options?: { finalize?: boolean }) {
   const state = relayByRun.get(runId);
   if (!state) {
@@ -403,6 +518,19 @@ async function flushRelayMessage(runId: string, options?: { finalize?: boolean }
   } catch (err) {
     defaultRuntime.log?.(`[warn] subagent relay flush failed for run ${runId}: ${String(err)}`);
   }
+
+  // Mirror relay: best-effort, never blocks primary
+  const { mirrorTopic } = resolveRelayConfig();
+  if (mirrorTopic) {
+    const originTopic = extractOriginTopic(state.deliveryContext.to);
+    const mirrorMessage = renderRelayMessage(state, originTopic);
+    if (state.mirrorMessageId) {
+      await editMirrorRelayMessage(state, mirrorTopic, mirrorMessage);
+    } else {
+      await sendMirrorRelayMessage(state, mirrorTopic, mirrorMessage);
+    }
+  }
+
   if (options?.finalize) {
     if (state.editTimer) {
       clearTimeout(state.editTimer);

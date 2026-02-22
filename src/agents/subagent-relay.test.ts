@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  extractOriginTopic,
   formatRelayFooter,
   formatRelayUpdatedTime,
   formatToolElapsed,
@@ -106,6 +107,63 @@ describe("subagent-relay", () => {
         deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
       });
       expect(msg).toContain("claude-opus-4-6");
+    });
+
+    it("includes origin topic indicator when originTopic is provided", () => {
+      const msg = renderRelayMessage(
+        {
+          runId: "test-run",
+          label: "mirror-task",
+          model: "anthropic/claude-opus-4-6",
+          toolLines: [],
+          startedAt: 1_000,
+          toolCount: 0,
+          status: "running",
+          lastUpdatedAt: 5_000,
+          deliveryContext: { channel: "zulip", to: "stream:marcel#dreamit" },
+        },
+        "dreamit",
+      );
+      expect(msg).toContain("📍 dreamit");
+    });
+
+    it("does not include origin topic indicator when originTopic is not provided", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "no-mirror-task",
+        model: "anthropic/claude-opus-4-6",
+        toolLines: [],
+        startedAt: 1_000,
+        toolCount: 0,
+        status: "running",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+      expect(msg).not.toContain("📍");
+    });
+  });
+
+  describe("extractOriginTopic", () => {
+    it("extracts topic from stream:STREAM#TOPIC format", () => {
+      expect(extractOriginTopic("stream:marcel#dreamit")).toBe("dreamit");
+    });
+
+    it("extracts topic with spaces and special chars", () => {
+      expect(extractOriginTopic("stream:marcel#zulipclaw: sub-agent topic")).toBe(
+        "zulipclaw: sub-agent topic",
+      );
+    });
+
+    it("returns undefined when no hash present", () => {
+      expect(extractOriginTopic("stream:marcel")).toBeUndefined();
+    });
+
+    it("returns undefined when topic part is empty after hash", () => {
+      expect(extractOriginTopic("stream:marcel#")).toBeUndefined();
+    });
+
+    it("returns undefined for empty string", () => {
+      expect(extractOriginTopic("")).toBeUndefined();
     });
   });
 });

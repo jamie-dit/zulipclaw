@@ -169,6 +169,7 @@ export const AgentDefaultsSchema = z
             level: z
               .union([z.literal("tools"), z.literal("full"), z.literal("summary")])
               .optional(),
+            mirrorTopic: z.string().optional(),
           })
           .strict()
           .optional(),
