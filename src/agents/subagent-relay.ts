@@ -895,7 +895,9 @@ function handleLifecycleEvent(evt: AgentEventPayload) {
   state.watchdogStatus = undefined;
 
   const failed = phase === "error" || evt.data?.aborted === true;
-  state.status = failed ? "error" : "ok";
+  // Preserve "error" status if already set (e.g. by watchdog detecting a dead agent).
+  // A lifecycle "end" event fired after watchdog detection should not overwrite the ❌.
+  state.status = failed || state.status === "error" ? "error" : "ok";
   void flushRelayMessage(evt.runId, { finalize: true });
 }
 
