@@ -65,7 +65,7 @@ export function sanitizeInlineCodeName(name: string): string {
 // NOTE: The spoiler block syntax (```spoiler ... ```) is Zulip-specific.
 // Other chat platforms (Discord, Slack, Telegram, etc.) use different syntax
 // for spoilers/collapsible sections and would need platform-specific adaptation.
-function buildCompletionDeliveryMessage(params: {
+export function buildCompletionDeliveryMessage(params: {
   findings: string;
   subagentName: string;
 }): string {
@@ -864,7 +864,7 @@ export async function runSubagentAnnounceFlow(params: {
     // Build instructional message for main agent
     const announceType = params.announceType ?? "subagent task";
     const taskLabel = params.label || params.task || "task";
-    const subagentName = resolveAgentIdFromSessionKey(params.childSessionKey);
+    const subagentName = params.label || resolveAgentIdFromSessionKey(params.childSessionKey);
     const announceSessionId = childSessionId || "unknown";
     const findings = reply || "(no output)";
     let completionMessage = "";
