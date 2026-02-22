@@ -210,7 +210,7 @@ describe("resolveModel", () => {
     expect(result.model).toMatchObject({
       provider: "anthropic",
       id: "claude-opus-4-6",
-      contextWindow: 1_000_000,
+      contextWindow: 200_000,
     });
   });
 
@@ -236,7 +236,7 @@ describe("resolveModel", () => {
         api: "anthropic-messages",
         baseUrl: "https://api.anthropic.com",
         reasoning: true,
-        contextWindow: 1_000_000,
+        contextWindow: 200_000,
       },
     });
   });
@@ -263,7 +263,7 @@ describe("resolveModel", () => {
         api: "anthropic-messages",
         baseUrl: "https://api.anthropic.com",
         reasoning: true,
-        contextWindow: 1_000_000,
+        contextWindow: 200_000,
       },
     });
   });

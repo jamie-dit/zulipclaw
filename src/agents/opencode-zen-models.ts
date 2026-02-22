@@ -148,7 +148,7 @@ const DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gpt-5.1-codex": 400000,
-  "claude-opus-4-6": 1000000,
+  "claude-opus-4-6": 200000,
   "claude-opus-4-5": 200000,
   "gemini-3-pro": 1048576,
   "gpt-5.1-codex-mini": 400000,

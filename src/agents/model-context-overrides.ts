@@ -1,4 +1,4 @@
-const CLAUDE_46_CONTEXT_WINDOW = 1_000_000;
+const CLAUDE_46_CONTEXT_WINDOW = 200_000;
 
 const KNOWN_CONTEXT_WINDOW_OVERRIDES = new Map<string, number>([
   ["claude-opus-4-6", CLAUDE_46_CONTEXT_WINDOW],
