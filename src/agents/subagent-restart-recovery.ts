@@ -184,9 +184,14 @@ function buildZulipSummaryMessage(outcomes: RecoveryOutcome[]): string {
   const lines = [`🔄 **Gateway restarted.** ${outcomes.length} sub-agent(s) were running:`];
   lines.push("");
 
+  const OUTCOME_ICONS: Record<RecoveryOutcome["action"], string> = {
+    respawned: "🔁",
+    "still-running": "✅",
+    skipped: "⏭️",
+  };
+
   for (const outcome of outcomes) {
-    const icon =
-      outcome.action === "respawned" ? "🔁" : outcome.action === "still-running" ? "✅" : "⏭️";
+    const icon = OUTCOME_ICONS[outcome.action] ?? "❓";
     lines.push(`- ${icon} \`${outcome.label}\` - ${outcome.detail}`);
   }
 
