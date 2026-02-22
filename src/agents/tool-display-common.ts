@@ -523,7 +523,7 @@ function scanTopLevelChars(
 function firstTopLevelStage(command: string): string {
   let splitIndex = -1;
   scanTopLevelChars(command, (char, index) => {
-    if (char === ";") {
+    if (char === ";" || char === "\n") {
       splitIndex = index;
       return false;
     }
@@ -555,7 +555,7 @@ function splitTopLevelPipes(command: string): string[] {
 function stripShellPreamble(command: string): string {
   let rest = command.trim();
 
-  for (let i = 0; i < 4; i += 1) {
+  for (let i = 0; i < 8; i += 1) {
     const andIndex = rest.indexOf("&&");
     const semicolonIndex = rest.indexOf(";");
     const newlineIndex = rest.indexOf("\n");
@@ -571,7 +571,11 @@ function stripShellPreamble(command: string): string {
     const first = candidates[0];
     const head = (first ? rest.slice(0, first.index) : rest).trim();
     const isPreamble =
-      head.startsWith("set ") || head.startsWith("export ") || head.startsWith("unset ");
+      !head ||
+      head.startsWith("#") ||
+      head.startsWith("set ") ||
+      head.startsWith("export ") ||
+      head.startsWith("unset ");
 
     if (!isPreamble) {
       break;
