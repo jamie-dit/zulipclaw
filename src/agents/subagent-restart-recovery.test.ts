@@ -6,7 +6,8 @@ const hoisted = vi.hoisted(() => {
   const spawnMock = vi.fn();
   const loadRegistryMock = vi.fn();
   const saveRegistryMock = vi.fn();
-  return { callGatewayMock, spawnMock, loadRegistryMock, saveRegistryMock };
+  const isRunActiveMock = vi.fn().mockReturnValue(false);
+  return { callGatewayMock, spawnMock, loadRegistryMock, saveRegistryMock, isRunActiveMock };
 });
 
 vi.mock("../gateway/call.js", () => ({
@@ -20,6 +21,10 @@ vi.mock("./subagent-spawn.js", () => ({
 vi.mock("./subagent-registry.store.js", () => ({
   loadSubagentRegistryFromDisk: () => hoisted.loadRegistryMock(),
   saveSubagentRegistryToDisk: (runs: unknown) => hoisted.saveRegistryMock(runs),
+}));
+
+vi.mock("./subagent-registry.js", () => ({
+  isSubagentSessionRunActive: (key: string) => hoisted.isRunActiveMock(key),
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -287,6 +292,149 @@ describe("subagent-restart-recovery", () => {
 
       expect(outcomes).toHaveLength(2);
       expect(hoisted.spawnMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("skips re-spawn when original session is still running", async () => {
+      const run = makeRun({
+        runId: "alive-1",
+        label: "still-alive-task",
+        childSessionKey: "agent:main:subagent:alive-child",
+      });
+      const registry = new Map<string, SubagentRunRecord>();
+      registry.set("alive-1", run);
+      hoisted.loadRegistryMock.mockReturnValue(registry);
+
+      // The original session is still active in the in-memory registry
+      hoisted.isRunActiveMock.mockImplementation(
+        (key: string) => key === "agent:main:subagent:alive-child",
+      );
+
+      hoisted.callGatewayMock.mockResolvedValue({ ok: true });
+
+      const { runSubagentRestartRecovery } = await import("./subagent-restart-recovery.js");
+      const outcomes = await runSubagentRestartRecovery();
+
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0].action).toBe("still-running");
+      expect(outcomes[0].label).toBe("still-alive-task");
+      expect(outcomes[0].detail).toContain("still active");
+
+      // Should NOT have called spawn
+      expect(hoisted.spawnMock).not.toHaveBeenCalled();
+
+      // Should NOT have marked as terminated (the run is still alive)
+      const terminateCalls = hoisted.saveRegistryMock.mock.calls;
+      expect(terminateCalls).toHaveLength(0);
+    });
+
+    it("re-spawns when original session is no longer running", async () => {
+      const run = makeRun({
+        runId: "dead-1",
+        label: "dead-task",
+        childSessionKey: "agent:main:subagent:dead-child",
+      });
+      const registry = new Map<string, SubagentRunRecord>();
+      registry.set("dead-1", run);
+      hoisted.loadRegistryMock.mockReturnValue(registry);
+
+      // The original session is NOT active (dead/completed)
+      hoisted.isRunActiveMock.mockReturnValue(false);
+
+      hoisted.callGatewayMock.mockImplementation((opts: Record<string, unknown>) => {
+        if ((opts as { method: string }).method === "chat.history") {
+          return { messages: [] };
+        }
+        return { ok: true };
+      });
+
+      hoisted.spawnMock.mockResolvedValue({
+        status: "accepted",
+        childSessionKey: "agent:main:subagent:new-child",
+        runId: "new-run",
+      });
+
+      const { runSubagentRestartRecovery } = await import("./subagent-restart-recovery.js");
+      const outcomes = await runSubagentRestartRecovery();
+
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0].action).toBe("respawned");
+      expect(hoisted.spawnMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("handles mix of still-running and dead orphaned runs", async () => {
+      const aliveRun = makeRun({
+        runId: "mix-alive",
+        label: "alive-task",
+        childSessionKey: "agent:main:subagent:alive",
+      });
+      const deadRun = makeRun({
+        runId: "mix-dead",
+        label: "dead-task",
+        childSessionKey: "agent:main:subagent:dead",
+      });
+      const registry = new Map<string, SubagentRunRecord>();
+      registry.set("mix-alive", aliveRun);
+      registry.set("mix-dead", deadRun);
+      hoisted.loadRegistryMock.mockReturnValue(registry);
+
+      // Only the alive-child is active
+      hoisted.isRunActiveMock.mockImplementation(
+        (key: string) => key === "agent:main:subagent:alive",
+      );
+
+      hoisted.callGatewayMock.mockImplementation((opts: Record<string, unknown>) => {
+        if ((opts as { method: string }).method === "chat.history") {
+          return { messages: [] };
+        }
+        return { ok: true };
+      });
+
+      hoisted.spawnMock.mockResolvedValue({
+        status: "accepted",
+        childSessionKey: "agent:main:subagent:new",
+        runId: "new",
+      });
+
+      const { runSubagentRestartRecovery } = await import("./subagent-restart-recovery.js");
+      const outcomes = await runSubagentRestartRecovery();
+
+      expect(outcomes).toHaveLength(2);
+      const aliveOutcome = outcomes.find((o) => o.runId === "mix-alive");
+      const deadOutcome = outcomes.find((o) => o.runId === "mix-dead");
+
+      expect(aliveOutcome?.action).toBe("still-running");
+      expect(deadOutcome?.action).toBe("respawned");
+
+      // Only one spawn call (for the dead run)
+      expect(hoisted.spawnMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("includes still-running in Zulip summary with correct icon", async () => {
+      const run = makeRun({
+        runId: "notify-1",
+        label: "notified-task",
+        childSessionKey: "agent:main:subagent:notify-child",
+      });
+      const registry = new Map<string, SubagentRunRecord>();
+      registry.set("notify-1", run);
+      hoisted.loadRegistryMock.mockReturnValue(registry);
+
+      hoisted.isRunActiveMock.mockReturnValue(true);
+      hoisted.callGatewayMock.mockResolvedValue({ ok: true });
+
+      const { runSubagentRestartRecovery } = await import("./subagent-restart-recovery.js");
+      await runSubagentRestartRecovery();
+
+      // Find the Zulip send call
+      const sendCalls = hoisted.callGatewayMock.mock.calls.filter(
+        (call: unknown[]) => (call[0] as { method: string }).method === "send",
+      );
+      expect(sendCalls.length).toBeGreaterThanOrEqual(1);
+
+      const sendParams = (sendCalls[0][0] as { params: Record<string, string> }).params;
+      expect(sendParams.message).toContain("✅");
+      expect(sendParams.message).toContain("notified-task");
+      expect(sendParams.message).toContain("still active");
     });
   });
 });
