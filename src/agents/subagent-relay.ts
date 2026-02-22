@@ -1,7 +1,10 @@
+import path from "node:path";
 import { dispatchChannelMessageAction } from "../channels/plugins/message-actions.js";
 import { loadConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
+import { readJsonFileWithFallback, writeJsonFileAtomically } from "../plugin-sdk/json-store.js";
 import { defaultRuntime } from "../runtime.js";
 
 /**
@@ -81,6 +84,162 @@ const WATCHDOG_SPAWN_TIMEOUT_MS = 30 * 60_000;
 const registrationsByRun = new Map<string, SubagentRelayRegistration>();
 const relayByRun = new Map<string, RelayState>();
 let listenerInitialized = false;
+
+// ---------------------------------------------------------------------------
+// Mirror state persistence
+// ---------------------------------------------------------------------------
+
+/** Minimal entry persisted to disk so we can edit the mirror message after restart. */
+export type PersistedMirrorEntry = {
+  mirrorMessageId: string;
+  label: string;
+  originTopic?: string;
+  mirrorTopic: string;
+};
+
+type PersistedMirrorFile = {
+  version: 1;
+  entries: Record<string, PersistedMirrorEntry>;
+};
+
+/** In-memory shadow of the persisted entries (avoids reading on every write). */
+let persistedMirrorEntries: Record<string, PersistedMirrorEntry> = {};
+let mirrorStateSaveTimer: NodeJS.Timeout | undefined;
+
+/** Map of runId → mirrorMessageId restored during startup recovery for still-alive runs. */
+const recoveredMirrorMessageIds = new Map<string, string>();
+
+export function resolveMirrorStatePath(): string {
+  const stateDir = resolveStateDir(process.env);
+  return path.join(stateDir, "relay", "mirror-state.json");
+}
+
+async function loadMirrorStateFromDisk(): Promise<Record<string, PersistedMirrorEntry>> {
+  const filePath = resolveMirrorStatePath();
+  const { value } = await readJsonFileWithFallback<PersistedMirrorFile | null>(filePath, null);
+  if (!value || typeof value !== "object" || value.version !== 1) {
+    return {};
+  }
+  const entries = value.entries;
+  if (!entries || typeof entries !== "object") {
+    return {};
+  }
+  return entries;
+}
+
+async function writeMirrorStateToDisk(): Promise<void> {
+  try {
+    const filePath = resolveMirrorStatePath();
+    const payload: PersistedMirrorFile = {
+      version: 1,
+      entries: persistedMirrorEntries,
+    };
+    await writeJsonFileAtomically(filePath, payload);
+  } catch (err) {
+    defaultRuntime.log?.(`[warn] subagent relay: failed to persist mirror state: ${String(err)}`);
+  }
+}
+
+function scheduleMirrorStateSave(): void {
+  if (mirrorStateSaveTimer) {
+    return;
+  }
+  mirrorStateSaveTimer = setTimeout(() => {
+    mirrorStateSaveTimer = undefined;
+    void writeMirrorStateToDisk();
+  }, 500);
+  mirrorStateSaveTimer.unref?.();
+}
+
+function upsertMirrorEntry(runId: string, entry: PersistedMirrorEntry): void {
+  persistedMirrorEntries[runId] = entry;
+  scheduleMirrorStateSave();
+}
+
+function removeMirrorEntry(runId: string): void {
+  if (!(runId in persistedMirrorEntries)) {
+    return;
+  }
+  delete persistedMirrorEntries[runId];
+  scheduleMirrorStateSave();
+}
+
+function renderStaleMirrorMessage(entry: PersistedMirrorEntry): string {
+  const originSuffix = entry.originTopic ? ` · 📍 ${entry.originTopic}` : "";
+  return `❌ **\`${entry.label}\`** · stale (gateway restarted)${originSuffix}\n\n\`\`\`spoiler Tool calls\n(no data — recovered after restart)\n\`\`\``;
+}
+
+/**
+ * Called once at startup: loads persisted mirror entries, checks if runs are
+ * still alive, edits stale messages to ❌, and re-populates recovered IDs for
+ * still-active runs.  Best-effort — never throws.
+ */
+export async function recoverMirrorState(): Promise<void> {
+  try {
+    const entries = await loadMirrorStateFromDisk();
+    persistedMirrorEntries = { ...entries };
+    const runIds = Object.keys(entries);
+    if (runIds.length === 0) {
+      return;
+    }
+
+    defaultRuntime.log?.(
+      `[info] subagent relay: recovering ${runIds.length} stale mirror entr${runIds.length === 1 ? "y" : "ies"}`,
+    );
+
+    let changed = false;
+
+    for (const runId of runIds) {
+      const entry = entries[runId];
+      if (!entry) {
+        continue;
+      }
+      // Check if run is still active
+      const alive = await checkSubagentAlive(runId);
+      if (alive) {
+        // Still running — store the message ID so getOrCreateRelayState can restore it
+        recoveredMirrorMessageIds.set(runId, entry.mirrorMessageId);
+        defaultRuntime.log?.(
+          `[info] subagent relay: run ${runId} still alive, restored mirrorMessageId`,
+        );
+        continue;
+      }
+      // Dead — mark the mirror message as stale
+      defaultRuntime.log?.(
+        `[info] subagent relay: run ${runId} is dead, editing mirror message to ❌`,
+      );
+      try {
+        const cfg = loadConfig();
+        const staleText = renderStaleMirrorMessage(entry);
+        await dispatchChannelMessageAction({
+          channel: "zulip",
+          action: "edit",
+          cfg,
+          accountId: undefined,
+          params: {
+            channel: "zulip",
+            messageId: entry.mirrorMessageId,
+            message: staleText,
+          },
+          dryRun: false,
+        });
+      } catch (editErr) {
+        defaultRuntime.log?.(
+          `[warn] subagent relay: failed to edit stale mirror message for run ${runId}: ${String(editErr)}`,
+        );
+      }
+      // Always remove from persisted state regardless of edit success
+      delete persistedMirrorEntries[runId];
+      changed = true;
+    }
+
+    if (changed) {
+      await writeMirrorStateToDisk();
+    }
+  } catch (err) {
+    defaultRuntime.log?.(`[warn] subagent relay: recoverMirrorState failed: ${String(err)}`);
+  }
+}
 
 function resolveRelayConfig() {
   const cfg = loadConfig();
@@ -448,6 +607,14 @@ async function sendMirrorRelayMessage(
     const messageId = parseMessageId(result);
     if (messageId) {
       state.mirrorMessageId = messageId;
+      // Persist so we can edit/clean up the mirror message after a restart
+      const originTopic = extractOriginTopic(state.deliveryContext.to);
+      upsertMirrorEntry(state.runId, {
+        mirrorMessageId: messageId,
+        label: state.label,
+        originTopic,
+        mirrorTopic: mirrorTarget,
+      });
     }
   } catch (err) {
     defaultRuntime.log?.(
@@ -537,6 +704,8 @@ async function flushRelayMessage(runId: string, options?: { finalize?: boolean }
       state.editTimer = undefined;
     }
     clearWatchdog(state);
+    // Clean up the persisted mirror entry now that the run has completed cleanly
+    removeMirrorEntry(runId);
     relayByRun.delete(runId);
     registrationsByRun.delete(runId);
   }
@@ -589,6 +758,14 @@ function getOrCreateRelayState(runId: string): RelayState | undefined {
     status: "running",
     lastUpdatedAt: startedAt,
   };
+
+  // Restore mirrorMessageId from startup recovery if available
+  const recoveredMirrorId = recoveredMirrorMessageIds.get(runId);
+  if (recoveredMirrorId) {
+    state.mirrorMessageId = recoveredMirrorId;
+    recoveredMirrorMessageIds.delete(runId);
+  }
+
   relayByRun.set(runId, state);
   return state;
 }
@@ -904,6 +1081,10 @@ export function initSubagentRelay() {
     return;
   }
   listenerInitialized = true;
+
+  // Recover stale mirror messages from before the last restart (best-effort)
+  void recoverMirrorState();
+
   onAgentEvent((evt) => {
     if (!evt) {
       return;
