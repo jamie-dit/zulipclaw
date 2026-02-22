@@ -34,6 +34,7 @@ import {
 } from "./reaction-buttons.js";
 import { addZulipReaction, removeZulipReaction } from "./reactions.js";
 import { sendZulipStreamMessage } from "./send.js";
+import { ToolProgressAccumulator } from "./tool-progress.js";
 import { downloadZulipUploads, resolveOutboundMedia, uploadZulipFile } from "./uploads.js";
 
 export type MonitorZulipOptions = {
@@ -1200,11 +1201,42 @@ export async function monitorZulipProvider(
       });
 
       let successfulDeliveries = 0;
+      const toolProgress = new ToolProgressAccumulator({
+        auth,
+        stream,
+        topic,
+        abortSignal: deliverySignal,
+        log: (m) => logger.debug?.(m),
+      });
       const { dispatcher, replyOptions, markDispatchIdle } =
         core.channel.reply.createReplyDispatcherWithTyping({
           ...prefixOptions,
           humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
-          deliver: async (payload: ReplyPayload) => {
+          deliver: async (payload: ReplyPayload, info?: { kind: string }) => {
+            const kind = info?.kind;
+            // Batch tool result summaries into a single message that gets edited.
+            // Only batch text-only tool payloads; media payloads go through normally.
+            const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+            if (kind === "tool" && !hasMedia && payload.text?.trim()) {
+              toolProgress.addLine(payload.text.trim());
+              // Count as a successful delivery since the accumulator handles send/edit.
+              successfulDeliveries += 1;
+              opts.statusSink?.({ lastOutboundAt: Date.now() });
+              core.channel.activity.record({
+                channel: "zulip",
+                accountId: account.accountId,
+                direction: "outbound",
+                at: Date.now(),
+              });
+              return;
+            }
+
+            // Finalize the accumulated tool progress before sending non-tool replies,
+            // so the batched tool message appears above the block/final reply.
+            if (kind !== "tool" && toolProgress.hasContent) {
+              await toolProgress.finalize();
+            }
+
             // Use deliverySignal (not abortSignal) so in-flight replies survive
             // monitor shutdown with a grace period instead of being killed instantly.
             await deliverReply({
@@ -1235,6 +1267,12 @@ export async function monitorZulipProvider(
 
       const stopKeepalive = startPeriodicKeepalive({
         sendPing: async (elapsedMs) => {
+          // If tool progress has an active batched message, update it with
+          // a heartbeat instead of sending a separate keepalive message.
+          if (toolProgress.hasContent) {
+            toolProgress.addHeartbeat(elapsedMs);
+            return;
+          }
           await sendZulipStreamMessage({
             auth,
             stream,
@@ -1302,6 +1340,10 @@ export async function monitorZulipProvider(
           });
         } finally {
           markDispatchIdle();
+          // Finalize any remaining tool progress (best-effort final edit).
+          await toolProgress.finalize().catch((err) => {
+            logger.debug?.(`[zulip] tool progress finalize failed: ${String(err)}`);
+          });
           // Clean up periodic keepalive timers.
           stopKeepalive();
           // Clean up typing refresh interval (before stopTypingIndicator)
