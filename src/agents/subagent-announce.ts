@@ -62,9 +62,21 @@ export function sanitizeInlineCodeName(name: string): string {
   return name.replace(/`/g, "");
 }
 
-// NOTE: The spoiler block syntax (```spoiler ... ```) is Zulip-specific.
-// Other chat platforms (Discord, Slack, Telegram, etc.) use different syntax
-// for spoilers/collapsible sections and would need platform-specific adaptation.
+/**
+ * Builds the completion delivery message for sub-agent announcements.
+ *
+ * This function constructs the user-facing message when a sub-agent completes,
+ * including the sub-agent name and optional findings wrapped in a Zulip-specific
+ * spoiler block.
+ *
+ * @param findings - The sub-agent's output/findings text.
+ * @param subagentName - The name/label of the sub-agent.
+ * @returns The formatted completion message (header + optional spoiler block).
+ *
+ * @remarks Exported primarily for testing. The spoiler block syntax
+ * (```spoiler ... ```) is Zulip-specific; other chat platforms use different
+ * syntax for collapsible sections and would need platform-specific adaptation.
+ */
 export function buildCompletionDeliveryMessage(params: {
   findings: string;
   subagentName: string;
