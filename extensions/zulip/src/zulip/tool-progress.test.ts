@@ -9,7 +9,11 @@ vi.mock("./client.js", () => {
 
 import type { ZulipAuth } from "./client.js";
 import { zulipRequestWithRetry } from "./client.js";
-import { formatClockTime, ToolProgressAccumulator, type ToolProgressStatus } from "./tool-progress.js";
+import {
+  formatClockTime,
+  ToolProgressAccumulator,
+  type ToolProgressStatus,
+} from "./tool-progress.js";
 
 function makeAuth(): ZulipAuth {
   return {
@@ -299,9 +303,9 @@ describe("ToolProgressAccumulator", () => {
 
   it("finalizeWithError after finalize updates emoji to ❌", async () => {
     vi.mocked(zulipRequestWithRetry)
-      .mockResolvedValueOnce({ result: "success", id: 900 })  // initial send
-      .mockResolvedValueOnce({ result: "success" })            // finalize flush
-      .mockResolvedValueOnce({ result: "success" });           // error re-flush
+      .mockResolvedValueOnce({ result: "success", id: 900 }) // initial send
+      .mockResolvedValueOnce({ result: "success" }) // finalize flush
+      .mockResolvedValueOnce({ result: "success" }); // error re-flush
 
     const acc = makeAccumulator({ name: "worker" });
     acc.addLine("🔧 exec: test");
@@ -348,5 +352,82 @@ describe("ToolProgressAccumulator", () => {
     await acc.finalizeWithError();
     expect(zulipRequestWithRetry).not.toHaveBeenCalled();
     expect(acc.currentStatus).toBe("error");
+  });
+
+  describe("model in header", () => {
+    it("includes model name in header when set via constructor", async () => {
+      vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 1100 });
+
+      const acc = new ToolProgressAccumulator({
+        auth: makeAuth(),
+        stream: "test-stream",
+        topic: "test-topic",
+        name: "Marcel",
+        model: "claude-opus-4-6",
+      });
+      acc.addLine("🔧 exec: ls");
+      await acc.flush();
+
+      const content = String(
+        vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "",
+      );
+      expect(content).toContain("**`Marcel`** · claude-opus-4-6 · 1 tool call");
+    });
+
+    it("includes model name in header when set via setModel()", async () => {
+      vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 1200 });
+
+      const acc = makeAccumulator({ name: "Marcel" });
+      acc.setModel("claude-sonnet-4-20250514");
+      acc.addLine("🔧 exec: ls");
+      await acc.flush();
+
+      const content = String(
+        vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "",
+      );
+      expect(content).toContain("**`Marcel`** · claude-sonnet-4-20250514 · 1 tool call");
+    });
+
+    it("header works without model (backward compat)", async () => {
+      vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 1300 });
+
+      const acc = makeAccumulator({ name: "Marcel" });
+      acc.addLine("🔧 exec: ls");
+      await acc.flush();
+
+      const content = String(
+        vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "",
+      );
+      // Should have name directly followed by tool count (no model segment)
+      expect(content).toContain("**`Marcel`** · 1 tool call");
+      // Should NOT have a double separator that would indicate an empty model segment
+      expect(content).not.toMatch(/\*\*`Marcel`\*\* · · /);
+    });
+
+    it("setModel updates model shown on subsequent flushes", async () => {
+      vi.mocked(zulipRequestWithRetry)
+        .mockResolvedValueOnce({ result: "success", id: 1400 })
+        .mockResolvedValueOnce({ result: "success" });
+
+      const acc = makeAccumulator({ name: "Marcel" });
+      acc.addLine("🔧 exec: cmd1");
+      await acc.flush();
+
+      // First flush has no model
+      const content1 = String(
+        vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "",
+      );
+      expect(content1).not.toContain("claude-opus-4-6");
+
+      // Set model and flush again
+      acc.setModel("claude-opus-4-6");
+      acc.addLine("🔧 exec: cmd2");
+      await acc.flush();
+
+      const content2 = String(
+        vi.mocked(zulipRequestWithRetry).mock.calls[1]![0].form?.content ?? "",
+      );
+      expect(content2).toContain("**`Marcel`** · claude-opus-4-6 · 2 tool calls");
+    });
   });
 });
