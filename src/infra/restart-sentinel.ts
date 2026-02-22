@@ -134,6 +134,14 @@ export function summarizeRestartSentinel(payload: RestartSentinelPayload): strin
   return `Gateway restart ${kind} ${status}${mode}`.trim();
 }
 
+/** Wrap text in a Zulip quote block (`> ` prefix per line). */
+export function wrapInQuoteBlock(text: string): string {
+  return text
+    .split("\n")
+    .map((l) => `> ${l}`)
+    .join("\n");
+}
+
 export function trimLogTail(input?: string | null, maxChars = 8000) {
   if (!input) {
     return null;
