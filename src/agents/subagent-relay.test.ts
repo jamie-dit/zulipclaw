@@ -4,6 +4,7 @@ import {
   formatRelayUpdatedTime,
   formatToolElapsed,
   formatToolLine,
+  renderRelayMessage,
 } from "./subagent-relay.js";
 
 describe("subagent-relay", () => {
@@ -72,6 +73,39 @@ describe("subagent-relay", () => {
       );
       expect(footer).toContain("⏱️ 31s · 5 tool calls · updated ");
       expect(footer).toMatch(/updated\s+\d{1,2}:\d{2}/);
+    });
+  });
+
+  describe("renderRelayMessage", () => {
+    it("includes short model name in header (strips provider prefix)", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "sync-configs",
+        model: "anthropic/claude-opus-4-6",
+        toolLines: ["📄 read file.ts +0:01"],
+        startedAt: 1_000,
+        toolCount: 1,
+        status: "running",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+      expect(msg).toContain("claude-opus-4-6");
+      expect(msg).not.toContain("anthropic/");
+    });
+
+    it("uses model name as-is when no provider prefix", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "quick-task",
+        model: "claude-opus-4-6",
+        toolLines: [],
+        startedAt: 1_000,
+        toolCount: 0,
+        status: "running",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+      expect(msg).toContain("claude-opus-4-6");
     });
   });
 });
