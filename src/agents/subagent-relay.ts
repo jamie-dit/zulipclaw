@@ -1,5 +1,6 @@
 import { dispatchChannelMessageAction } from "../channels/plugins/message-actions.js";
 import { loadConfig } from "../config/config.js";
+import { callGateway } from "../gateway/call.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { defaultRuntime } from "../runtime.js";
 
@@ -20,7 +21,11 @@ export type SubagentRelayRegistration = {
   model?: string;
   startedAt?: number;
   deliveryContext?: SubagentRelayDeliveryContext;
+  /** Child session key — used by the watchdog to steer idle sub-agents. */
+  childSessionKey?: string;
 };
+
+export type WatchdogStatus = "active" | "nudged" | "frozen";
 
 type RelayState = {
   runId: string;
@@ -38,6 +43,13 @@ type RelayState = {
   toolCount: number;
   status?: "running" | "ok" | "error";
   lastUpdatedAt: number;
+  /** Watchdog fields */
+  watchdogTimer?: NodeJS.Timeout;
+  watchdogFollowUpTimer?: NodeJS.Timeout;
+  watchdogStatus?: WatchdogStatus;
+  watchdogNudgedAt?: number;
+  lastToolName?: string;
+  lastToolArgs?: Record<string, unknown>;
 };
 
 const TOOL_EMOJI: Record<string, string> = {
@@ -52,6 +64,17 @@ const TOOL_EMOJI: Record<string, string> = {
   memory_search: "🧠",
   sessions_spawn: "🧑‍💻",
 };
+
+/** Default watchdog idle timeout: 5 minutes. */
+export const WATCHDOG_DEFAULT_TIMEOUT_MS = 5 * 60_000;
+/** Follow-up timeout after nudge: 2 minutes. */
+export const WATCHDOG_NUDGE_FOLLOWUP_MS = 2 * 60_000;
+/** Buffer added to long exec timeouts. */
+const WATCHDOG_EXEC_BUFFER_MS = 60_000;
+/** Extended timeout for process polling actions. */
+const WATCHDOG_PROCESS_TIMEOUT_MS = 10 * 60_000;
+/** Extended timeout for sessions_spawn/subagents (waiting for child). */
+const WATCHDOG_SPAWN_TIMEOUT_MS = 30 * 60_000;
 
 const registrationsByRun = new Map<string, SubagentRelayRegistration>();
 const relayByRun = new Map<string, RelayState>();
@@ -240,10 +263,6 @@ export function formatRelayFooter(
   return `⏱️ ${formatElapsedShort(params.startedAt, now)} · ${params.toolCount} ${callWord} · updated ${formatRelayUpdatedTime(params.lastUpdatedAt)}`;
 }
 
-function escapeMarkdown(value: string) {
-  return value.replace(/[*_`]/g, "\\$&");
-}
-
 /**
  * Sanitize text for inclusion inside a triple-backtick code fence.
  * Breaks up runs of 3+ backticks with zero-width spaces so they
@@ -259,11 +278,23 @@ const RELAY_STATUS_EMOJI: Record<string, string> = {
   error: "❌",
 };
 
+export function resolveWatchdogStatusEmoji(watchdogStatus?: WatchdogStatus): string {
+  switch (watchdogStatus) {
+    case "nudged":
+      return " ⏳";
+    case "frozen":
+      return " ⚠️";
+    default:
+      return "";
+  }
+}
+
 function renderRelayMessage(state: RelayState) {
   const callWord = state.toolCount === 1 ? "tool call" : "tool calls";
   const updatedTime = formatRelayUpdatedTime(state.lastUpdatedAt);
   const emoji = RELAY_STATUS_EMOJI[state.status ?? "running"] ?? "🔄";
-  const header = `${emoji} **\`${state.label}\`** · ${state.toolCount} ${callWord} · updated ${updatedTime}`;
+  const watchdogEmoji = resolveWatchdogStatusEmoji(state.watchdogStatus);
+  const header = `${emoji} **\`${state.label}\`** · ${state.toolCount} ${callWord} · updated ${updatedTime}${watchdogEmoji}`;
   const sanitizedLines = state.toolLines.map((line) => sanitizeForCodeFence(line));
   return `${header}\n\n\`\`\`spoiler Tool calls\n${sanitizedLines.join("\n")}\n\`\`\``;
 }
@@ -376,6 +407,7 @@ async function flushRelayMessage(runId: string, options?: { finalize?: boolean }
       clearTimeout(state.editTimer);
       state.editTimer = undefined;
     }
+    clearWatchdog(state);
     relayByRun.delete(runId);
     registrationsByRun.delete(runId);
   }
@@ -432,6 +464,248 @@ function getOrCreateRelayState(runId: string): RelayState | undefined {
   return state;
 }
 
+// ---------------------------------------------------------------------------
+// Watchdog: detect frozen sub-agents
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute the watchdog timeout for a given tool call based on smart exclusions.
+ *
+ * Long-running `exec` commands, `process` polling, and sub-agent spawning
+ * all get extended timeouts instead of the default 5 minutes.
+ */
+export function computeWatchdogTimeoutMs(toolName: string, args: Record<string, unknown>): number {
+  const normalizedName = toolName.trim().toLowerCase();
+
+  // exec with explicit timeout > 5 minutes → extend to match
+  if (normalizedName === "exec") {
+    const timeout =
+      typeof args.timeout === "number" && Number.isFinite(args.timeout) ? args.timeout : 0;
+    const timeoutMs = timeout * 1000;
+    if (timeoutMs > WATCHDOG_DEFAULT_TIMEOUT_MS) {
+      return timeoutMs + WATCHDOG_EXEC_BUFFER_MS;
+    }
+  }
+
+  // process actions (polling background processes) → 10 min
+  if (normalizedName === "process") {
+    const pollTimeout =
+      typeof args.timeout === "number" && Number.isFinite(args.timeout) ? args.timeout : 0;
+    if (pollTimeout > 0) {
+      return Math.max(WATCHDOG_PROCESS_TIMEOUT_MS, pollTimeout + WATCHDOG_EXEC_BUFFER_MS);
+    }
+    return WATCHDOG_PROCESS_TIMEOUT_MS;
+  }
+
+  // sessions_spawn or subagents → waiting for child sub-agent
+  if (normalizedName === "sessions_spawn" || normalizedName === "subagents") {
+    return WATCHDOG_SPAWN_TIMEOUT_MS;
+  }
+
+  return WATCHDOG_DEFAULT_TIMEOUT_MS;
+}
+
+function clearWatchdog(state: RelayState): void {
+  if (state.watchdogTimer) {
+    clearTimeout(state.watchdogTimer);
+    state.watchdogTimer = undefined;
+  }
+  if (state.watchdogFollowUpTimer) {
+    clearTimeout(state.watchdogFollowUpTimer);
+    state.watchdogFollowUpTimer = undefined;
+  }
+}
+
+async function steerSubagent(runId: string, message: string): Promise<boolean> {
+  try {
+    const registration = registrationsByRun.get(runId);
+    const childSessionKey = registration?.childSessionKey?.trim();
+    if (!childSessionKey) {
+      defaultRuntime.log?.(`[watchdog] Cannot steer run ${runId}: no child session key`);
+      return false;
+    }
+
+    const idempotencyKey = `watchdog-${runId}-${Date.now()}`;
+    await callGateway({
+      method: "agent",
+      params: {
+        message,
+        sessionKey: childSessionKey,
+        idempotencyKey,
+        deliver: false,
+        channel: "internal",
+        lane: "subagent",
+        timeout: 0,
+      },
+      timeoutMs: 10_000,
+    });
+    return true;
+  } catch (err) {
+    defaultRuntime.log?.(
+      `[watchdog] Failed to steer run ${runId}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return false;
+  }
+}
+
+async function checkSubagentAlive(runId: string): Promise<boolean> {
+  try {
+    const result = await callGateway<{ status?: string }>({
+      method: "agent.wait",
+      params: { runId, timeoutMs: 100 },
+      timeoutMs: 5_000,
+    });
+    // If wait returns immediately with ok/error/timeout status, the agent has ended
+    if (result?.status === "ok" || result?.status === "error" || result?.status === "timeout") {
+      return false;
+    }
+    return true;
+  } catch {
+    // If the call fails, assume alive (don't false-positive)
+    return true;
+  }
+}
+
+async function sendWatchdogNotification(state: RelayState, message: string): Promise<void> {
+  try {
+    const cfg = loadConfig();
+    await dispatchChannelMessageAction({
+      channel: "zulip",
+      action: "send",
+      cfg,
+      accountId: state.deliveryContext.accountId,
+      params: {
+        channel: "zulip",
+        target: state.deliveryContext.to,
+        message,
+        accountId: state.deliveryContext.accountId,
+      },
+      dryRun: false,
+    });
+  } catch (err) {
+    defaultRuntime.log?.(
+      `[watchdog] Failed to send notification for run ${state.runId}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+async function onWatchdogFired(runId: string): Promise<void> {
+  const state = relayByRun.get(runId);
+  if (!state || state.status === "ok" || state.status === "error") {
+    return;
+  }
+
+  defaultRuntime.log?.(
+    `[watchdog] Idle timeout fired for sub-agent "${state.label}" (run ${runId})`,
+  );
+
+  // Check if the sub-agent is still alive
+  const alive = await checkSubagentAlive(runId);
+
+  if (!alive) {
+    // Sub-agent is dead/timed out
+    defaultRuntime.log?.(`[watchdog] Sub-agent "${state.label}" (run ${runId}) is dead`);
+    state.watchdogStatus = "frozen";
+    state.status = "error";
+    void flushRelayMessage(runId);
+    await sendWatchdogNotification(
+      state,
+      `⚠️ **Watchdog**: Sub-agent \`${state.label}\` appears to have died (no tool calls for 5+ minutes, session not active). Run: \`${runId}\``,
+    );
+    return;
+  }
+
+  // Sub-agent is alive but idle → nudge it
+  defaultRuntime.log?.(`[watchdog] Nudging idle sub-agent "${state.label}" (run ${runId})`);
+  state.watchdogStatus = "nudged";
+  state.watchdogNudgedAt = Date.now();
+  void flushRelayMessage(runId);
+
+  const steered = await steerSubagent(
+    runId,
+    "Watchdog: No tool calls in 5 minutes. Are you stuck? If waiting for something, describe what you're waiting for.",
+  );
+
+  if (!steered) {
+    defaultRuntime.log?.(
+      `[watchdog] Failed to steer sub-agent "${state.label}" (run ${runId}), notifying`,
+    );
+    state.watchdogStatus = "frozen";
+    void flushRelayMessage(runId);
+    await sendWatchdogNotification(
+      state,
+      `⚠️ **Watchdog**: Sub-agent \`${state.label}\` idle for 5+ minutes and could not be steered. Run: \`${runId}\``,
+    );
+    return;
+  }
+
+  // Set follow-up timer: if no activity within 2 more minutes, mark as frozen
+  state.watchdogFollowUpTimer = setTimeout(() => {
+    void onWatchdogFollowUpFired(runId);
+  }, WATCHDOG_NUDGE_FOLLOWUP_MS);
+  state.watchdogFollowUpTimer.unref?.();
+}
+
+async function onWatchdogFollowUpFired(runId: string): Promise<void> {
+  const state = relayByRun.get(runId);
+  if (!state) {
+    return;
+  }
+
+  // If there was activity since the nudge, the watchdog was already reset
+  if (state.watchdogStatus !== "nudged") {
+    return;
+  }
+
+  defaultRuntime.log?.(
+    `[watchdog] Sub-agent "${state.label}" (run ${runId}) did not respond within 2 minutes of nudge`,
+  );
+
+  state.watchdogStatus = "frozen";
+  void flushRelayMessage(runId);
+
+  await sendWatchdogNotification(
+    state,
+    `🚨 **Watchdog**: Sub-agent \`${state.label}\` did not respond within 2 minutes after nudge. Likely frozen. Run: \`${runId}\``,
+  );
+}
+
+function resetWatchdog(runId: string, toolName: string, args: Record<string, unknown>): void {
+  const state = relayByRun.get(runId);
+  if (!state) {
+    return;
+  }
+
+  // Clear any existing watchdog timers
+  clearWatchdog(state);
+
+  // Reset watchdog status if it was nudged/frozen (activity resumed)
+  if (state.watchdogStatus === "nudged" || state.watchdogStatus === "frozen") {
+    const wasNudgedOrFrozen = state.watchdogStatus;
+    state.watchdogStatus = "active";
+    if (wasNudgedOrFrozen) {
+      defaultRuntime.log?.(`[watchdog] Sub-agent "${state.label}" (run ${runId}) resumed activity`);
+    }
+  } else {
+    state.watchdogStatus = "active";
+  }
+
+  // Store last tool info for smart exclusion checks
+  state.lastToolName = toolName;
+  state.lastToolArgs = args;
+
+  // Compute timeout and set new timer
+  const timeoutMs = computeWatchdogTimeoutMs(toolName, args);
+  state.watchdogTimer = setTimeout(() => {
+    void onWatchdogFired(runId);
+  }, timeoutMs);
+  state.watchdogTimer.unref?.();
+}
+
+// ---------------------------------------------------------------------------
+// Tool and lifecycle event handlers
+// ---------------------------------------------------------------------------
+
 function handleToolEvent(evt: AgentEventPayload) {
   if (!isRelayEnabled()) {
     return;
@@ -446,6 +720,7 @@ function handleToolEvent(evt: AgentEventPayload) {
     return;
   }
   const args = evt.data?.args;
+  const argsRecord = readRecord(args);
   const startedAt =
     typeof state.startedAt === "number" && Number.isFinite(state.startedAt)
       ? state.startedAt
@@ -455,6 +730,9 @@ function handleToolEvent(evt: AgentEventPayload) {
   state.toolLines.push(line);
   state.toolCount += 1;
   scheduleRelayFlush(evt.runId);
+
+  // Reset watchdog timer on every tool call
+  resetWatchdog(evt.runId, toolName, argsRecord);
 }
 
 function handleLifecycleEvent(evt: AgentEventPayload) {
@@ -483,6 +761,10 @@ function handleLifecycleEvent(evt: AgentEventPayload) {
     registrationsByRun.delete(evt.runId);
     return;
   }
+  // Clear watchdog — the run is finished
+  clearWatchdog(state);
+  state.watchdogStatus = undefined;
+
   const failed = phase === "error" || evt.data?.aborted === true;
   state.status = failed ? "error" : "ok";
   void flushRelayMessage(evt.runId, { finalize: true });
@@ -530,8 +812,11 @@ export function unregisterSubagentRelayRun(runId: string) {
     return;
   }
   const state = relayByRun.get(key);
-  if (state?.editTimer) {
-    clearTimeout(state.editTimer);
+  if (state) {
+    if (state.editTimer) {
+      clearTimeout(state.editTimer);
+    }
+    clearWatchdog(state);
   }
   relayByRun.delete(key);
   registrationsByRun.delete(key);
