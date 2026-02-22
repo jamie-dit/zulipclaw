@@ -44,6 +44,7 @@ vi.mock("./client.js", () => ({
 
 vi.mock("./send.js", () => ({
   sendZulipStreamMessage: mocks.sendZulipStreamMessage,
+  editZulipStreamMessage: vi.fn(async () => ({ result: "success" })),
 }));
 
 vi.mock("./uploads.js", () => ({

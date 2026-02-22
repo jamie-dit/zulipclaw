@@ -17,6 +17,7 @@ vi.mock("./reactions.js", () => {
 vi.mock("./send.js", () => {
   return {
     sendZulipStreamMessage: vi.fn(async () => ({ result: "success", id: 12345 })),
+    editZulipStreamMessage: vi.fn(async () => ({ result: "success" })),
   };
 });
 

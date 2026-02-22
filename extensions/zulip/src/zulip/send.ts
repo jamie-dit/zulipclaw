@@ -26,3 +26,21 @@ export async function sendZulipStreamMessage(params: {
     retry: { maxRetries: 5, baseDelayMs: 1000, maxDelayMs: 20_000 },
   });
 }
+
+export async function editZulipStreamMessage(params: {
+  auth: ZulipAuth;
+  messageId: number;
+  content: string;
+  abortSignal?: AbortSignal;
+}): Promise<ZulipApiSuccess> {
+  return await zulipRequestWithRetry<ZulipApiSuccess>({
+    auth: params.auth,
+    method: "PATCH",
+    path: `/api/v1/messages/${encodeURIComponent(String(params.messageId))}`,
+    form: {
+      content: params.content,
+    },
+    abortSignal: params.abortSignal,
+    retry: { maxRetries: 3, baseDelayMs: 500, maxDelayMs: 5_000 },
+  });
+}
