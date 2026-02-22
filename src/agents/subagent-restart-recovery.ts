@@ -13,6 +13,7 @@
 import { callGateway } from "../gateway/call.js";
 import { defaultRuntime } from "../runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.js";
+import { isSubagentSessionRunActive } from "./subagent-registry.js";
 import {
   loadSubagentRegistryFromDisk,
   saveSubagentRegistryToDisk,
@@ -23,7 +24,7 @@ import { spawnSubagentDirect } from "./subagent-spawn.js";
 export type RecoveryOutcome = {
   runId: string;
   label: string;
-  action: "respawned" | "skipped";
+  action: "respawned" | "skipped" | "still-running";
   detail: string;
 };
 
@@ -184,7 +185,8 @@ function buildZulipSummaryMessage(outcomes: RecoveryOutcome[]): string {
   lines.push("");
 
   for (const outcome of outcomes) {
-    const icon = outcome.action === "respawned" ? "🔁" : "⏭️";
+    const icon =
+      outcome.action === "respawned" ? "🔁" : outcome.action === "still-running" ? "✅" : "⏭️";
     lines.push(`- ${icon} \`${outcome.label}\` - ${outcome.detail}`);
   }
 
@@ -240,6 +242,23 @@ export async function runSubagentRestartRecovery(): Promise<RecoveryOutcome[]> {
   for (const run of orphaned) {
     const label = run.label || run.runId.slice(0, 12);
     try {
+      // Check if the original session's run is still active in the in-memory registry.
+      // After a restart, `initSubagentRegistry()` restores runs from disk and
+      // `resumeSubagentRun()` re-attaches watchers for still-alive sessions.
+      // If the run is still active there, re-spawning would create a duplicate.
+      if (isSubagentSessionRunActive(run.childSessionKey)) {
+        outcomes.push({
+          runId: run.runId,
+          label,
+          action: "still-running",
+          detail: "Original session still active, skipping re-spawn",
+        });
+        defaultRuntime.log?.(
+          `[info] subagent restart recovery: ${label} still active in registry, skipping re-spawn`,
+        );
+        continue;
+      }
+
       // Read session history to determine progress.
       const { hasHistory, progressSummary } = await readSessionProgressSummary(run.childSessionKey);
 
