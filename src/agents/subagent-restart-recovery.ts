@@ -214,6 +214,7 @@ async function sendZulipSummary(message: string): Promise<void> {
         channel: "zulip",
         to: "stream:marcel#infra",
         message,
+        idempotencyKey: crypto.randomUUID(),
       },
       timeoutMs: 15_000,
     });
