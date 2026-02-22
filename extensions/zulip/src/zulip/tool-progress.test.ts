@@ -9,7 +9,7 @@ vi.mock("./client.js", () => {
 
 import type { ZulipAuth } from "./client.js";
 import { zulipRequestWithRetry } from "./client.js";
-import { formatClockTime, ToolProgressAccumulator } from "./tool-progress.js";
+import { formatClockTime, ToolProgressAccumulator, type ToolProgressStatus } from "./tool-progress.js";
 
 function makeAuth(): ZulipAuth {
   return {
@@ -88,8 +88,8 @@ describe("ToolProgressAccumulator", () => {
     // Should have spoiler block
     expect(content).toContain("```spoiler Tool calls");
     expect(content).toMatch(/```$/);
-    // Should have header with name and count
-    expect(content).toContain("🛠️ **`Marcel`**");
+    // Should have header with status emoji, name and count
+    expect(content).toContain("🔄 **`Marcel`**");
     expect(content).toContain("1 tool call");
     expect(content).toContain("updated");
     expect(acc.hasSentMessage).toBe(true);
@@ -243,5 +243,110 @@ describe("ToolProgressAccumulator", () => {
     // The inner content should NOT contain raw triple backticks
     const inner = spoilerMatch![1]!;
     expect(inner).not.toMatch(/`{3}/);
+  });
+
+  it("shows 🔄 emoji while running (default status)", async () => {
+    vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 600 });
+
+    const acc = makeAccumulator({ name: "worker" });
+    expect(acc.currentStatus).toBe("running");
+    acc.addLine("🔧 exec: ls");
+    await acc.flush();
+
+    const content = String(vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "");
+    expect(content).toContain("🔄 **`worker`**");
+    expect(content).not.toContain("✅");
+    expect(content).not.toContain("❌");
+  });
+
+  it("finalize sets status to success and shows ✅ emoji", async () => {
+    vi.mocked(zulipRequestWithRetry)
+      .mockResolvedValueOnce({ result: "success", id: 700 })
+      .mockResolvedValueOnce({ result: "success" });
+
+    const acc = makeAccumulator({ name: "worker" });
+    acc.addLine("🔧 exec: build");
+    await acc.flush();
+
+    await acc.finalize();
+    expect(acc.currentStatus).toBe("success");
+
+    // The finalize flush should show ✅
+    const editCall = vi.mocked(zulipRequestWithRetry).mock.calls[1]![0];
+    const content = String(editCall.form?.content ?? "");
+    expect(content).toContain("✅ **`worker`**");
+    expect(content).not.toContain("🔄");
+  });
+
+  it("finalizeWithError sets status to error and shows ❌ emoji", async () => {
+    vi.mocked(zulipRequestWithRetry)
+      .mockResolvedValueOnce({ result: "success", id: 800 })
+      .mockResolvedValueOnce({ result: "success" });
+
+    const acc = makeAccumulator({ name: "worker" });
+    acc.addLine("🔧 exec: deploy");
+    await acc.flush();
+
+    await acc.finalizeWithError();
+    expect(acc.currentStatus).toBe("error");
+
+    const editCall = vi.mocked(zulipRequestWithRetry).mock.calls[1]![0];
+    const content = String(editCall.form?.content ?? "");
+    expect(content).toContain("❌ **`worker`**");
+    expect(content).not.toContain("🔄");
+    expect(content).not.toContain("✅");
+  });
+
+  it("finalizeWithError after finalize updates emoji to ❌", async () => {
+    vi.mocked(zulipRequestWithRetry)
+      .mockResolvedValueOnce({ result: "success", id: 900 })  // initial send
+      .mockResolvedValueOnce({ result: "success" })            // finalize flush
+      .mockResolvedValueOnce({ result: "success" });           // error re-flush
+
+    const acc = makeAccumulator({ name: "worker" });
+    acc.addLine("🔧 exec: test");
+    await acc.flush();
+
+    // First finalize (success)
+    await acc.finalize();
+    expect(acc.currentStatus).toBe("success");
+
+    // Then error occurs — finalizeWithError should override
+    await acc.finalizeWithError();
+    expect(acc.currentStatus).toBe("error");
+
+    // Should have flushed a third time with ❌
+    expect(zulipRequestWithRetry).toHaveBeenCalledTimes(3);
+    const errorEditCall = vi.mocked(zulipRequestWithRetry).mock.calls[2]![0];
+    const content = String(errorEditCall.form?.content ?? "");
+    expect(content).toContain("❌ **`worker`**");
+  });
+
+  it("setStatus changes emoji on next flush", async () => {
+    vi.mocked(zulipRequestWithRetry)
+      .mockResolvedValueOnce({ result: "success", id: 1000 })
+      .mockResolvedValueOnce({ result: "success" });
+
+    const acc = makeAccumulator({ name: "worker" });
+    acc.addLine("🔧 exec: step1");
+    await acc.flush();
+
+    // Manually set status before next flush
+    acc.setStatus("error");
+    expect(acc.currentStatus).toBe("error");
+
+    acc.addLine("🔧 exec: step2");
+    await acc.flush();
+
+    const editCall = vi.mocked(zulipRequestWithRetry).mock.calls[1]![0];
+    const content = String(editCall.form?.content ?? "");
+    expect(content).toContain("❌ **`worker`**");
+  });
+
+  it("finalizeWithError with no content does nothing", async () => {
+    const acc = makeAccumulator();
+    await acc.finalizeWithError();
+    expect(zulipRequestWithRetry).not.toHaveBeenCalled();
+    expect(acc.currentStatus).toBe("error");
   });
 });
