@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Onboarding
-    url: https://discord.gg/clawd
-    about: New to OpenClaw? Join Discord for setup guidance from Krill in \#help.
+  - name: Discussions
+    url: https://github.com/jamie-dit/zulipclaw/discussions
+    about: New to ZulipClaw? Start a discussion for setup guidance and community help.
   - name: Support
-    url: https://discord.gg/clawd
-    about: Get help from Krill and the community on Discord in \#help.
+    url: https://github.com/jamie-dit/zulipclaw/discussions
+    about: Get help from the community in GitHub Discussions.
