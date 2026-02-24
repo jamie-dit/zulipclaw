@@ -17,15 +17,6 @@ function isEnvVarPlaceholder(value: string): boolean {
   return ENV_VAR_PLACEHOLDER_PATTERN.test(value.trim());
 }
 
-function isExtensionPath(path: string): boolean {
-  return (
-    path === "plugins" ||
-    path.startsWith("plugins.") ||
-    path === "channels" ||
-    path.startsWith("channels.")
-  );
-}
-
 function isExplicitlyNonSensitivePath(hints: ConfigUiHints | undefined, paths: string[]): boolean {
   if (!hints) {
     return false;
@@ -130,9 +121,8 @@ function redactObjectWithLookup(
   if (Array.isArray(obj)) {
     const path = `${prefix}[]`;
     if (!lookup.has(path)) {
-      if (!isExtensionPath(prefix)) {
-        return obj;
-      }
+      // Keep behavior symmetric with object fallback: if hints miss the path,
+      // still run pattern-based guessing for non-extension arrays.
       return redactObjectGuessing(obj, prefix, values, hints);
     }
     return obj.map((item) => {
@@ -408,9 +398,8 @@ function restoreRedactedValuesWithLookup(
     // sensitive string array in the config...
     const path = `${prefix}[]`;
     if (!lookup.has(path)) {
-      if (!isExtensionPath(prefix)) {
-        return incoming;
-      }
+      // Keep behavior symmetric with object fallback: if hints miss the path,
+      // still run pattern-based guessing for non-extension arrays.
       return restoreRedactedValuesGuessing(incoming, original, prefix, hints);
     }
     const origArr = Array.isArray(original) ? original : [];
