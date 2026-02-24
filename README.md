@@ -102,6 +102,97 @@ See the [OpenClaw documentation](https://docs.openclaw.ai) for configuration bas
 | `agents.defaults.subagents.maxSpawnDepth` | Maximum sub-agent nesting depth |
 | `agents.defaults.subagents.maxChildrenPerAgent` | Max concurrent sub-agents per session |
 
+### Recommended Configuration
+
+Here's a practical starting config (`~/.openclaw/openclaw.json`) you can copy and adapt:
+
+```json5
+{
+  // Gateway auth token — change this to a long random string
+  gateway: {
+    auth: {
+      token: "change-me-to-a-long-random-token",
+    },
+  },
+
+  // Model provider (set your preferred API key)
+  providers: {
+    anthropic: {
+      apiKey: "your-anthropic-api-key",
+    },
+  },
+
+  // Default model for the main agent and sub-agents
+  agents: {
+    defaults: {
+      model: "anthropic/claude-opus-4-5",
+      subagents: {
+        // Enable live tool-progress relay to Zulip (recommended)
+        relay: {
+          enabled: true,
+          // "tools" = show tool calls; "full" = include output; "summary" = compact
+          level: "tools",
+          // Optional: mirror all sub-agent relay messages to a dedicated monitoring topic
+          // mirrorTopic: "infra",
+        },
+        // Prevent runaway sub-agent recursion
+        maxSpawnDepth: 2,
+        maxChildrenPerAgent: 5,
+      },
+    },
+  },
+
+  channels: {
+    zulip: {
+      enabled: true,
+
+      // Zulip bot credentials
+      baseUrl: "https://your-org.zulipchat.com",
+      email: "your-bot-email@your-org.zulipchat.com",
+      apiKey: "your-zulip-bot-api-key",
+
+      // Streams to monitor (no leading "#")
+      streams: ["general", "ai-assistant"],
+
+      // Reply to every message in monitored streams/topics (default: true)
+      alwaysReply: true,
+
+      // Fallback topic when outbound messages omit a topic
+      defaultTopic: "general chat",
+
+      // Emoji reactions while the bot is working
+      reactions: {
+        enabled: true,
+        onStart: "eyes",
+        onSuccess: "check",
+        onFailure: "warning",
+        // Stage-based workflow reactions for richer status signalling
+        workflow: {
+          enabled: true,
+          replaceStageReaction: true,
+          minTransitionMs: 1500,
+          stages: {
+            queued: "hourglass",
+            processing: "gear",
+            toolRunning: "hammer",
+            success: "check",
+            failure: "warning",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+**Key values to replace:**
+- `gateway.auth.token` — generate with `openssl rand -hex 32`
+- `providers.anthropic.apiKey` — your Anthropic API key (or swap for OpenAI/Gemini/OpenRouter)
+- `channels.zulip.baseUrl` — your Zulip organisation URL
+- `channels.zulip.email` — your bot's email address (from Zulip bot settings)
+- `channels.zulip.apiKey` — your bot's API key (from Zulip bot settings)
+- `channels.zulip.streams` — streams you want the bot to monitor
+
 ### Running
 
 ```bash
