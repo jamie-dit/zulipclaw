@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
   isProfileInCooldown,
+  listProfilesForProvider,
   markAuthProfileFailure,
   markAuthProfileGood,
   markAuthProfileUsed,
@@ -460,6 +462,23 @@ export async function runEmbeddedPiAgent(
         const advanced = await advanceAuthProfile();
         if (!advanced) {
           throwAuthProfileFailover({ allInCooldown: false, error: err });
+        }
+      }
+
+      // Emit auth profile info so the subagent relay can display it.
+      // Only emit when the provider has multiple profiles (single-profile
+      // providers don't need a suffix in the relay header).
+      if (lastProfileId) {
+        const profileCount = listProfilesForProvider(authStore, provider).length;
+        if (profileCount > 1) {
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "auth",
+            data: {
+              phase: "resolved",
+              profileId: lastProfileId,
+            },
+          });
         }
       }
 

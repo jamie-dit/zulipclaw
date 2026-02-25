@@ -1,7 +1,12 @@
 import { vi } from "vitest";
 
+vi.mock("../../infra/agent-events.js", () => ({
+  emitAgentEvent: vi.fn(),
+}));
+
 vi.mock("../auth-profiles.js", () => ({
   isProfileInCooldown: vi.fn(() => false),
+  listProfilesForProvider: vi.fn(() => []),
   markAuthProfileFailure: vi.fn(async () => {}),
   markAuthProfileGood: vi.fn(async () => {}),
   markAuthProfileUsed: vi.fn(async () => {}),

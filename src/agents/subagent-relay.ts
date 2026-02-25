@@ -37,6 +37,8 @@ export type RelayState = {
   mirrorMessageId?: string;
   label: string;
   model: string;
+  /** Auth profile short name (e.g. "jason") shown when provider has multiple profiles. */
+  authProfile?: string;
   toolLines: string[];
   startedAt: number;
   deliveryContext: {
@@ -474,14 +476,27 @@ export function resolveWatchdogStatusEmoji(watchdogStatus?: WatchdogStatus): str
   }
 }
 
+/**
+ * Extract the short profile label from a full profileId.
+ * e.g. "anthropic:jason" → "jason", "anthropic:default" → "default"
+ */
+export function extractProfileShortName(profileId: string): string {
+  const colonIdx = profileId.indexOf(":");
+  if (colonIdx < 0) {
+    return profileId;
+  }
+  return profileId.slice(colonIdx + 1);
+}
+
 export function renderRelayMessage(state: RelayState, originTopic?: string) {
   const callWord = state.toolCount === 1 ? "tool call" : "tool calls";
   const updatedTime = formatRelayUpdatedTime(state.lastUpdatedAt);
   const emoji = RELAY_STATUS_EMOJI[state.status ?? "running"] ?? "🔄";
   const watchdogEmoji = resolveWatchdogStatusEmoji(state.watchdogStatus);
   const modelShort = state.model.includes("/") ? state.model.split("/").pop() : state.model;
+  const profileSuffix = state.authProfile ? ` (${state.authProfile})` : "";
   const originSuffix = originTopic ? ` · 📍 ${originTopic}` : "";
-  const header = `${emoji} **\`${state.label}\`** · ${modelShort} · ${state.toolCount} ${callWord} · updated ${updatedTime}${watchdogEmoji}${originSuffix}`;
+  const header = `${emoji} **\`${state.label}\`** · ${modelShort}${profileSuffix} · ${state.toolCount} ${callWord} · updated ${updatedTime}${watchdogEmoji}${originSuffix}`;
   const sanitizedLines = state.toolLines.map((line) => sanitizeForCodeFence(line));
   return `${header}\n\n\`\`\`spoiler Tool calls\n${sanitizedLines.join("\n")}\n\`\`\``;
 }
@@ -1022,6 +1037,27 @@ function resetWatchdog(runId: string, toolName: string, args: Record<string, unk
 // Tool and lifecycle event handlers
 // ---------------------------------------------------------------------------
 
+function handleAuthEvent(evt: AgentEventPayload) {
+  if (!isRelayEnabled()) {
+    return;
+  }
+  const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+  if (phase !== "resolved") {
+    return;
+  }
+  const profileId = typeof evt.data?.profileId === "string" ? evt.data.profileId.trim() : "";
+  if (!profileId) {
+    return;
+  }
+  const state = getOrCreateRelayState(evt.runId);
+  if (!state) {
+    return;
+  }
+  state.authProfile = extractProfileShortName(profileId);
+  // Flush to update the header with the profile name
+  scheduleRelayFlush(evt.runId);
+}
+
 function handleToolEvent(evt: AgentEventPayload) {
   if (!isRelayEnabled()) {
     return;
@@ -1103,6 +1139,10 @@ export function initSubagentRelay() {
     }
     if (evt.stream === "tool") {
       handleToolEvent(evt);
+      return;
+    }
+    if (evt.stream === "auth") {
+      handleAuthEvent(evt);
       return;
     }
     if (evt.stream === "lifecycle") {

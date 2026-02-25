@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractOriginTopic,
+  extractProfileShortName,
   formatRelayFooter,
   formatRelayUpdatedTime,
   formatToolElapsed,
@@ -164,6 +165,78 @@ describe("subagent-relay", () => {
 
     it("returns undefined for empty string", () => {
       expect(extractOriginTopic("")).toBeUndefined();
+    });
+  });
+
+  describe("extractProfileShortName", () => {
+    it("extracts short name after colon", () => {
+      expect(extractProfileShortName("anthropic:jason")).toBe("jason");
+    });
+
+    it("extracts default profile name", () => {
+      expect(extractProfileShortName("anthropic:default")).toBe("default");
+    });
+
+    it("returns full string when no colon present", () => {
+      expect(extractProfileShortName("jason")).toBe("jason");
+    });
+
+    it("handles multiple colons by splitting on first", () => {
+      expect(extractProfileShortName("provider:name:extra")).toBe("name:extra");
+    });
+
+    it("handles empty string after colon", () => {
+      expect(extractProfileShortName("anthropic:")).toBe("");
+    });
+  });
+
+  describe("renderRelayMessage authProfile", () => {
+    it("includes auth profile suffix after model name when set", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "anthropic/claude-opus-4-6",
+        authProfile: "jason",
+        toolLines: [],
+        startedAt: 1_000,
+        toolCount: 21,
+        status: "ok",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+      expect(msg).toContain("claude-opus-4-6 (jason)");
+    });
+
+    it("does not include profile suffix when authProfile is not set", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "anthropic/claude-opus-4-6",
+        toolLines: [],
+        startedAt: 1_000,
+        toolCount: 5,
+        status: "running",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+      expect(msg).toContain("claude-opus-4-6 ·");
+      expect(msg).not.toContain("claude-opus-4-6 (");
+    });
+
+    it("does not include profile suffix when authProfile is undefined", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "claude-opus-4-6",
+        authProfile: undefined,
+        toolLines: [],
+        startedAt: 1_000,
+        toolCount: 0,
+        status: "running",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+      expect(msg).not.toContain("(");
     });
   });
 });
