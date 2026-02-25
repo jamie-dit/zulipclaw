@@ -228,6 +228,37 @@ async function readLatestSubagentOutputWithRetry(params: {
   return result;
 }
 
+async function countAssistantIterations(sessionKey: string): Promise<number | undefined> {
+  try {
+    const history = await callGateway<{ messages?: Array<unknown> }>({
+      method: "chat.history",
+      params: { sessionKey, limit: 1000 },
+      timeoutMs: 10_000,
+    });
+    const messages: Array<{ role?: unknown }> = Array.isArray(history?.messages)
+      ? (history.messages as Array<{ role?: unknown }>)
+      : [];
+    return messages.reduce<number>((count, message) => {
+      return message.role === "assistant" ? count + 1 : count;
+    }, 0);
+  } catch {
+    return undefined;
+  }
+}
+
+function readSessionMaxIterations(sessionKey: string): number | undefined {
+  const entry = loadSessionEntryByKey(sessionKey);
+  const value = entry?.maxIterations;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const normalized = Math.floor(value);
+  if (normalized < 1) {
+    return undefined;
+  }
+  return normalized;
+}
+
 function formatDurationShort(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
     return "n/a";
@@ -258,11 +289,17 @@ function formatTokenCount(value?: number) {
   return String(Math.round(value));
 }
 
-async function buildCompactAnnounceStatsLine(params: {
+type SubagentCompletionStats = {
+  duration: string;
+  tokens: string;
+  statsLine: string;
+};
+
+async function buildSubagentCompletionStats(params: {
   sessionKey: string;
   startedAt?: number;
   endedAt?: number;
-}) {
+}): Promise<SubagentCompletionStats> {
   const cfg = loadConfig();
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
@@ -287,15 +324,18 @@ async function buildCompactAnnounceStatsLine(params: {
     typeof params.startedAt === "number" && typeof params.endedAt === "number"
       ? Math.max(0, params.endedAt - params.startedAt)
       : undefined;
+  const duration = formatDurationShort(runtimeMs);
+  const tokens = `${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`;
 
-  const parts = [
-    `runtime ${formatDurationShort(runtimeMs)}`,
-    `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`,
-  ];
+  const parts = [`runtime ${duration}`, `tokens ${tokens}`];
   if (typeof promptCache === "number" && promptCache > ioTotal) {
     parts.push(`prompt/cache ${formatTokenCount(promptCache)}`);
   }
-  return `Stats: ${parts.join(" • ")}`;
+  return {
+    duration,
+    tokens,
+    statsLine: `Stats: ${parts.join(" • ")}`,
+  };
 }
 
 type DeliveryContextSource = Parameters<typeof deliveryContextFromSession>[0];
@@ -635,6 +675,8 @@ export function buildSubagentSystemPrompt(params: {
   childDepth?: number;
   /** Config value: max allowed spawn depth. */
   maxSpawnDepth?: number;
+  /** Optional hard turn limit for this sub-agent session. */
+  maxIterations?: number;
 }) {
   const taskText =
     typeof params.task === "string" && params.task.trim()
@@ -642,6 +684,10 @@ export function buildSubagentSystemPrompt(params: {
       : "{{TASK_DESCRIPTION}}";
   const childDepth = typeof params.childDepth === "number" ? params.childDepth : 1;
   const maxSpawnDepth = typeof params.maxSpawnDepth === "number" ? params.maxSpawnDepth : 1;
+  const maxIterations =
+    typeof params.maxIterations === "number" && Number.isFinite(params.maxIterations)
+      ? Math.floor(params.maxIterations)
+      : undefined;
   const canSpawn = childDepth < maxSpawnDepth;
   const parentLabel = childDepth >= 2 ? "parent orchestrator" : "main agent";
 
@@ -677,6 +723,20 @@ export function buildSubagentSystemPrompt(params: {
     `- Only use the \`message\` tool when explicitly instructed to contact a specific external recipient; otherwise return plain text and let the ${parentLabel} deliver it`,
     "",
   ];
+
+  if (maxIterations !== undefined) {
+    lines.push(
+      "## Iteration Limit",
+      `You have a maximum of ${maxIterations} agent turns to complete your task.`,
+      "When you approach the limit, wrap up your work and provide a structured completion report.",
+      "If you cannot complete the task within the limit, report:",
+      "- What was accomplished",
+      "- What remains unfinished",
+      "- Whether remaining work needs human context or a fresh approach",
+      "The runtime will force-stop you at the limit, so finish gracefully before then.",
+      "",
+    );
+  }
 
   if (canSpawn) {
     lines.push(
@@ -717,9 +777,45 @@ export function buildSubagentSystemPrompt(params: {
 export type SubagentRunOutcome = {
   status: "ok" | "error" | "timeout" | "unknown";
   error?: string;
+  iterationLimitReached?: boolean;
+  iterationsUsed?: number;
+  maxIterations?: number;
 };
 
 export type SubagentAnnounceType = "subagent task" | "cron job";
+
+function resolveCompletionMetadataStatus(
+  outcome: SubagentRunOutcome,
+): "completed" | "iteration_limit" | "timeout" | "error" {
+  if (outcome.status === "timeout") {
+    return "timeout";
+  }
+  if (outcome.status === "error") {
+    return "error";
+  }
+  if (outcome.iterationLimitReached) {
+    return "iteration_limit";
+  }
+  return "completed";
+}
+
+function formatIterationsUsedLabel(outcome: SubagentRunOutcome): string {
+  const used =
+    typeof outcome.iterationsUsed === "number" && Number.isFinite(outcome.iterationsUsed)
+      ? Math.max(0, Math.floor(outcome.iterationsUsed))
+      : undefined;
+  const max =
+    typeof outcome.maxIterations === "number" && Number.isFinite(outcome.maxIterations)
+      ? Math.max(1, Math.floor(outcome.maxIterations))
+      : undefined;
+  if (used !== undefined && max !== undefined) {
+    return `${used}/${max}`;
+  }
+  if (max !== undefined) {
+    return `unknown/${max}`;
+  }
+  return "unknown";
+}
 
 function buildAnnounceReplyInstruction(params: {
   remainingActiveSubagentRuns: number;
@@ -848,6 +944,12 @@ export async function runSubagentAnnounceFlow(params: {
     if (!outcome) {
       outcome = { status: "unknown" };
     }
+    if (outcome.maxIterations === undefined) {
+      outcome.maxIterations = readSessionMaxIterations(params.childSessionKey);
+    }
+    if (outcome.iterationsUsed === undefined) {
+      outcome.iterationsUsed = await countAssistantIterations(params.childSessionKey);
+    }
 
     let activeChildDescendantRuns = 0;
     try {
@@ -863,15 +965,18 @@ export async function runSubagentAnnounceFlow(params: {
       return false;
     }
 
+    const completionMetadataStatus = resolveCompletionMetadataStatus(outcome);
     // Build status label
     const statusLabel =
-      outcome.status === "ok"
-        ? "completed successfully"
-        : outcome.status === "timeout"
-          ? "timed out"
-          : outcome.status === "error"
-            ? `failed: ${outcome.error || "unknown error"}`
-            : "finished with unknown status";
+      completionMetadataStatus === "iteration_limit"
+        ? "reached the iteration limit"
+        : outcome.status === "ok"
+          ? "completed successfully"
+          : outcome.status === "timeout"
+            ? "timed out"
+            : outcome.status === "error"
+              ? `failed: ${outcome.error || "unknown error"}`
+              : "finished with unknown status";
 
     // Build instructional message for main agent
     const announceType = params.announceType ?? "subagent task";
@@ -938,11 +1043,12 @@ export async function runSubagentAnnounceFlow(params: {
       announceType,
       expectsCompletionMessage,
     });
-    const statsLine = await buildCompactAnnounceStatsLine({
+    const stats = await buildSubagentCompletionStats({
       sessionKey: params.childSessionKey,
       startedAt: params.startedAt,
       endedAt: params.endedAt,
     });
+    const iterationsUsed = formatIterationsUsedLabel(outcome);
     completionMessage = buildCompletionDeliveryMessage({
       findings,
       subagentName,
@@ -953,7 +1059,13 @@ export async function runSubagentAnnounceFlow(params: {
       "Result:",
       findings,
       "",
-      statsLine,
+      "## Completion Metadata",
+      `- Status: ${completionMetadataStatus}`,
+      `- Iterations used: ${iterationsUsed}`,
+      `- Duration: ${stats.duration}`,
+      `- Tokens: ${stats.tokens}`,
+      "",
+      stats.statsLine,
     ].join("\n");
     triggerMessage = [internalSummaryMessage, "", replyInstruction].join("\n");
 

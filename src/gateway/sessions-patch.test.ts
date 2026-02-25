@@ -209,6 +209,36 @@ describe("gateway sessions patch", () => {
     expect(res.error.message).toContain("spawnDepth is only supported");
   });
 
+  test("sets maxIterations for subagent sessions", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:subagent:child",
+      patch: { key: "agent:main:subagent:child", maxIterations: 20 },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.maxIterations).toBe(20);
+  });
+
+  test("rejects maxIterations on non-subagent sessions", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:main",
+      patch: { key: "agent:main:main", maxIterations: 3 },
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.error.message).toContain("maxIterations is only supported");
+  });
+
   test("normalizes exec/send/group patches", async () => {
     const store: Record<string, SessionEntry> = {};
     const res = await applySessionsPatchToStore({

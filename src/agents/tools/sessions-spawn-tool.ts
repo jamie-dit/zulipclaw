@@ -12,6 +12,7 @@ const SessionsSpawnToolSchema = Type.Object({
   model: Type.Optional(Type.String()),
   thinking: Type.Optional(Type.String()),
   runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+  maxIterations: Type.Optional(Type.Number({ minimum: 1, maximum: 50 })),
   // Back-compat: older callers used timeoutSeconds for this tool.
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
@@ -56,6 +57,10 @@ export function createSessionsSpawnTool(opts?: {
         typeof timeoutSecondsCandidate === "number" && Number.isFinite(timeoutSecondsCandidate)
           ? Math.max(0, Math.floor(timeoutSecondsCandidate))
           : undefined;
+      const maxIterations =
+        typeof params.maxIterations === "number" && Number.isFinite(params.maxIterations)
+          ? Math.floor(params.maxIterations)
+          : undefined;
 
       const result = await spawnSubagentDirect(
         {
@@ -65,6 +70,7 @@ export function createSessionsSpawnTool(opts?: {
           model: modelOverride,
           thinking: thinkingOverrideRaw,
           runTimeoutSeconds,
+          maxIterations,
           cleanup,
           expectsCompletionMessage: true,
         },

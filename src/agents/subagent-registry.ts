@@ -1,8 +1,15 @@
+import { randomUUID } from "node:crypto";
 import { loadConfig } from "../config/config.js";
+import {
+  loadSessionStore,
+  resolveAgentIdFromSessionKey,
+  resolveStorePath,
+} from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { defaultRuntime } from "../runtime.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import { runSubagentAnnounceFlow, type SubagentRunOutcome } from "./subagent-announce.js";
 import {
@@ -24,6 +31,10 @@ export type SubagentRunRecord = {
   label?: string;
   model?: string;
   runTimeoutSeconds?: number;
+  maxIterations?: number;
+  iterationsUsed?: number;
+  iterationLimitReached?: boolean;
+  iterationLimitFinalTurnRequested?: boolean;
   createdAt: number;
   startedAt?: number;
   endedAt?: number;
@@ -147,6 +158,234 @@ function persistSubagentRuns() {
     saveSubagentRegistryToDisk(subagentRuns);
   } catch {
     // ignore persistence failures
+  }
+}
+
+function resolveSessionMaxIterations(childSessionKey: string): number | undefined {
+  const cfg = loadConfig();
+  const agentId = resolveAgentIdFromSessionKey(childSessionKey);
+  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const store = loadSessionStore(storePath);
+  const value = store[childSessionKey]?.maxIterations;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const normalized = Math.floor(value);
+  if (normalized < 1) {
+    return undefined;
+  }
+  return normalized;
+}
+
+async function countAssistantIterations(sessionKey: string): Promise<number | undefined> {
+  try {
+    const history = await callGateway<{ messages?: Array<{ role?: unknown }> }>({
+      method: "chat.history",
+      params: {
+        sessionKey,
+        limit: 1000,
+      },
+      timeoutMs: 10_000,
+    });
+    const messages = Array.isArray(history?.messages) ? history.messages : [];
+    return messages.reduce((count, message) => {
+      return message?.role === "assistant" ? count + 1 : count;
+    }, 0);
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeIterationCount(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(0, Math.floor(value));
+}
+
+function normalizeMaxIterations(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const normalized = Math.floor(value);
+  if (normalized < 1) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function normalizeRunOutcome(params: {
+  status: "ok" | "error" | "timeout" | "unknown";
+  error?: string;
+  iterationsUsed?: number;
+  maxIterations?: number;
+  iterationLimitReached?: boolean;
+}): SubagentRunOutcome {
+  return {
+    status: params.status,
+    error: params.error,
+    iterationsUsed: normalizeIterationCount(params.iterationsUsed),
+    maxIterations: normalizeMaxIterations(params.maxIterations),
+    iterationLimitReached: params.iterationLimitReached === true,
+  };
+}
+
+async function maybeEnforceIterationLimit(params: {
+  runId: string;
+  entry: SubagentRunRecord;
+  outcome: SubagentRunOutcome;
+}): Promise<{ deferred: boolean; outcome: SubagentRunOutcome }> {
+  const maxIterations =
+    normalizeMaxIterations(params.entry.maxIterations) ??
+    resolveSessionMaxIterations(params.entry.childSessionKey);
+  if (maxIterations === undefined) {
+    return {
+      deferred: false,
+      outcome: normalizeRunOutcome({
+        ...params.outcome,
+        maxIterations: undefined,
+        iterationsUsed: params.outcome.iterationsUsed,
+      }),
+    };
+  }
+
+  params.entry.maxIterations = maxIterations;
+  const iterationsUsed = await countAssistantIterations(params.entry.childSessionKey);
+  params.entry.iterationsUsed = normalizeIterationCount(iterationsUsed);
+
+  const reachedLimit =
+    typeof params.entry.iterationsUsed === "number" && params.entry.iterationsUsed >= maxIterations;
+
+  if (!reachedLimit) {
+    return {
+      deferred: false,
+      outcome: normalizeRunOutcome({
+        ...params.outcome,
+        iterationsUsed: params.entry.iterationsUsed,
+        maxIterations,
+        iterationLimitReached: false,
+      }),
+    };
+  }
+
+  // Allow exactly one final turn after the hard limit is reached.
+  if (params.entry.iterationLimitFinalTurnRequested === true) {
+    params.entry.iterationLimitReached = true;
+    return {
+      deferred: false,
+      outcome: normalizeRunOutcome({
+        ...params.outcome,
+        iterationsUsed: params.entry.iterationsUsed,
+        maxIterations,
+        iterationLimitReached: true,
+      }),
+    };
+  }
+
+  const iterationLabel = `${params.entry.iterationsUsed ?? maxIterations}/${maxIterations}`;
+  const forcedFinalMessage = `[System] Iteration limit reached (${iterationLabel}). You MUST provide your final completion report now. No more tool calls.`;
+
+  try {
+    const idempotencyKey = randomUUID();
+    const response = await callGateway<{ runId?: string }>({
+      method: "agent",
+      params: {
+        message: forcedFinalMessage,
+        sessionKey: params.entry.childSessionKey,
+        channel: params.entry.requesterOrigin?.channel,
+        to: params.entry.requesterOrigin?.to,
+        accountId: params.entry.requesterOrigin?.accountId,
+        threadId:
+          params.entry.requesterOrigin?.threadId != null
+            ? String(params.entry.requesterOrigin.threadId)
+            : undefined,
+        idempotencyKey,
+        deliver: false,
+        lane: AGENT_LANE_SUBAGENT,
+        timeout: params.entry.runTimeoutSeconds,
+        label: params.entry.label,
+      },
+      timeoutMs: 15_000,
+    });
+    const nextRunId =
+      typeof response?.runId === "string" && response.runId.trim()
+        ? response.runId
+        : idempotencyKey;
+    params.entry.iterationLimitFinalTurnRequested = true;
+    params.entry.iterationLimitReached = true;
+    persistSubagentRuns();
+    replaceSubagentRunAfterSteer({
+      previousRunId: params.runId,
+      nextRunId,
+      fallback: params.entry,
+      runTimeoutSeconds: params.entry.runTimeoutSeconds,
+    });
+    return {
+      deferred: true,
+      outcome: normalizeRunOutcome({
+        ...params.outcome,
+        iterationsUsed: params.entry.iterationsUsed,
+        maxIterations,
+        iterationLimitReached: true,
+      }),
+    };
+  } catch (error) {
+    return {
+      deferred: false,
+      outcome: normalizeRunOutcome({
+        status: "error",
+        error: `iteration limit continuation failed: ${String(error)}`,
+        iterationsUsed: params.entry.iterationsUsed,
+        maxIterations,
+        iterationLimitReached: true,
+      }),
+    };
+  }
+}
+
+async function processCompletedSubagentRun(params: {
+  runId: string;
+  status: "ok" | "error" | "timeout";
+  startedAt?: number;
+  endedAt?: number;
+  error?: string;
+}): Promise<void> {
+  const entry = subagentRuns.get(params.runId);
+  if (!entry) {
+    return;
+  }
+
+  if (typeof params.startedAt === "number") {
+    entry.startedAt = params.startedAt;
+  }
+  entry.endedAt = typeof params.endedAt === "number" ? params.endedAt : Date.now();
+
+  const baseOutcome = normalizeRunOutcome({
+    status: params.status,
+    error: params.status === "error" ? params.error : undefined,
+    iterationsUsed: entry.iterationsUsed,
+    maxIterations: entry.maxIterations,
+    iterationLimitReached: entry.iterationLimitReached,
+  });
+
+  const enforcement = await maybeEnforceIterationLimit({
+    runId: params.runId,
+    entry,
+    outcome: baseOutcome,
+  });
+  if (enforcement.deferred) {
+    return;
+  }
+
+  entry.outcome = enforcement.outcome;
+  persistSubagentRuns();
+
+  if (suppressAnnounceForSteerRestart(entry)) {
+    return;
+  }
+
+  if (!startSubagentAnnounceCleanupFlow(params.runId, entry)) {
+    return;
   }
 }
 
@@ -419,24 +658,19 @@ function ensureListener() {
       return;
     }
     const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : Date.now();
-    entry.endedAt = endedAt;
-    if (phase === "error") {
-      const error = typeof evt.data?.error === "string" ? evt.data.error : undefined;
-      entry.outcome = { status: "error", error };
-    } else if (evt.data?.aborted) {
-      entry.outcome = { status: "timeout" };
-    } else {
-      entry.outcome = { status: "ok" };
-    }
-    persistSubagentRuns();
+    const startedAt =
+      typeof evt.data?.startedAt === "number" ? evt.data.startedAt : entry.startedAt;
+    const status = phase === "error" ? "error" : evt.data?.aborted === true ? "timeout" : "ok";
+    const error =
+      phase === "error" && typeof evt.data?.error === "string" ? evt.data.error : undefined;
 
-    if (suppressAnnounceForSteerRestart(entry)) {
-      return;
-    }
-
-    if (!startSubagentAnnounceCleanupFlow(evt.runId, entry)) {
-      return;
-    }
+    void processCompletedSubagentRun({
+      runId: evt.runId,
+      status,
+      startedAt,
+      endedAt,
+      error,
+    });
   });
 }
 
@@ -655,6 +889,7 @@ export function registerSubagentRun(params: {
   label?: string;
   model?: string;
   runTimeoutSeconds?: number;
+  maxIterations?: number;
   expectsCompletionMessage?: boolean;
 }) {
   const now = Date.now();
@@ -681,6 +916,7 @@ export function registerSubagentRun(params: {
     label: params.label,
     model: params.model,
     runTimeoutSeconds,
+    maxIterations: normalizeMaxIterations(params.maxIterations),
     createdAt: now,
     startedAt: now,
     archiveAtMs,
@@ -723,40 +959,15 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
     if (wait?.status !== "ok" && wait?.status !== "error" && wait?.status !== "timeout") {
       return;
     }
-    const entry = subagentRuns.get(runId);
-    if (!entry) {
-      return;
-    }
-    let mutated = false;
-    if (typeof wait.startedAt === "number") {
-      entry.startedAt = wait.startedAt;
-      mutated = true;
-    }
-    if (typeof wait.endedAt === "number") {
-      entry.endedAt = wait.endedAt;
-      mutated = true;
-    }
-    if (!entry.endedAt) {
-      entry.endedAt = Date.now();
-      mutated = true;
-    }
+    const status = wait.status === "error" ? "error" : wait.status === "timeout" ? "timeout" : "ok";
     const waitError = typeof wait.error === "string" ? wait.error : undefined;
-    entry.outcome =
-      wait.status === "error"
-        ? { status: "error", error: waitError }
-        : wait.status === "timeout"
-          ? { status: "timeout" }
-          : { status: "ok" };
-    mutated = true;
-    if (mutated) {
-      persistSubagentRuns();
-    }
-    if (suppressAnnounceForSteerRestart(entry)) {
-      return;
-    }
-    if (!startSubagentAnnounceCleanupFlow(runId, entry)) {
-      return;
-    }
+    await processCompletedSubagentRun({
+      runId,
+      status,
+      startedAt: typeof wait.startedAt === "number" ? wait.startedAt : undefined,
+      endedAt: typeof wait.endedAt === "number" ? wait.endedAt : undefined,
+      error: waitError,
+    });
   } catch {
     // ignore
   }

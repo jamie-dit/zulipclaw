@@ -24,6 +24,7 @@ export type SpawnSubagentParams = {
   model?: string;
   thinking?: string;
   runTimeoutSeconds?: number;
+  maxIterations?: number;
   cleanup?: "delete" | "keep";
   expectsCompletionMessage?: boolean;
 };
@@ -209,6 +210,16 @@ export async function spawnSubagentDirect(
     typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
       ? Math.max(0, Math.floor(params.runTimeoutSeconds))
       : 0;
+  const maxIterations =
+    typeof params.maxIterations === "number" && Number.isFinite(params.maxIterations)
+      ? Math.floor(params.maxIterations)
+      : undefined;
+  if (maxIterations !== undefined && (maxIterations < 1 || maxIterations > 50)) {
+    return {
+      status: "error",
+      error: "maxIterations must be between 1 and 50",
+    };
+  }
   let modelApplied = false;
 
   const cfg = loadConfig();
@@ -297,7 +308,11 @@ export async function spawnSubagentDirect(
   try {
     await callGateway({
       method: "sessions.patch",
-      params: { key: childSessionKey, spawnDepth: childDepth },
+      params: {
+        key: childSessionKey,
+        spawnDepth: childDepth,
+        ...(maxIterations !== undefined ? { maxIterations } : {}),
+      },
       timeoutMs: 10_000,
     });
   } catch (err) {
@@ -356,6 +371,7 @@ export async function spawnSubagentDirect(
     task,
     childDepth,
     maxSpawnDepth,
+    maxIterations,
   });
   const childTaskMessage = [
     `[Subagent Context] You are running as a subagent (depth ${childDepth}/${maxSpawnDepth}). Results auto-announce to your requester; do not busy-poll for status.`,
@@ -418,6 +434,7 @@ export async function spawnSubagentDirect(
     label: label || undefined,
     model: resolvedModel,
     runTimeoutSeconds,
+    maxIterations,
     expectsCompletionMessage: params.expectsCompletionMessage === true,
   });
 

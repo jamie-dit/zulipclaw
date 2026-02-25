@@ -129,6 +129,28 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  if ("maxIterations" in patch) {
+    const raw = patch.maxIterations;
+    if (raw === null) {
+      if (typeof existing?.maxIterations === "number") {
+        return invalid("maxIterations cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      if (!isSubagentSessionKey(storeKey)) {
+        return invalid("maxIterations is only supported for subagent:* sessions");
+      }
+      const numeric = Number(raw);
+      if (!Number.isInteger(numeric) || numeric < 1 || numeric > 50) {
+        return invalid("invalid maxIterations (use an integer from 1 to 50)");
+      }
+      const normalized = numeric;
+      if (typeof existing?.maxIterations === "number" && existing.maxIterations !== normalized) {
+        return invalid("maxIterations cannot be changed once set");
+      }
+      next.maxIterations = normalized;
+    }
+  }
+
   if ("label" in patch) {
     const raw = patch.label;
     if (raw === null) {
