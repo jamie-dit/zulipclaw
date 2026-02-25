@@ -266,6 +266,11 @@ export type AgentDefaultsConfig = {
        */
       mirrorTopic?: string;
     };
+    /**
+     * Workspace files to include in sub-agent bootstrap context.
+     * Default: ["AGENTS.md", "TOOLS.md", "SOUL.md", "USER.md", "IDENTITY.md"]
+     */
+    bootstrapFiles?: string[];
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: {

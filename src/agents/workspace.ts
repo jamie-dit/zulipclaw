@@ -465,16 +465,26 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
   return result;
 }
 
-const MINIMAL_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME]);
+const DEFAULT_SUBAGENT_BOOTSTRAP_FILES = new Set([
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_USER_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+]);
 
 export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
   sessionKey?: string,
+  config?: { subagentBootstrapFiles?: string[] },
 ): WorkspaceBootstrapFile[] {
   if (!sessionKey || (!isSubagentSessionKey(sessionKey) && !isCronSessionKey(sessionKey))) {
     return files;
   }
-  return files.filter((file) => MINIMAL_BOOTSTRAP_ALLOWLIST.has(file.name));
+  const allowlist = config?.subagentBootstrapFiles
+    ? new Set(config.subagentBootstrapFiles)
+    : DEFAULT_SUBAGENT_BOOTSTRAP_FILES;
+  return files.filter((file) => allowlist.has(file.name));
 }
 
 export async function loadExtraBootstrapFiles(
