@@ -1,6 +1,64 @@
+import { resolveUserTimezone } from "../../agents/date-time.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
 import type { TemplateContext } from "../templating.js";
+
+/**
+ * Cache for Intl.DateTimeFormat instances keyed by timezone string.
+ * Avoids recreating the formatter on every call in high-throughput environments.
+ */
+const dtfCache = new Map<string, Intl.DateTimeFormat>();
+
+function getDateTimeFormatter(timeZone: string): Intl.DateTimeFormat {
+  let fmt = dtfCache.get(timeZone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      fractionalSecondDigits: 3,
+      hourCycle: "h23",
+      timeZoneName: "longOffset",
+    });
+    dtfCache.set(timeZone, fmt);
+  }
+  return fmt;
+}
+
+/**
+ * Format a unix-ms timestamp as an ISO 8601 string with the local timezone offset
+ * (e.g. "2026-02-25T11:44:00.000+11:00") instead of the UTC "Z" suffix.
+ */
+function formatIsoWithOffset(timestampMs: number, timeZone: string): string {
+  const date = new Date(timestampMs);
+  // Use the cached Intl.DateTimeFormat to get parts for the given timezone at this instant
+  const parts = getDateTimeFormatter(timeZone).formatToParts(date);
+
+  const pick = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  const yyyy = pick("year");
+  const mm = pick("month");
+  const dd = pick("day");
+  const hh = pick("hour");
+  const min = pick("minute");
+  const sec = pick("second");
+  const frac = pick("fractionalSecond");
+  // timeZoneName with "longOffset" yields e.g. "GMT+11:00" or "GMT" for UTC
+  const tzName = parts.find((p) => p.type === "timeZoneName")?.value ?? "";
+  let offset: string;
+  if (tzName === "GMT" || tzName === "UTC") {
+    offset = "+00:00";
+  } else {
+    // Extract "+11:00" or "-05:00" from "GMT+11:00"
+    const m = tzName.match(/([+-]\d{2}:\d{2})$/);
+    offset = m?.[1] ?? "Z";
+  }
+
+  return `${yyyy}-${mm}-${dd}T${hh}:${min}:${sec}.${frac}${offset}`;
+}
 
 function safeTrim(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -11,6 +69,7 @@ function safeTrim(value: unknown): string | undefined {
 }
 
 export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
+  const tz = resolveUserTimezone();
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
   const messageId = safeTrim(ctx.MessageSid);
@@ -31,6 +90,15 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
     provider: safeTrim(ctx.Provider),
     surface: safeTrim(ctx.Surface),
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
+    timestamp_ms:
+      typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp)
+        ? ctx.Timestamp
+        : undefined,
+    timestamp_iso:
+      typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp)
+        ? formatIsoWithOffset(ctx.Timestamp, tz)
+        : undefined,
+    timezone: tz,
     flags: {
       is_group_chat: !isDirect ? true : undefined,
       was_mentioned: ctx.WasMentioned === true ? true : undefined,
