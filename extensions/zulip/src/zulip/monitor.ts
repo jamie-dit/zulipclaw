@@ -93,6 +93,8 @@ type ZulipUpdateMessageEvent = {
   orig_subject?: string;
   topic?: string;
   orig_topic?: string;
+  stream_id?: number;
+  orig_stream_id?: number;
 };
 
 type ZulipEvent = {
@@ -103,6 +105,8 @@ type ZulipEvent = {
   orig_subject?: string;
   topic?: string;
   orig_topic?: string;
+  stream_id?: number;
+  orig_stream_id?: number;
 } & Partial<ZulipReactionEvent>;
 
 type ZulipEventsResponse = {
@@ -313,13 +317,33 @@ function isZulipUpdateMessageEvent(event: ZulipEvent): event is ZulipUpdateMessa
 
 function parseTopicRenameEvent(
   event: ZulipEvent,
-): { fromTopic: string; toTopic: string } | undefined {
+): { fromTopic: string; toTopic: string; origStreamId?: number; newStreamId?: number } | undefined {
   if (!isZulipUpdateMessageEvent(event)) {
     return undefined;
   }
 
+  const origStreamId = event.orig_stream_id;
+  const newStreamId = event.stream_id;
+  const isCrossStream =
+    typeof origStreamId === "number" &&
+    typeof newStreamId === "number" &&
+    origStreamId !== newStreamId;
+
   const fromTopic = normalizeTopic(event.orig_topic ?? event.orig_subject);
   const toTopic = normalizeTopic(event.topic ?? event.subject);
+
+  if (isCrossStream) {
+    // For cross-stream moves, the topic name may or may not change.
+    // If orig_topic is absent, the topic name stayed the same during the move.
+    const effectiveFrom = fromTopic || toTopic;
+    const effectiveTo = toTopic || fromTopic;
+    if (!effectiveFrom || !effectiveTo) {
+      return undefined;
+    }
+    return { fromTopic: effectiveFrom, toTopic: effectiveTo, origStreamId, newStreamId };
+  }
+
+  // Same-stream: require actual topic name change.
   if (!fromTopic || !toTopic) {
     return undefined;
   }
@@ -332,43 +356,44 @@ function parseTopicRenameEvent(
 }
 
 function resolveCanonicalTopicSessionKey(params: {
-  aliasesByStream: Map<string, Map<string, string>>;
+  aliases: Map<string, string>;
   stream: string;
   topic: string;
-}): string {
-  const aliases = params.aliasesByStream.get(params.stream);
+}): { stream: string; topicKey: string } {
   const topicKey = buildTopicKey(params.topic);
-  if (!aliases) {
-    return topicKey;
-  }
+  let compositeKey = `${params.stream}\0${topicKey}`;
 
-  let canonicalKey = topicKey;
   const visited = new Set<string>();
   const visitedOrder: string[] = [];
 
   while (true) {
-    const next = aliases.get(canonicalKey);
-    if (!next || next === canonicalKey || visited.has(canonicalKey)) {
+    const next = params.aliases.get(compositeKey);
+    if (!next || next === compositeKey || visited.has(compositeKey)) {
       break;
     }
-    visited.add(canonicalKey);
-    visitedOrder.push(canonicalKey);
-    canonicalKey = next;
+    visited.add(compositeKey);
+    visitedOrder.push(compositeKey);
+    compositeKey = next;
   }
 
+  // Path compression: point all intermediate aliases directly at the canonical key.
   if (visitedOrder.length > 0) {
     for (const alias of visitedOrder) {
-      aliases.set(alias, canonicalKey);
+      params.aliases.set(alias, compositeKey);
     }
   }
 
-  return canonicalKey;
+  const sepIdx = compositeKey.indexOf("\0");
+  const stream = compositeKey.substring(0, sepIdx);
+  const resolvedTopicKey = compositeKey.substring(sepIdx + 1);
+  return { stream, topicKey: resolvedTopicKey };
 }
 
 function recordTopicRenameAlias(params: {
-  aliasesByStream: Map<string, Map<string, string>>;
-  stream: string;
+  aliases: Map<string, string>;
+  fromStream: string;
   fromTopic: string;
+  toStream: string;
   toTopic: string;
 }): boolean {
   const fromTopic = normalizeTopic(params.fromTopic);
@@ -377,28 +402,25 @@ function recordTopicRenameAlias(params: {
     return false;
   }
 
-  const fromCanonicalKey = resolveCanonicalTopicSessionKey({
-    aliasesByStream: params.aliasesByStream,
-    stream: params.stream,
+  const fromResult = resolveCanonicalTopicSessionKey({
+    aliases: params.aliases,
+    stream: params.fromStream,
     topic: fromTopic,
   });
-  const toCanonicalKey = resolveCanonicalTopicSessionKey({
-    aliasesByStream: params.aliasesByStream,
-    stream: params.stream,
+  const toResult = resolveCanonicalTopicSessionKey({
+    aliases: params.aliases,
+    stream: params.toStream,
     topic: toTopic,
   });
 
-  if (fromCanonicalKey === toCanonicalKey) {
+  const fromCompositeKey = `${fromResult.stream}\0${fromResult.topicKey}`;
+  const toCompositeKey = `${toResult.stream}\0${toResult.topicKey}`;
+
+  if (fromCompositeKey === toCompositeKey) {
     return false;
   }
 
-  let aliases = params.aliasesByStream.get(params.stream);
-  if (!aliases) {
-    aliases = new Map<string, string>();
-    params.aliasesByStream.set(params.stream, aliases);
-  }
-
-  aliases.set(toCanonicalKey, fromCanonicalKey);
+  params.aliases.set(toCompositeKey, fromCompositeKey);
   return true;
 }
 
@@ -427,6 +449,35 @@ async function fetchZulipMe(auth: ZulipAuth, abortSignal?: AbortSignal): Promise
     path: "/api/v1/users/me",
     abortSignal,
   });
+}
+
+async function fetchZulipSubscriptions(
+  auth: ZulipAuth,
+  abortSignal?: AbortSignal,
+): Promise<Map<number, string>> {
+  try {
+    const res = await zulipRequest<{
+      result: "success" | "error";
+      subscriptions?: Array<{ stream_id: number; name: string }>;
+    }>({
+      auth,
+      method: "GET",
+      path: "/api/v1/users/me/subscriptions",
+      abortSignal,
+    });
+    const map = new Map<number, string>();
+    if (res.result === "success" && res.subscriptions) {
+      for (const sub of res.subscriptions) {
+        if (typeof sub.stream_id === "number" && sub.name) {
+          map.set(sub.stream_id, sub.name);
+        }
+      }
+    }
+    return map;
+  } catch {
+    // Non-critical: stream ID resolution can also be populated from message events.
+    return new Map<number, string>();
+  }
 }
 
 async function registerQueue(params: {
@@ -929,8 +980,11 @@ export async function monitorZulipProvider(
 
     // Track DM senders we've already notified to avoid spam.
     const dmNotifiedSenders = new Set<number>();
-    // Topic-rename alias map per stream: renamed-topic-key -> canonical-topic-key.
-    const topicAliasesByStream = new Map<string, Map<string, string>>();
+    // Topic-rename alias map: composite keys "stream\0topicKey" -> canonical "stream\0topicKey".
+    // Supports both same-stream renames and cross-stream topic moves.
+    const topicAliases = new Map<string, string>();
+    // Stream ID -> stream name mapping for resolving cross-stream move events.
+    const streamIdToName = await fetchZulipSubscriptions(auth, abortSignal);
 
     const handleMessage = async (
       msg: ZulipEventMessage,
@@ -1084,18 +1138,24 @@ export async function monitorZulipProvider(
         return;
       }
 
+      // Populate stream ID -> name mapping from message events as a fallback.
+      if (typeof msg.stream_id === "number" && stream) {
+        streamIdToName.set(msg.stream_id, stream);
+      }
+      // Resolve canonical stream + topic for session continuity across renames and cross-stream moves.
+      const { stream: canonicalStream, topicKey: canonicalTopicKey } =
+        resolveCanonicalTopicSessionKey({
+          aliases: topicAliases,
+          stream,
+          topic,
+        });
       const route = core.channel.routing.resolveAgentRoute({
         cfg,
         channel: "zulip",
         accountId: account.accountId,
-        peer: { kind: "channel", id: stream },
+        peer: { kind: "channel", id: canonicalStream },
       });
       const baseSessionKey = route.sessionKey;
-      const canonicalTopicKey = resolveCanonicalTopicSessionKey({
-        aliasesByStream: topicAliasesByStream,
-        stream,
-        topic,
-      });
       const sessionKey = `${baseSessionKey}:topic:${canonicalTopicKey}`;
 
       const to = `stream:${stream}#${topic}`;
@@ -1949,16 +2009,48 @@ export async function monitorZulipProvider(
             if (!rename) {
               continue;
             }
+
+            let fromStream: string;
+            let toStream: string;
+            if (rename.origStreamId !== undefined && rename.newStreamId !== undefined) {
+              // Cross-stream move: resolve stream IDs to names.
+              const origName = streamIdToName.get(rename.origStreamId);
+              const newName = streamIdToName.get(rename.newStreamId);
+              if (!origName || !newName) {
+                logger.debug?.(
+                  `[zulip:${account.accountId}] cross-stream move: could not resolve stream IDs (orig=${rename.origStreamId}, new=${rename.newStreamId})`,
+                );
+                continue;
+              }
+              // Only track moves between streams we monitor.
+              if (!account.streams.includes(origName) || !account.streams.includes(newName)) {
+                continue;
+              }
+              fromStream = origName;
+              toStream = newName;
+            } else {
+              // Same-stream topic rename.
+              fromStream = stream;
+              toStream = stream;
+            }
+
             const mapped = recordTopicRenameAlias({
-              aliasesByStream: topicAliasesByStream,
-              stream,
+              aliases: topicAliases,
+              fromStream,
               fromTopic: rename.fromTopic,
+              toStream,
               toTopic: rename.toTopic,
             });
             if (mapped) {
-              logger.info(
-                `[zulip:${account.accountId}] mapped topic rename alias for stream "${stream}": "${rename.toTopic}" -> "${rename.fromTopic}"`,
-              );
+              if (fromStream !== toStream) {
+                logger.info(
+                  `[zulip:${account.accountId}] mapped cross-stream topic move: "${toStream}#${rename.toTopic}" -> "${fromStream}#${rename.fromTopic}"`,
+                );
+              } else {
+                logger.info(
+                  `[zulip:${account.accountId}] mapped topic rename alias for stream "${stream}": "${rename.toTopic}" -> "${rename.fromTopic}"`,
+                );
+              }
             }
           }
 
