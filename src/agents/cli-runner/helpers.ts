@@ -47,7 +47,7 @@ export type CliOutput = {
   usage?: CliUsage;
 };
 
-export function buildSystemPrompt(params: {
+export async function buildSystemPrompt(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
   defaultThinkLevel?: ThinkLevel;

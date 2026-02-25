@@ -121,6 +121,30 @@ export type CliBackendConfig = {
   };
 };
 
+export type PromptSectionSource = "builtin" | "file" | "inline";
+export type PromptSectionScope = "all" | "main" | "subagent" | "cron";
+export type PromptSectionPosition =
+  | "after-skills"
+  | "after-workspace"
+  | "before-context"
+  | "after-runtime";
+
+export type PromptSectionEntry = {
+  id: string;
+  heading?: string;
+  source: PromptSectionSource;
+  path?: string;
+  content?: string;
+  enabled?: boolean;
+  scope?: PromptSectionScope;
+  position?: PromptSectionPosition;
+};
+
+export type PromptSectionsConfig = {
+  builtins?: string[];
+  sections?: PromptSectionEntry[];
+};
+
 export type AgentDefaultsConfig = {
   /** Primary model and fallbacks (provider/model). */
   model?: AgentModelListConfig;
@@ -278,6 +302,8 @@ export type AgentDefaultsConfig = {
      */
     bootstrapFiles?: string[];
   };
+  /** Config-driven prompt sections injected into the system prompt. */
+  promptSections?: PromptSectionsConfig;
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: {
     /** Enable sandboxing for sessions. */

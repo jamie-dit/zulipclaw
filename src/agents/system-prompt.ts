@@ -1,9 +1,11 @@
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import type { PromptSectionsConfig } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import { buildPromptSections, formatPromptSections, type SessionScope } from "./prompt-sections.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
 /**
@@ -166,7 +168,7 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
   ];
 }
 
-export function buildAgentSystemPrompt(params: {
+export async function buildAgentSystemPrompt(params: {
   workspaceDir: string;
   defaultThinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
@@ -221,6 +223,10 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
+  /** Config-driven prompt sections to inject at designated positions. */
+  promptSections?: PromptSectionsConfig;
+  /** Session scope for filtering prompt sections. Defaults to "main". */
+  sessionScope?: SessionScope;
 }) {
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
@@ -398,6 +404,19 @@ export function buildAgentSystemPrompt(params: {
     return "You are a personal assistant running inside OpenClaw.";
   }
 
+  // Resolve prompt sections (async)
+  const sectionsByPosition = await buildPromptSections({
+    config: params.promptSections,
+    sessionScope: params.sessionScope,
+    workspaceDir: params.workspaceDir,
+  });
+  const getSectionsAt = (
+    pos: import("../config/types.agent-defaults.js").PromptSectionPosition,
+  ): string[] => {
+    const sections = sectionsByPosition.get(pos);
+    return sections ? formatPromptSections(sections) : [];
+  };
+
   const lines = [
     "You are a personal assistant running inside OpenClaw.",
     "",
@@ -446,6 +465,7 @@ export function buildAgentSystemPrompt(params: {
     "If unsure, ask the user to run `openclaw help` (or `openclaw gateway --help`) and paste the output.",
     "",
     ...skillsSection,
+    ...getSectionsAt("after-skills"),
     ...memorySection,
     // Skip self-update for subagent/none modes
     hasGateway && !isMinimal ? "## OpenClaw Self-Update" : "",
@@ -479,6 +499,7 @@ export function buildAgentSystemPrompt(params: {
     ...workspaceNotes,
     "",
     ...docsSection,
+    ...getSectionsAt("after-workspace"),
     params.sandboxInfo?.enabled ? "## Sandbox" : "",
     params.sandboxInfo?.enabled
       ? [
@@ -576,6 +597,9 @@ export function buildAgentSystemPrompt(params: {
     lines.push("## Reasoning Format", reasoningHint, "");
   }
 
+  // Inject before-context sections
+  lines.push(...getSectionsAt("before-context"));
+
   const contextFiles = params.contextFiles ?? [];
   const validContextFiles = contextFiles.filter(
     (file) => typeof file.path === "string" && file.path.trim().length > 0,
@@ -634,6 +658,9 @@ export function buildAgentSystemPrompt(params: {
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
   );
+
+  // Inject after-runtime sections
+  lines.push(...getSectionsAt("after-runtime"));
 
   return lines.filter(Boolean).join("\n");
 }

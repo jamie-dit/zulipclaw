@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { BUILTIN_PROMPT_SECTION_IDS } from "../agents/prompt-sections.js";
 import {
   HeartbeatSchema,
   AgentSandboxSchema,
@@ -11,6 +12,101 @@ import {
   CliBackendSchema,
   HumanDelaySchema,
 } from "./zod-schema.core.js";
+
+const PromptSectionSourceSchema = z.union([
+  z.literal("builtin"),
+  z.literal("file"),
+  z.literal("inline"),
+]);
+
+const PromptSectionScopeSchema = z.union([
+  z.literal("all"),
+  z.literal("main"),
+  z.literal("subagent"),
+  z.literal("cron"),
+]);
+
+const PromptSectionPositionSchema = z.union([
+  z.literal("after-skills"),
+  z.literal("after-workspace"),
+  z.literal("before-context"),
+  z.literal("after-runtime"),
+]);
+
+const PromptSectionEntrySchema = z
+  .object({
+    id: z.string().min(1),
+    heading: z.string().optional(),
+    source: PromptSectionSourceSchema,
+    path: z.string().optional(),
+    content: z.string().optional(),
+    enabled: z.boolean().optional(),
+    scope: PromptSectionScopeSchema.optional(),
+    position: PromptSectionPositionSchema.optional(),
+  })
+  .strict()
+  .superRefine((val, ctx) => {
+    if (val.source === "file") {
+      if (!val.path) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '`path` is required when source is "file"',
+          path: ["path"],
+        });
+      }
+      if (val.content !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '`content` must not be set when source is "file"',
+          path: ["content"],
+        });
+      }
+    } else if (val.source === "inline") {
+      if (val.content === undefined || val.content === null) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '`content` is required when source is "inline"',
+          path: ["content"],
+        });
+      }
+      if (val.path !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '`path` must not be set when source is "inline"',
+          path: ["path"],
+        });
+      }
+    } else if (val.source === "builtin") {
+      if (val.path !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '`path` must not be set when source is "builtin"',
+          path: ["path"],
+        });
+      }
+      if (val.content !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '`content` must not be set when source is "builtin"',
+          path: ["content"],
+        });
+      }
+    }
+  });
+
+const PromptSectionsSchema = z
+  .object({
+    builtins: z
+      .array(
+        z.string().refine((val) => BUILTIN_PROMPT_SECTION_IDS.has(val), {
+          message: `Unknown built-in section id. Valid ids: ${[...BUILTIN_PROMPT_SECTION_IDS].join(", ")}`,
+        }),
+      )
+      .optional(),
+    sections: z.array(PromptSectionEntrySchema).optional(),
+  })
+  .strict()
+  .optional();
 
 export const AgentDefaultsSchema = z
   .object({
@@ -182,6 +278,7 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    promptSections: PromptSectionsSchema,
     sandbox: AgentSandboxSchema,
   })
   .strict()
