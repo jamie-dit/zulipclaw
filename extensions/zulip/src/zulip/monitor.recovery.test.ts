@@ -20,6 +20,10 @@ const mocks = vi.hoisted(() => ({
   prepareZulipCheckpointForRecovery: vi.fn(),
   markZulipCheckpointFailure: vi.fn(),
   buildZulipCheckpointId: vi.fn(),
+  loadZulipProcessedMessageState: vi.fn(),
+  writeZulipProcessedMessageState: vi.fn(),
+  isZulipMessageAlreadyProcessed: vi.fn(),
+  markZulipMessageProcessed: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk", async (importOriginal) => {
@@ -73,6 +77,13 @@ vi.mock("./inflight-checkpoints.js", () => ({
   prepareZulipCheckpointForRecovery: mocks.prepareZulipCheckpointForRecovery,
   markZulipCheckpointFailure: mocks.markZulipCheckpointFailure,
   buildZulipCheckpointId: mocks.buildZulipCheckpointId,
+}));
+
+vi.mock("./processed-message-state.js", () => ({
+  loadZulipProcessedMessageState: mocks.loadZulipProcessedMessageState,
+  writeZulipProcessedMessageState: mocks.writeZulipProcessedMessageState,
+  isZulipMessageAlreadyProcessed: mocks.isZulipMessageAlreadyProcessed,
+  markZulipMessageProcessed: mocks.markZulipMessageProcessed,
 }));
 
 import { monitorZulipProvider, ZULIP_RECOVERY_NOTICE } from "./monitor.js";
@@ -266,6 +277,58 @@ function createHarness(params?: {
   mocks.buildZulipCheckpointId.mockImplementation(
     ({ accountId, messageId }: { accountId: string; messageId: number }) =>
       `${accountId}:${messageId}`,
+  );
+
+  mocks.loadZulipProcessedMessageState.mockResolvedValue({
+    version: 1,
+    accountId: "default",
+    updatedAtMs: 0,
+    streamWatermarks: {},
+  });
+  mocks.writeZulipProcessedMessageState.mockResolvedValue(undefined);
+  mocks.isZulipMessageAlreadyProcessed.mockImplementation(
+    ({
+      state,
+      stream,
+      messageId,
+    }: {
+      state: { streamWatermarks?: Record<string, number> };
+      stream: string;
+      messageId: number;
+    }) => {
+      const watermark = state.streamWatermarks?.[stream];
+      return typeof watermark === "number" && messageId <= watermark;
+    },
+  );
+  mocks.markZulipMessageProcessed.mockImplementation(
+    ({
+      state,
+      stream,
+      messageId,
+    }: {
+      state: Record<string, unknown>;
+      stream: string;
+      messageId: number;
+    }) => {
+      const watermarks = {
+        ...(state.streamWatermarks as Record<string, number> | undefined),
+      };
+      const current = watermarks[stream] ?? 0;
+      if (messageId <= current) {
+        return { state, updated: false };
+      }
+      return {
+        updated: true,
+        state: {
+          ...state,
+          streamWatermarks: {
+            ...watermarks,
+            [stream]: messageId,
+          },
+          updatedAtMs: Date.now(),
+        },
+      };
+    },
   );
 
   let pollCount = 0;
@@ -686,6 +749,165 @@ describe("monitorZulipProvider recovery checkpoints", () => {
       ([arg]) => (arg as { content?: string }).content === ZULIP_RECOVERY_NOTICE,
     );
     expect(recoveryNoticeCalls).toHaveLength(1);
+
+    monitor.stop();
+    await (monitor as { done: Promise<void> }).done;
+  });
+
+  it("skips duplicate stream messages across simulated restart using durable watermark state", async () => {
+    const event: ZulipEventMessage = {
+      id: 9001,
+      type: "stream",
+      sender_id: 55,
+      sender_full_name: "Tester",
+      display_recipient: "marcel",
+      stream_id: 42,
+      subject: "general",
+      content: "hello once",
+      timestamp: Math.floor(Date.now() / 1000),
+    };
+
+    let durableState = {
+      version: 1,
+      accountId: "default",
+      updatedAtMs: 0,
+      streamWatermarks: {} as Record<string, number>,
+    };
+
+    const configureDurableMocks = () => {
+      mocks.loadZulipProcessedMessageState.mockImplementation(async () => ({
+        ...durableState,
+        streamWatermarks: { ...durableState.streamWatermarks },
+      }));
+      mocks.isZulipMessageAlreadyProcessed.mockImplementation(
+        ({
+          state,
+          stream,
+          messageId,
+        }: {
+          state: { streamWatermarks?: Record<string, number> };
+          stream: string;
+          messageId: number;
+        }) => {
+          const watermark = state.streamWatermarks?.[stream];
+          return typeof watermark === "number" && messageId <= watermark;
+        },
+      );
+      mocks.markZulipMessageProcessed.mockImplementation(
+        ({
+          state,
+          stream,
+          messageId,
+        }: {
+          state: Record<string, unknown>;
+          stream: string;
+          messageId: number;
+        }) => {
+          const watermarks = {
+            ...(state.streamWatermarks as Record<string, number> | undefined),
+          };
+          const current = watermarks[stream] ?? 0;
+          if (messageId <= current) {
+            return { state, updated: false };
+          }
+          return {
+            updated: true,
+            state: {
+              ...state,
+              streamWatermarks: {
+                ...watermarks,
+                [stream]: messageId,
+              },
+              updatedAtMs: Date.now(),
+            },
+          };
+        },
+      );
+      mocks.writeZulipProcessedMessageState.mockImplementation(
+        async ({ state }: { state: typeof durableState }) => {
+          durableState = {
+            ...state,
+            streamWatermarks: { ...state.streamWatermarks },
+          };
+        },
+      );
+    };
+
+    const first = createHarness({ events: [event] });
+    configureDurableMocks();
+    const monitor1 = await monitorZulipProvider({
+      config: {} as never,
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    });
+
+    await waitForCondition(() => first.dispatchReplyFromConfig.mock.calls.length > 0);
+    await waitForCondition(() => mocks.writeZulipProcessedMessageState.mock.calls.length > 0);
+    expect(durableState.streamWatermarks.marcel).toBe(event.id);
+
+    monitor1.stop();
+    await (monitor1 as { done: Promise<void> }).done;
+
+    const second = createHarness({ events: [event] });
+    configureDurableMocks();
+    const monitor2 = await monitorZulipProvider({
+      config: {} as never,
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    });
+
+    await waitForCondition(() =>
+      mocks.zulipRequest.mock.calls.some(
+        ([arg]) => (arg as { path?: string }).path === "/api/v1/events",
+      ),
+    );
+
+    expect(second.dispatchReplyFromConfig).not.toHaveBeenCalled();
+
+    monitor2.stop();
+    await (monitor2 as { done: Promise<void> }).done;
+  });
+
+  it("treats missing/corrupt durable state fallback as empty and still processes messages", async () => {
+    const event: ZulipEventMessage = {
+      id: 9101,
+      type: "stream",
+      sender_id: 55,
+      sender_full_name: "Tester",
+      display_recipient: "marcel",
+      stream_id: 42,
+      subject: "general",
+      content: "hello after fallback",
+      timestamp: Math.floor(Date.now() / 1000),
+    };
+
+    const { dispatchReplyFromConfig } = createHarness({ events: [event] });
+    mocks.loadZulipProcessedMessageState.mockResolvedValueOnce({
+      version: 1,
+      accountId: "default",
+      updatedAtMs: 0,
+      streamWatermarks: {},
+    });
+
+    const monitor = await monitorZulipProvider({
+      config: {} as never,
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    });
+
+    await waitForCondition(() => dispatchReplyFromConfig.mock.calls.length > 0);
+    await waitForCondition(() => mocks.writeZulipProcessedMessageState.mock.calls.length > 0);
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
 
     monitor.stop();
     await (monitor as { done: Promise<void> }).done;
