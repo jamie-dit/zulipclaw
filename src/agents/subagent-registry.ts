@@ -35,6 +35,7 @@ export type SubagentRunRecord = {
   iterationsUsed?: number;
   iterationLimitReached?: boolean;
   iterationLimitFinalTurnRequested?: boolean;
+  iterationLimitContinuationScheduled?: boolean;
   createdAt: number;
   startedAt?: number;
   endedAt?: number;
@@ -282,8 +283,27 @@ async function maybeEnforceIterationLimit(params: {
     };
   }
 
+  // Completion can be observed by both lifecycle and wait handlers. Mark
+  // continuation scheduling before awaiting gateway calls so only one handler
+  // can enqueue the forced final-turn request.
+  if (params.entry.iterationLimitContinuationScheduled === true) {
+    return {
+      deferred: true,
+      outcome: normalizeRunOutcome({
+        ...params.outcome,
+        iterationsUsed: params.entry.iterationsUsed,
+        maxIterations,
+        iterationLimitReached: true,
+      }),
+    };
+  }
+
   const iterationLabel = `${params.entry.iterationsUsed ?? maxIterations}/${maxIterations}`;
   const forcedFinalMessage = `[System] Iteration limit reached (${iterationLabel}). You MUST provide your final completion report now. No more tool calls.`;
+
+  params.entry.iterationLimitContinuationScheduled = true;
+  params.entry.iterationLimitReached = true;
+  persistSubagentRuns();
 
   try {
     const idempotencyKey = randomUUID();
@@ -312,7 +332,6 @@ async function maybeEnforceIterationLimit(params: {
         ? response.runId
         : idempotencyKey;
     params.entry.iterationLimitFinalTurnRequested = true;
-    params.entry.iterationLimitReached = true;
     persistSubagentRuns();
     replaceSubagentRunAfterSteer({
       previousRunId: params.runId,

@@ -104,6 +104,39 @@ describe("buildCompletionDeliveryMessage", () => {
     expect(result).toContain("Found 3 issues");
   });
 
+  it("includes concise completion metadata when provided", () => {
+    const result = buildCompletionDeliveryMessage({
+      findings: "Found 3 issues",
+      subagentName: "audit-task",
+      metadata: {
+        status: "completed",
+        iterationsUsed: "3/5",
+        duration: "2m4s",
+        tokens: "1.2k (in 700 / out 500)",
+      },
+    });
+    expect(result).toContain("- Status: completed");
+    expect(result).toContain("- Iterations: 3/5");
+    expect(result).toContain("- Duration: 2m4s");
+    expect(result).toContain("- Tokens: 1.2k (in 700 / out 500)");
+  });
+
+  it("keeps metadata visible when there is no findings output", () => {
+    const result = buildCompletionDeliveryMessage({
+      findings: "",
+      subagentName: "audit-task",
+      metadata: {
+        status: "timeout",
+        iterationsUsed: "unknown/10",
+        duration: "n/a",
+        tokens: "0",
+      },
+    });
+    expect(result).toContain("Sub-agent `audit-task`");
+    expect(result).toContain("- Status: timeout");
+    expect(result).not.toContain("```spoiler Sub-agent output");
+  });
+
   it("sanitizes backticks in subagentName", () => {
     const result = buildCompletionDeliveryMessage({
       findings: "done",

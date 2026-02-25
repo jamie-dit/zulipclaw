@@ -165,6 +165,65 @@ describe("subagent iteration support", () => {
     expect(message).toContain("Stats: runtime");
   });
 
+  it("includes concise completion metadata in direct completion-mode messages", async () => {
+    const sendCalls: Array<{ params?: Record<string, unknown> }> = [];
+    hoisted.sessionStore = {
+      "agent:main:subagent:child": {
+        sessionId: "child-session",
+        inputTokens: 100,
+        outputTokens: 50,
+        totalTokens: 150,
+      },
+      "agent:main:main": {
+        sessionId: "main-session",
+      },
+    };
+    hoisted.callGatewayMock.mockImplementation(async (request: unknown) => {
+      const typed = request as { method?: string; params?: Record<string, unknown> };
+      if (typed.method === "send") {
+        sendCalls.push(typed);
+        return { ok: true };
+      }
+      if (typed.method === "chat.history") {
+        return {
+          messages: [{ role: "assistant", content: [{ type: "text", text: "final answer" }] }],
+        };
+      }
+      if (typed.method === "sessions.patch" || typed.method === "sessions.delete") {
+        return { ok: true };
+      }
+      return {};
+    });
+
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:child",
+      childRunId: "run-child-completion",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "zulip", to: "stream:marcel#topic" },
+      task: "task",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      roundOneReply: "final answer",
+      startedAt: 1000,
+      endedAt: 3000,
+      outcome: {
+        status: "ok",
+      },
+      expectsCompletionMessage: true,
+    });
+
+    const messageRaw = sendCalls[0]?.params?.message;
+    const message = typeof messageRaw === "string" ? messageRaw : JSON.stringify(messageRaw ?? "");
+    expect(message).toContain("- Status: completed");
+    expect(message).toContain("- Iterations:");
+    expect(message).toContain("- Duration:");
+    expect(message).toContain("- Tokens:");
+    expect(message).not.toContain("## Completion Metadata");
+  });
+
   it("shows iteration usage as unknown when maxIterations is not set", async () => {
     const agentCalls: Array<{ params?: Record<string, unknown> }> = [];
     hoisted.sessionStore = {

@@ -80,16 +80,35 @@ export function sanitizeInlineCodeName(name: string): string {
 export function buildCompletionDeliveryMessage(params: {
   findings: string;
   subagentName: string;
+  metadata?: {
+    status: string;
+    iterationsUsed: string;
+    duration: string;
+    tokens: string;
+  };
 }): string {
   const findingsText = params.findings.trim();
   const hasFindings = findingsText.length > 0 && findingsText !== "(no output)";
   const safeName = sanitizeInlineCodeName(params.subagentName);
   const header = `✅ **Sub-agent \`${safeName}\`** finished`;
+  const metadataLines = params.metadata
+    ? [
+        `- Status: ${params.metadata.status}`,
+        `- Iterations: ${params.metadata.iterationsUsed}`,
+        `- Duration: ${params.metadata.duration}`,
+        `- Tokens: ${params.metadata.tokens}`,
+      ]
+    : [];
+  const sections = [header];
+  if (metadataLines.length > 0) {
+    sections.push(metadataLines.join("\n"));
+  }
   if (!hasFindings) {
-    return header;
+    return sections.join("\n\n");
   }
   const safeFindings = sanitizeForCodeFence(findingsText);
-  return `${header}\n\n\`\`\`spoiler Sub-agent output\n${safeFindings}\n\`\`\``;
+  sections.push(`\`\`\`spoiler Sub-agent output\n${safeFindings}\n\`\`\``);
+  return sections.join("\n\n");
 }
 
 function summarizeDeliveryError(error: unknown): string {
@@ -1052,6 +1071,12 @@ export async function runSubagentAnnounceFlow(params: {
     completionMessage = buildCompletionDeliveryMessage({
       findings,
       subagentName,
+      metadata: {
+        status: completionMetadataStatus,
+        iterationsUsed,
+        duration: stats.duration,
+        tokens: stats.tokens,
+      },
     });
     const internalSummaryMessage = [
       `[System Message] [sessionId: ${announceSessionId}] A ${announceType} "${taskLabel}" just ${statusLabel}.`,
