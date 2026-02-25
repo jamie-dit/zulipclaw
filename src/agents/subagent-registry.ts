@@ -913,6 +913,17 @@ export function markSubagentRunTerminated(params: {
   return updated;
 }
 
+export function getSubagentRunRecord(runId: string): SubagentRunRecord | undefined {
+  if (typeof runId !== "string" || !runId) {
+    return undefined;
+  }
+  const key = runId.trim();
+  if (!key) {
+    return undefined;
+  }
+  return subagentRuns.get(key);
+}
+
 export function getSubagentRelayDeliveryContext(
   runId: string,
 ): SubagentRelayDeliveryContext | undefined {

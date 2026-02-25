@@ -10,6 +10,8 @@
  * Called from `server.impl.ts` as a fire-and-forget step after `initSubagentRegistry()`.
  */
 
+import { dispatchChannelMessageAction } from "../channels/plugins/message-actions.js";
+import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { loadSessionEntry } from "../gateway/session-utils.js";
 import { defaultRuntime } from "../runtime.js";
@@ -33,7 +35,7 @@ export type RecoveryOutcome = {
  * Read the last few assistant messages from a session to summarise progress.
  * Returns an empty array when the session is gone or history is unreadable.
  */
-async function readSessionProgressSummary(
+export async function readSessionProgressSummary(
   sessionKey: string,
 ): Promise<{ hasHistory: boolean; progressSummary: string }> {
   try {
@@ -138,7 +140,7 @@ export function detectOrphanedRuns(): SubagentRunRecord[] {
  * Mark an orphaned run as terminated in the persisted registry so it isn't
  * picked up again on subsequent restarts.
  */
-function markRunTerminatedInRegistry(runId: string): void {
+export function markRunTerminatedInRegistry(runId: string): void {
   const persisted = loadSubagentRegistryFromDisk();
   const entry = persisted.get(runId);
   if (!entry) {
@@ -154,7 +156,7 @@ function markRunTerminatedInRegistry(runId: string): void {
 }
 
 /** Check whether a task looks like it involves creating a PR or pushing code. */
-function taskLooksResumable(task: string): boolean {
+export function taskLooksResumable(task: string): boolean {
   // Tasks that are pure investigations, coding, or multi-step workflows are generally resumable.
   // Very short or trivial tasks are less worth re-spawning.
   if (task.length < 50) {
@@ -163,7 +165,7 @@ function taskLooksResumable(task: string): boolean {
   return true;
 }
 
-function buildResumptionTask(original: SubagentRunRecord, progressSummary: string): string {
+export function buildResumptionTask(original: SubagentRunRecord, progressSummary: string): string {
   const originalTask = original.task;
   const label = original.label || original.runId;
 
@@ -220,6 +222,48 @@ function buildZulipSummaryMessage(outcomes: RecoveryOutcome[]): string {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * Send a notification to the requester's delivery context (e.g. Zulip topic)
+ * informing them that their sub-agent was interrupted and re-spawned.
+ * Best-effort: never throws.
+ */
+async function sendRequesterNotification(run: SubagentRunRecord, newLabel: string): Promise<void> {
+  const channel = run.requesterOrigin?.channel || run.requesterDeliveryContext?.channel;
+  const to = run.requesterOrigin?.to || run.requesterDeliveryContext?.to;
+  const accountId = run.requesterOrigin?.accountId || run.requesterDeliveryContext?.accountId;
+  const label = run.label || run.runId.slice(0, 12);
+
+  if (!channel || !to) {
+    defaultRuntime.log?.(
+      `[info] subagent restart recovery: no requester delivery context for ${label}, skipping requester notification`,
+    );
+    return;
+  }
+
+  const message = `⚡ Sub-agent \`${label}\` was interrupted by a gateway restart and has been re-spawned as \`${newLabel}\`. It will continue where the previous run left off.`;
+
+  try {
+    const cfg = loadConfig();
+    await dispatchChannelMessageAction({
+      channel,
+      action: "send",
+      cfg,
+      accountId: accountId || undefined,
+      params: {
+        channel,
+        target: to,
+        message,
+        accountId: accountId || undefined,
+      },
+      dryRun: false,
+    });
+  } catch (err) {
+    defaultRuntime.log?.(
+      `[warn] subagent restart recovery: failed to send requester notification for ${label}: ${String(err)}`,
+    );
+  }
 }
 
 /**
@@ -330,6 +374,7 @@ export async function runSubagentRestartRecovery(): Promise<RecoveryOutcome[]> {
       );
 
       if (result.status === "accepted") {
+        const newLabel = `${label}-resumed`;
         const progressNote = hasHistory
           ? "re-spawned, continuing from previous progress"
           : "re-spawned from scratch (no history recoverable)";
@@ -342,6 +387,18 @@ export async function runSubagentRestartRecovery(): Promise<RecoveryOutcome[]> {
         defaultRuntime.log?.(
           `[info] subagent restart recovery: re-spawned ${label} as ${result.childSessionKey}`,
         );
+
+        // Update the old relay message to show it was re-spawned.
+        // Use dynamic import to avoid circular dependency (relay → restart-recovery → relay).
+        try {
+          const { markRelayRunRespawned } = await import("./subagent-relay.js");
+          markRelayRunRespawned(run.runId, newLabel);
+        } catch {
+          // Best-effort: relay update failure shouldn't block recovery
+        }
+
+        // Notify the requester topic
+        await sendRequesterNotification(run, newLabel);
       } else {
         outcomes.push({
           runId: run.runId,

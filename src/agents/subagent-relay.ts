@@ -6,6 +6,12 @@ import { callGateway } from "../gateway/call.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "../plugin-sdk/json-store.js";
 import { defaultRuntime } from "../runtime.js";
+import {
+  buildResumptionTask,
+  readSessionProgressSummary,
+  taskLooksResumable,
+} from "./subagent-restart-recovery.js";
+import { spawnSubagentDirect } from "./subagent-spawn.js";
 
 /**
  * ZulipClaw fork note:
@@ -57,6 +63,8 @@ export type RelayState = {
   watchdogNudgedAt?: number;
   lastToolName?: string;
   lastToolArgs?: Record<string, unknown>;
+  /** When the run was re-spawned, stores the new label for display in the relay message. */
+  respawnedAs?: string;
 };
 
 const TOOL_EMOJI: Record<string, string> = {
@@ -82,6 +90,8 @@ const WATCHDOG_EXEC_BUFFER_MS = 60_000;
 const WATCHDOG_PROCESS_TIMEOUT_MS = 10 * 60_000;
 /** Extended timeout for sessions_spawn/subagents (waiting for child). */
 const WATCHDOG_SPAWN_TIMEOUT_MS = 30 * 60_000;
+/** Maximum number of watchdog respawns per task lineage. */
+const WATCHDOG_MAX_RESPAWN_COUNT = 2;
 /** Debounce delay for writing mirror state to disk. */
 const MIRROR_STATE_SAVE_DEBOUNCE_MS = 500;
 
@@ -496,7 +506,8 @@ export function renderRelayMessage(state: RelayState, originTopic?: string) {
   const modelShort = state.model.includes("/") ? state.model.split("/").pop() : state.model;
   const profileSuffix = state.authProfile ? ` (${state.authProfile})` : "";
   const originSuffix = originTopic ? ` · 📍 ${originTopic}` : "";
-  const header = `${emoji} **\`${state.label}\`** · ${modelShort}${profileSuffix} · ${state.toolCount} ${callWord} · updated ${updatedTime}${watchdogEmoji}${originSuffix}`;
+  const respawnSuffix = state.respawnedAs ? ` · ⚡ re-spawned as \`${state.respawnedAs}\`` : "";
+  const header = `${emoji} **\`${state.label}\`** · ${modelShort}${profileSuffix} · ${state.toolCount} ${callWord} · updated ${updatedTime}${watchdogEmoji}${originSuffix}${respawnSuffix}`;
   const sanitizedLines = state.toolLines.map((line) => sanitizeForCodeFence(line));
   return `${header}\n\n\`\`\`spoiler Tool calls\n${sanitizedLines.join("\n")}\n\`\`\``;
 }
@@ -920,6 +931,151 @@ async function sendWatchdogNotification(state: RelayState, message: string): Pro
   }
 }
 
+/**
+ * Count the number of respawns in a label by counting `-respawned` suffixes.
+ * e.g. "my-task" → 0, "my-task-respawned" → 1, "my-task-respawned-2" → 2
+ */
+export function countRespawnsInLabel(label: string): number {
+  const respawnMatches = label.match(/-respawned(?:-(\d+))?$/);
+  if (!respawnMatches) {
+    return 0;
+  }
+  // "-respawned" = 1, "-respawned-2" = 2
+  const suffix = respawnMatches[1];
+  return suffix ? Number.parseInt(suffix, 10) : 1;
+}
+
+/**
+ * Build the next respawned label from the current label.
+ * "my-task" → "my-task-respawned", "my-task-respawned" → "my-task-respawned-2"
+ */
+export function buildRespawnedLabel(label: string): string {
+  const count = countRespawnsInLabel(label);
+  if (count === 0) {
+    return `${label}-respawned`;
+  }
+  // Strip the current respawn suffix and add incremented one
+  const base = label.replace(/-respawned(?:-\d+)?$/, "");
+  return `${base}-respawned-${count + 1}`;
+}
+
+/**
+ * Check whether watchdog respawn is enabled in config.
+ * Default: true.
+ */
+function isWatchdogRespawnEnabled(): boolean {
+  const cfg = loadConfig();
+  const value = cfg.agents?.defaults?.subagents?.watchdogRespawn;
+  if (typeof value === "boolean") {
+    return value;
+  }
+  return true; // default enabled
+}
+
+/**
+ * Attempt to re-spawn a dead sub-agent detected by the watchdog.
+ * Returns the new label if respawned, or undefined if respawn was skipped/failed.
+ */
+async function attemptWatchdogRespawn(
+  runId: string,
+  state: RelayState,
+): Promise<string | undefined> {
+  // Import getter lazily to avoid circular dependency issues at module load time.
+  // subagent-registry imports subagent-relay, so a top-level import would create a cycle.
+  const { getSubagentRunRecord, markSubagentRunTerminated } =
+    await import("./subagent-registry.js");
+
+  if (!isWatchdogRespawnEnabled()) {
+    defaultRuntime.log?.(
+      `[watchdog] Respawn disabled by config for "${state.label}" (run ${runId})`,
+    );
+    return undefined;
+  }
+
+  const run = getSubagentRunRecord(runId);
+  if (!run) {
+    defaultRuntime.log?.(
+      `[watchdog] No registry entry found for "${state.label}" (run ${runId}), cannot respawn`,
+    );
+    return undefined;
+  }
+
+  // Don't respawn if explicitly killed by user
+  if (run.suppressAnnounceReason === "killed") {
+    defaultRuntime.log?.(
+      `[watchdog] Run "${state.label}" (run ${runId}) was explicitly killed, skipping respawn`,
+    );
+    return undefined;
+  }
+
+  // Check respawn count limit
+  const currentLabel = run.label || state.label || "worker";
+  const respawnCount = countRespawnsInLabel(currentLabel);
+  if (respawnCount >= WATCHDOG_MAX_RESPAWN_COUNT) {
+    defaultRuntime.log?.(
+      `[watchdog] Run "${state.label}" (run ${runId}) has reached max respawn count (${respawnCount}/${WATCHDOG_MAX_RESPAWN_COUNT}), skipping`,
+    );
+    return undefined;
+  }
+
+  // Check if task is resumable
+  if (!taskLooksResumable(run.task)) {
+    defaultRuntime.log?.(
+      `[watchdog] Task for "${state.label}" (run ${runId}) is too short to respawn`,
+    );
+    return undefined;
+  }
+
+  // Read session progress
+  const { progressSummary } = await readSessionProgressSummary(run.childSessionKey);
+
+  // Build resumption task
+  const resumptionTask = buildResumptionTask(run, progressSummary);
+  const newLabel = buildRespawnedLabel(currentLabel);
+
+  // Mark old run as terminated
+  markSubagentRunTerminated({
+    runId: run.runId,
+    reason: "died-watchdog",
+  });
+
+  try {
+    const result = await spawnSubagentDirect(
+      {
+        task: resumptionTask,
+        label: newLabel,
+        model: run.model,
+        cleanup: run.cleanup,
+        runTimeoutSeconds: run.runTimeoutSeconds,
+        expectsCompletionMessage: run.expectsCompletionMessage,
+      },
+      {
+        agentChannel: run.requesterOrigin?.channel,
+        agentAccountId: run.requesterOrigin?.accountId,
+        agentTo: run.requesterOrigin?.to,
+        agentThreadId: run.requesterOrigin?.threadId,
+      },
+    );
+
+    if (result.status === "accepted") {
+      defaultRuntime.log?.(
+        `[watchdog] Re-spawned "${state.label}" as "${newLabel}" (new run: ${result.runId})`,
+      );
+      return newLabel;
+    }
+
+    defaultRuntime.log?.(
+      `[watchdog] Failed to respawn "${state.label}": ${result.error || result.status}`,
+    );
+    return undefined;
+  } catch (err) {
+    defaultRuntime.log?.(
+      `[watchdog] Error respawning "${state.label}": ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return undefined;
+  }
+}
+
 async function onWatchdogFired(runId: string): Promise<void> {
   const state = relayByRun.get(runId);
   if (!state || state.status === "ok" || state.status === "error") {
@@ -936,6 +1092,24 @@ async function onWatchdogFired(runId: string): Promise<void> {
   if (!alive) {
     // Sub-agent is dead/timed out
     defaultRuntime.log?.(`[watchdog] Sub-agent "${state.label}" (run ${runId}) is dead`);
+
+    // Attempt to re-spawn the dead sub-agent
+    const newLabel = await attemptWatchdogRespawn(runId, state);
+
+    if (newLabel) {
+      // Re-spawned successfully — update relay message with respawn info
+      state.watchdogStatus = "frozen";
+      state.status = "error";
+      state.respawnedAs = newLabel;
+      void flushRelayMessage(runId, { finalize: true });
+      await sendWatchdogNotification(
+        state,
+        `⚠️ **Watchdog**: Sub-agent \`${state.label}\` died and has been re-spawned as \`${newLabel}\`. Run: \`${runId}\``,
+      );
+      return;
+    }
+
+    // Respawn failed or was skipped — fall through to original notification behavior
     state.watchdogStatus = "frozen";
     state.status = "error";
     void flushRelayMessage(runId);
@@ -1182,4 +1356,27 @@ export function unregisterSubagentRelayRun(runId: string) {
   }
   relayByRun.delete(key);
   registrationsByRun.delete(key);
+}
+
+/**
+ * Mark a relay run's message as re-spawned and flush the updated message.
+ * Called after a dead sub-agent is re-spawned (by watchdog or restart recovery)
+ * so the old relay message shows context about the continuation.
+ */
+export function markRelayRunRespawned(runId: string, newLabel: string): void {
+  if (typeof runId !== "string" || !runId) {
+    return;
+  }
+  const key = runId.trim();
+  if (!key) {
+    return;
+  }
+  const state = relayByRun.get(key);
+  if (!state) {
+    return;
+  }
+  state.respawnedAs = newLabel;
+  state.status = "error";
+  state.lastUpdatedAt = Date.now();
+  void flushRelayMessage(key, { finalize: true });
 }
