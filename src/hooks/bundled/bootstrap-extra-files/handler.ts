@@ -47,9 +47,13 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
     if (extras.length === 0) {
       return;
     }
+    const cfg = context.cfg as
+      | { agents?: { defaults?: { subagents?: { bootstrapFiles?: string[] } } } }
+      | undefined;
     context.bootstrapFiles = filterBootstrapFilesForSession(
       [...context.bootstrapFiles, ...extras],
       context.sessionKey,
+      { subagentBootstrapFiles: cfg?.agents?.defaults?.subagents?.bootstrapFiles },
     );
   } catch (err) {
     console.warn(`[bootstrap-extra-files] failed: ${String(err)}`);

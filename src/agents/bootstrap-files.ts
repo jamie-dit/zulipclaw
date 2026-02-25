@@ -33,6 +33,7 @@ export async function resolveBootstrapFilesForRun(params: {
   const bootstrapFiles = filterBootstrapFilesForSession(
     await loadWorkspaceBootstrapFiles(params.workspaceDir),
     sessionKey,
+    { subagentBootstrapFiles: params.config?.agents?.defaults?.subagents?.bootstrapFiles },
   );
 
   return applyBootstrapHookOverrides({

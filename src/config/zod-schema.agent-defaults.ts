@@ -173,6 +173,12 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        bootstrapFiles: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Workspace files to include in sub-agent bootstrap context. Default: ["AGENTS.md", "TOOLS.md", "SOUL.md", "USER.md", "IDENTITY.md"]',
+          ),
       })
       .strict()
       .optional(),
