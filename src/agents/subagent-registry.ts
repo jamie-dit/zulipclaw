@@ -914,6 +914,9 @@ export function markSubagentRunTerminated(params: {
 }
 
 export function getSubagentRunRecord(runId: string): SubagentRunRecord | undefined {
+  if (typeof runId !== "string" || !runId) {
+    return undefined;
+  }
   const key = runId.trim();
   if (!key) {
     return undefined;

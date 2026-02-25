@@ -1364,6 +1364,9 @@ export function unregisterSubagentRelayRun(runId: string) {
  * so the old relay message shows context about the continuation.
  */
 export function markRelayRunRespawned(runId: string, newLabel: string): void {
+  if (typeof runId !== "string" || !runId) {
+    return;
+  }
   const key = runId.trim();
   if (!key) {
     return;
