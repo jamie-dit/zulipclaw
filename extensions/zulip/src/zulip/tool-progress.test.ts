@@ -249,6 +249,60 @@ describe("ToolProgressAccumulator", () => {
     expect(inner).not.toMatch(/`{3}/);
   });
 
+  it("escapes markdown heading syntax inside spoiler content", async () => {
+    vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 550 });
+
+    const acc = makeAccumulator({ name: "Marcel" });
+    // Simulate a tool line whose text contains markdown heading syntax.
+    // This can happen when e.g. sessions_spawn task descriptions include headings.
+    acc.addLine("🧑🔧 Sub-agent: ## Get a snippet of the trailofbits pack");
+    await acc.flush();
+
+    const content = String(vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "");
+    const spoilerMatch = content.match(/```spoiler Tool calls\n([\s\S]*?)\n```$/);
+    expect(spoilerMatch).not.toBeNull();
+    const inner = spoilerMatch![1]!;
+    // The heading syntax should be escaped (zero-width space before #)
+    // so it doesn't render as an actual heading in the spoiler block.
+    expect(inner).not.toMatch(/^#{1,6}\s/m);
+    // The original text should still be recognizable
+    expect(inner).toContain("Get a snippet of the trailofbits pack");
+  });
+
+  it("escapes heading syntax in multi-line tool text with embedded newlines", async () => {
+    vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 551 });
+
+    const acc = makeAccumulator({ name: "Marcel" });
+    // Text with embedded newlines where a heading appears on its own line
+    acc.addLine("🧑🔧 Sub-agent: task details\n## Heading on new line\nmore text");
+    await acc.flush();
+
+    const content = String(vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "");
+    const spoilerMatch = content.match(/```spoiler Tool calls\n([\s\S]*?)\n```$/);
+    expect(spoilerMatch).not.toBeNull();
+    const inner = spoilerMatch![1]!;
+    // No raw heading markers at start of any line
+    expect(inner).not.toMatch(/^#{1,6}\s/m);
+    // Content is preserved
+    expect(inner).toContain("Heading on new line");
+    expect(inner).toContain("more text");
+  });
+
+  it("does not escape # in the middle of a line", async () => {
+    vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 552 });
+
+    const acc = makeAccumulator({ name: "Marcel" });
+    acc.addLine("🔧 exec: grep '# comment' file.ts");
+    await acc.flush();
+
+    const content = String(vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "");
+    const spoilerMatch = content.match(/```spoiler Tool calls\n([\s\S]*?)\n```$/);
+    expect(spoilerMatch).not.toBeNull();
+    const inner = spoilerMatch![1]!;
+    // The # inside the line (not at start) should be untouched
+    expect(inner).toContain("# comment");
+  });
+
   it("shows 🔄 emoji while running (default status)", async () => {
     vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 600 });
 

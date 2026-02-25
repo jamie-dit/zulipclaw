@@ -127,12 +127,24 @@ export class ToolProgressAccumulator {
   }
 
   /**
-   * Sanitize text for inclusion inside a triple-backtick code fence.
-   * Breaks up runs of 3+ backticks with zero-width spaces so they
-   * don't prematurely close the fence.
+   * Sanitize text for inclusion inside a Zulip spoiler block.
+   *
+   * Zulip spoiler blocks (` ```spoiler Title `) render their content as
+   * full markdown, NOT as a code block. This means:
+   * - Runs of 3+ backticks can close the spoiler fence prematurely.
+   * - Markdown heading syntax (`#`, `##`, etc.) at the start of a line
+   *   renders as actual headings, breaking the compact display.
+   *
+   * This method inserts zero-width spaces to neutralize both patterns.
    */
-  private static sanitizeForCodeFence(text: string): string {
-    return text.replace(/`{3,}/g, (match) => match.split("").join("\u200B"));
+  private static sanitizeForSpoiler(text: string): string {
+    // Break up runs of 3+ backticks so they don't close the spoiler fence.
+    let sanitized = text.replace(/`{3,}/g, (match) => match.split("").join("\u200B"));
+    // Escape markdown heading syntax at the start of any line.
+    // Insert a zero-width space before the leading '#' so it's not
+    // interpreted as a heading while remaining visually identical.
+    sanitized = sanitized.replace(/^(#{1,6}\s)/gm, "\u200B$1");
+    return sanitized;
   }
 
   /**
@@ -149,7 +161,7 @@ export class ToolProgressAccumulator {
     const emoji = STATUS_EMOJI[this.status] ?? "🔄";
     const header = `${emoji} **\`${name}\`**${modelSegment} · ${count} ${callWord} · updated ${lastTimestamp}`;
     const sanitizedLines = this.lines.map((line) =>
-      ToolProgressAccumulator.sanitizeForCodeFence(line),
+      ToolProgressAccumulator.sanitizeForSpoiler(line),
     );
     return `${header}\n\n\`\`\`spoiler Tool calls\n${sanitizedLines.join("\n")}\n\`\`\``;
   }
