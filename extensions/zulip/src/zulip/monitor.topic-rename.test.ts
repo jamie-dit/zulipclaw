@@ -20,6 +20,10 @@ const mocks = vi.hoisted(() => ({
   prepareZulipCheckpointForRecovery: vi.fn(),
   markZulipCheckpointFailure: vi.fn(),
   buildZulipCheckpointId: vi.fn(),
+  loadZulipProcessedMessageState: vi.fn(),
+  writeZulipProcessedMessageState: vi.fn(),
+  isZulipMessageAlreadyProcessed: vi.fn(),
+  markZulipMessageProcessed: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk", async (importOriginal) => {
@@ -73,6 +77,13 @@ vi.mock("./inflight-checkpoints.js", () => ({
   prepareZulipCheckpointForRecovery: mocks.prepareZulipCheckpointForRecovery,
   markZulipCheckpointFailure: mocks.markZulipCheckpointFailure,
   buildZulipCheckpointId: mocks.buildZulipCheckpointId,
+}));
+
+vi.mock("./processed-message-state.js", () => ({
+  loadZulipProcessedMessageState: mocks.loadZulipProcessedMessageState,
+  writeZulipProcessedMessageState: mocks.writeZulipProcessedMessageState,
+  isZulipMessageAlreadyProcessed: mocks.isZulipMessageAlreadyProcessed,
+  markZulipMessageProcessed: mocks.markZulipMessageProcessed,
 }));
 
 import { monitorZulipProvider } from "./monitor.js";
@@ -226,6 +237,57 @@ function createHarness(events: ZulipQueueEvent[]) {
   mocks.buildZulipCheckpointId.mockImplementation(
     ({ accountId, messageId }: { accountId: string; messageId: number }) =>
       `${accountId}:${messageId}`,
+  );
+  mocks.loadZulipProcessedMessageState.mockResolvedValue({
+    version: 1,
+    accountId: "default",
+    updatedAtMs: 0,
+    streamWatermarks: {},
+  });
+  mocks.writeZulipProcessedMessageState.mockResolvedValue(undefined);
+  mocks.isZulipMessageAlreadyProcessed.mockImplementation(
+    ({
+      state,
+      stream,
+      messageId,
+    }: {
+      state: { streamWatermarks?: Record<string, number> };
+      stream: string;
+      messageId: number;
+    }) => {
+      const watermark = state.streamWatermarks?.[stream];
+      return typeof watermark === "number" && messageId <= watermark;
+    },
+  );
+  mocks.markZulipMessageProcessed.mockImplementation(
+    ({
+      state,
+      stream,
+      messageId,
+    }: {
+      state: Record<string, unknown>;
+      stream: string;
+      messageId: number;
+    }) => {
+      const watermarks = {
+        ...(state.streamWatermarks as Record<string, number> | undefined),
+      };
+      const current = watermarks[stream] ?? 0;
+      if (messageId <= current) {
+        return { state, updated: false };
+      }
+      return {
+        updated: true,
+        state: {
+          ...state,
+          streamWatermarks: {
+            ...watermarks,
+            [stream]: messageId,
+          },
+          updatedAtMs: Date.now(),
+        },
+      };
+    },
   );
 
   let pollCount = 0;
@@ -578,6 +640,57 @@ function createCrossStreamHarness(streamEvents: Record<string, ZulipQueueEvent[]
     ({ accountId, messageId }: { accountId: string; messageId: number }) =>
       `${accountId}:${messageId}`,
   );
+  mocks.loadZulipProcessedMessageState.mockResolvedValue({
+    version: 1,
+    accountId: "default",
+    updatedAtMs: 0,
+    streamWatermarks: {},
+  });
+  mocks.writeZulipProcessedMessageState.mockResolvedValue(undefined);
+  mocks.isZulipMessageAlreadyProcessed.mockImplementation(
+    ({
+      state,
+      stream,
+      messageId,
+    }: {
+      state: { streamWatermarks?: Record<string, number> };
+      stream: string;
+      messageId: number;
+    }) => {
+      const watermark = state.streamWatermarks?.[stream];
+      return typeof watermark === "number" && messageId <= watermark;
+    },
+  );
+  mocks.markZulipMessageProcessed.mockImplementation(
+    ({
+      state,
+      stream,
+      messageId,
+    }: {
+      state: Record<string, unknown>;
+      stream: string;
+      messageId: number;
+    }) => {
+      const watermarks = {
+        ...(state.streamWatermarks as Record<string, number> | undefined),
+      };
+      const current = watermarks[stream] ?? 0;
+      if (messageId <= current) {
+        return { state, updated: false };
+      }
+      return {
+        updated: true,
+        state: {
+          ...state,
+          streamWatermarks: {
+            ...watermarks,
+            [stream]: messageId,
+          },
+          updatedAtMs: Date.now(),
+        },
+      };
+    },
+  );
 
   const subscriptions = [
     { stream_id: 42, name: "marcel" },
@@ -897,6 +1010,57 @@ describe("monitorZulipProvider cross-stream topic move session continuity", () =
     mocks.buildZulipCheckpointId.mockImplementation(
       ({ accountId, messageId }: { accountId: string; messageId: number }) =>
         `${accountId}:${messageId}`,
+    );
+    mocks.loadZulipProcessedMessageState.mockResolvedValue({
+      version: 1,
+      accountId: "default",
+      updatedAtMs: 0,
+      streamWatermarks: {},
+    });
+    mocks.writeZulipProcessedMessageState.mockResolvedValue(undefined);
+    mocks.isZulipMessageAlreadyProcessed.mockImplementation(
+      ({
+        state,
+        stream,
+        messageId,
+      }: {
+        state: { streamWatermarks?: Record<string, number> };
+        stream: string;
+        messageId: number;
+      }) => {
+        const watermark = state.streamWatermarks?.[stream];
+        return typeof watermark === "number" && messageId <= watermark;
+      },
+    );
+    mocks.markZulipMessageProcessed.mockImplementation(
+      ({
+        state,
+        stream,
+        messageId,
+      }: {
+        state: Record<string, unknown>;
+        stream: string;
+        messageId: number;
+      }) => {
+        const watermarks = {
+          ...(state.streamWatermarks as Record<string, number> | undefined),
+        };
+        const current = watermarks[stream] ?? 0;
+        if (messageId <= current) {
+          return { state, updated: false };
+        }
+        return {
+          updated: true,
+          state: {
+            ...state,
+            streamWatermarks: {
+              ...watermarks,
+              [stream]: messageId,
+            },
+            updatedAtMs: Date.now(),
+          },
+        };
+      },
     );
 
     let pollCount = 0;

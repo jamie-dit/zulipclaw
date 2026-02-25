@@ -25,6 +25,13 @@ import {
   writeZulipInFlightCheckpoint,
 } from "./inflight-checkpoints.js";
 import { normalizeStreamName, normalizeTopic } from "./normalize.js";
+import {
+  isZulipMessageAlreadyProcessed,
+  loadZulipProcessedMessageState,
+  markZulipMessageProcessed,
+  type ZulipProcessedMessageState,
+  writeZulipProcessedMessageState,
+} from "./processed-message-state.js";
 import { buildZulipQueuePlan, buildZulipRegisterNarrow } from "./queue-plan.js";
 import {
   getReactionButtonSession,
@@ -978,6 +985,25 @@ export async function monitorZulipProvider(
     // Dedupe cache prevents reprocessing messages after queue re-registration or reconnect.
     const dedupe = createDedupeCache({ ttlMs: 5 * 60 * 1000, maxSize: 500 });
 
+    // Durable message watermark state prevents duplicate processing across restarts.
+    let processedMessageState: ZulipProcessedMessageState = await loadZulipProcessedMessageState({
+      accountId: account.accountId,
+    });
+    let processedMessageWriteChain: Promise<void> = Promise.resolve();
+    const persistProcessedMessageState = () => {
+      processedMessageWriteChain = processedMessageWriteChain
+        .catch(() => undefined)
+        .then(async () => {
+          await writeZulipProcessedMessageState({ state: processedMessageState });
+        })
+        .catch((err) => {
+          runtime.error?.(
+            `[zulip:${account.accountId}] failed to persist processed-message state: ${String(err)}`,
+          );
+        });
+      return processedMessageWriteChain;
+    };
+
     // Track DM senders we've already notified to avoid spam.
     const dmNotifiedSenders = new Set<number>();
     // Topic-rename alias map: composite keys "stream\0topicKey" -> canonical "stream\0topicKey".
@@ -1006,6 +1032,15 @@ export async function monitorZulipProvider(
       const topic = normalizeTopic(msg.subject) || account.defaultTopic;
       const content = msg.content ?? "";
       if (!stream) {
+        return;
+      }
+      if (
+        !isRecovery &&
+        isZulipMessageAlreadyProcessed({ state: processedMessageState, stream, messageId: msg.id })
+      ) {
+        logger.debug?.(
+          `[zulip:${account.accountId}] skip already-processed message ${msg.id} (${stream}) from durable watermark`,
+        );
         return;
       }
       if (isRecovery) {
@@ -1489,6 +1524,16 @@ export async function monitorZulipProvider(
           try {
             if (ok) {
               await clearZulipInFlightCheckpoint({ checkpointId: checkpoint.checkpointId });
+
+              const markedProcessed = markZulipMessageProcessed({
+                state: processedMessageState,
+                stream,
+                messageId: msg.id,
+              });
+              if (markedProcessed.updated) {
+                processedMessageState = markedProcessed.state;
+                await persistProcessedMessageState();
+              }
             } else {
               checkpoint = markZulipCheckpointFailure({
                 checkpoint,
