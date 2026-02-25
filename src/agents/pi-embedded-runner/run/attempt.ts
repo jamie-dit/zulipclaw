@@ -475,6 +475,9 @@ export async function runEmbeddedAttempt(
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
+    // Track when the attempt started so we can calculate remaining timeout for
+    // the tool-result flush safety net (see finally block below).
+    const attemptStartedAt = Date.now();
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
@@ -690,9 +693,12 @@ export async function runEmbeddedAttempt(
           activeSession.agent.replaceMessages(limited);
         }
       } catch (err) {
+        const earlyElapsedMs = Date.now() - attemptStartedAt;
+        const earlyRemainingMs = Math.max(params.timeoutMs - earlyElapsedMs, 0);
         await flushPendingToolResultsAfterIdle({
           agent: activeSession?.agent,
           sessionManager,
+          timeoutMs: Math.max(earlyRemainingMs, 60_000),
         });
         activeSession.dispose();
         throw err;
@@ -1043,6 +1049,16 @@ export async function runEmbeddedAttempt(
           } else {
             await abortable(activeSession.prompt(effectivePrompt));
           }
+
+          // FIX: Wait for the agent loop to fully complete after prompt() returns.
+          // pi-coding-agent's AgentSession.prompt() calls waitForRetry() which can
+          // resolve on message_end (during auto-retry) BEFORE tool execution finishes.
+          // This leaves a window where prompt() returns but tools are still executing.
+          // Explicitly waiting for agent idle closes this race condition.
+          // See: tool result loss race condition
+          if (activeSession.agent.waitForIdle) {
+            await abortable(activeSession.agent.waitForIdle());
+          }
         } catch (err) {
           promptError = err;
           promptErrorSource = "prompt";
@@ -1263,10 +1279,19 @@ export async function runEmbeddedAttempt(
       // flushPendingToolResults() fires while tools are still executing, inserting
       // synthetic "missing tool result" errors and causing silent agent failures.
       // See: https://github.com/openclaw/openclaw/issues/8643
+      //
+      // FIX: Use remaining run timeout instead of the hardcoded 30s default.
+      // Sequential tool calls (e.g. 2x web_fetch with 30s each) easily exceed 30s.
+      // Calculate remaining time from the overall run timeout with a 60s minimum
+      // to give tools enough time to complete.
+      const elapsedMs = Date.now() - attemptStartedAt;
+      const remainingMs = Math.max(params.timeoutMs - elapsedMs, 0);
+      const flushTimeoutMs = Math.max(remainingMs, 60_000);
       removeToolResultContextGuard?.();
       await flushPendingToolResultsAfterIdle({
         agent: session?.agent,
         sessionManager,
+        timeoutMs: flushTimeoutMs,
       });
       session?.dispose();
       await sessionLock.release();
