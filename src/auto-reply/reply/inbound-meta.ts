@@ -4,24 +4,39 @@ import { resolveSenderLabel } from "../../channels/sender-label.js";
 import type { TemplateContext } from "../templating.js";
 
 /**
+ * Cache for Intl.DateTimeFormat instances keyed by timezone string.
+ * Avoids recreating the formatter on every call in high-throughput environments.
+ */
+const dtfCache = new Map<string, Intl.DateTimeFormat>();
+
+function getDateTimeFormatter(timeZone: string): Intl.DateTimeFormat {
+  let fmt = dtfCache.get(timeZone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      fractionalSecondDigits: 3,
+      hourCycle: "h23",
+      timeZoneName: "longOffset",
+    });
+    dtfCache.set(timeZone, fmt);
+  }
+  return fmt;
+}
+
+/**
  * Format a unix-ms timestamp as an ISO 8601 string with the local timezone offset
  * (e.g. "2026-02-25T11:44:00.000+11:00") instead of the UTC "Z" suffix.
  */
 function formatIsoWithOffset(timestampMs: number, timeZone: string): string {
   const date = new Date(timestampMs);
-  // Use Intl to get the UTC offset for the given timezone at this instant
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    fractionalSecondDigits: 3,
-    hourCycle: "h23",
-    timeZoneName: "longOffset",
-  }).formatToParts(date);
+  // Use the cached Intl.DateTimeFormat to get parts for the given timezone at this instant
+  const parts = getDateTimeFormatter(timeZone).formatToParts(date);
 
   const pick = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
   const yyyy = pick("year");
@@ -54,6 +69,7 @@ function safeTrim(value: unknown): string | undefined {
 }
 
 export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
+  const tz = resolveUserTimezone();
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
   const messageId = safeTrim(ctx.MessageSid);
@@ -80,9 +96,9 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
         : undefined,
     timestamp_iso:
       typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp)
-        ? formatIsoWithOffset(ctx.Timestamp, resolveUserTimezone())
+        ? formatIsoWithOffset(ctx.Timestamp, tz)
         : undefined,
-    timezone: resolveUserTimezone(),
+    timezone: tz,
     flags: {
       is_group_chat: !isDirect ? true : undefined,
       was_mentioned: ctx.WasMentioned === true ? true : undefined,
