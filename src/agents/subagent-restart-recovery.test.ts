@@ -6,8 +6,16 @@ const hoisted = vi.hoisted(() => {
   const spawnMock = vi.fn();
   const loadRegistryMock = vi.fn();
   const saveRegistryMock = vi.fn();
-  const isRunActiveMock = vi.fn().mockReturnValue(false);
-  return { callGatewayMock, spawnMock, loadRegistryMock, saveRegistryMock, isRunActiveMock };
+  const loadSessionEntryMock = vi.fn();
+  const isEmbeddedPiRunActiveMock = vi.fn().mockReturnValue(false);
+  return {
+    callGatewayMock,
+    spawnMock,
+    loadRegistryMock,
+    saveRegistryMock,
+    loadSessionEntryMock,
+    isEmbeddedPiRunActiveMock,
+  };
 });
 
 vi.mock("../gateway/call.js", () => ({
@@ -23,8 +31,12 @@ vi.mock("./subagent-registry.store.js", () => ({
   saveSubagentRegistryToDisk: (runs: unknown) => hoisted.saveRegistryMock(runs),
 }));
 
-vi.mock("./subagent-registry.js", () => ({
-  isSubagentSessionRunActive: (key: string) => hoisted.isRunActiveMock(key),
+vi.mock("../gateway/session-utils.js", () => ({
+  loadSessionEntry: (key: string) => hoisted.loadSessionEntryMock(key),
+}));
+
+vi.mock("./pi-embedded-runner.js", () => ({
+  isEmbeddedPiRunActive: (sessionId: string) => hoisted.isEmbeddedPiRunActiveMock(sessionId),
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -92,6 +104,53 @@ describe("subagent-restart-recovery", () => {
     });
   });
 
+  describe("isSessionRunActuallyAlive", () => {
+    it("returns false when session entry does not exist", async () => {
+      hoisted.loadSessionEntryMock.mockReturnValue({ entry: undefined });
+
+      const { isSessionRunActuallyAlive } = await import("./subagent-restart-recovery.js");
+      expect(isSessionRunActuallyAlive("agent:main:subagent:missing")).toBe(false);
+    });
+
+    it("returns false when session has no sessionId", async () => {
+      hoisted.loadSessionEntryMock.mockReturnValue({ entry: {} });
+
+      const { isSessionRunActuallyAlive } = await import("./subagent-restart-recovery.js");
+      expect(isSessionRunActuallyAlive("agent:main:subagent:no-id")).toBe(false);
+    });
+
+    it("returns false when embedded run is not active (post-restart)", async () => {
+      hoisted.loadSessionEntryMock.mockReturnValue({
+        entry: { sessionId: "uuid-dead-session" },
+      });
+      hoisted.isEmbeddedPiRunActiveMock.mockReturnValue(false);
+
+      const { isSessionRunActuallyAlive } = await import("./subagent-restart-recovery.js");
+      expect(isSessionRunActuallyAlive("agent:main:subagent:dead-child")).toBe(false);
+      expect(hoisted.isEmbeddedPiRunActiveMock).toHaveBeenCalledWith("uuid-dead-session");
+    });
+
+    it("returns true when embedded run is genuinely active", async () => {
+      hoisted.loadSessionEntryMock.mockReturnValue({
+        entry: { sessionId: "uuid-alive-session" },
+      });
+      hoisted.isEmbeddedPiRunActiveMock.mockReturnValue(true);
+
+      const { isSessionRunActuallyAlive } = await import("./subagent-restart-recovery.js");
+      expect(isSessionRunActuallyAlive("agent:main:subagent:alive-child")).toBe(true);
+      expect(hoisted.isEmbeddedPiRunActiveMock).toHaveBeenCalledWith("uuid-alive-session");
+    });
+
+    it("returns false when loadSessionEntry throws", async () => {
+      hoisted.loadSessionEntryMock.mockImplementation(() => {
+        throw new Error("store not found");
+      });
+
+      const { isSessionRunActuallyAlive } = await import("./subagent-restart-recovery.js");
+      expect(isSessionRunActuallyAlive("agent:main:subagent:broken")).toBe(false);
+    });
+  });
+
   describe("runSubagentRestartRecovery", () => {
     it("returns empty when no orphaned runs", async () => {
       hoisted.loadRegistryMock.mockReturnValue(new Map());
@@ -117,6 +176,10 @@ describe("subagent-restart-recovery", () => {
       const registry = new Map<string, SubagentRunRecord>();
       registry.set("orphan-1", run);
       hoisted.loadRegistryMock.mockReturnValue(registry);
+
+      // Session not alive (post-restart)
+      hoisted.loadSessionEntryMock.mockReturnValue({ entry: { sessionId: "uuid-1" } });
+      hoisted.isEmbeddedPiRunActiveMock.mockReturnValue(false);
 
       // Mock session history response
       hoisted.callGatewayMock.mockImplementation((opts: Record<string, unknown>) => {
@@ -171,6 +234,10 @@ describe("subagent-restart-recovery", () => {
       registry.set("orphan-2", run);
       hoisted.loadRegistryMock.mockReturnValue(registry);
 
+      // Session not alive (post-restart)
+      hoisted.loadSessionEntryMock.mockReturnValue({ entry: { sessionId: "uuid-2" } });
+      hoisted.isEmbeddedPiRunActiveMock.mockReturnValue(false);
+
       // No session history
       hoisted.callGatewayMock.mockImplementation((opts: Record<string, unknown>) => {
         if ((opts as { method: string }).method === "chat.history") {
@@ -202,6 +269,10 @@ describe("subagent-restart-recovery", () => {
       registry.set("short-1", shortRun);
       hoisted.loadRegistryMock.mockReturnValue(registry);
 
+      // Session not alive (post-restart)
+      hoisted.loadSessionEntryMock.mockReturnValue({ entry: { sessionId: "uuid-short" } });
+      hoisted.isEmbeddedPiRunActiveMock.mockReturnValue(false);
+
       hoisted.callGatewayMock.mockResolvedValue({ messages: [] });
 
       const { runSubagentRestartRecovery } = await import("./subagent-restart-recovery.js");
@@ -218,6 +289,10 @@ describe("subagent-restart-recovery", () => {
       const registry = new Map<string, SubagentRunRecord>();
       registry.set("fail-1", run);
       hoisted.loadRegistryMock.mockReturnValue(registry);
+
+      // Session not alive (post-restart)
+      hoisted.loadSessionEntryMock.mockReturnValue({ entry: { sessionId: "uuid-fail" } });
+      hoisted.isEmbeddedPiRunActiveMock.mockReturnValue(false);
 
       hoisted.callGatewayMock.mockImplementation((opts: Record<string, unknown>) => {
         if ((opts as { method: string }).method === "chat.history") {
@@ -248,6 +323,10 @@ describe("subagent-restart-recovery", () => {
       const registry = new Map<string, SubagentRunRecord>();
       registry.set("summary-1", run);
       hoisted.loadRegistryMock.mockReturnValue(registry);
+
+      // Session not alive (post-restart)
+      hoisted.loadSessionEntryMock.mockReturnValue({ entry: { sessionId: "uuid-summary" } });
+      hoisted.isEmbeddedPiRunActiveMock.mockReturnValue(false);
 
       hoisted.callGatewayMock.mockResolvedValue({ messages: [], ok: true });
       hoisted.spawnMock.mockResolvedValue({
@@ -280,6 +359,10 @@ describe("subagent-restart-recovery", () => {
       registry.set("multi-2", run2);
       hoisted.loadRegistryMock.mockReturnValue(registry);
 
+      // No sessions alive (post-restart)
+      hoisted.loadSessionEntryMock.mockReturnValue({ entry: { sessionId: "uuid-multi" } });
+      hoisted.isEmbeddedPiRunActiveMock.mockReturnValue(false);
+
       hoisted.callGatewayMock.mockResolvedValue({ messages: [], ok: true });
       hoisted.spawnMock.mockResolvedValue({
         status: "accepted",
@@ -294,7 +377,7 @@ describe("subagent-restart-recovery", () => {
       expect(hoisted.spawnMock).toHaveBeenCalledTimes(2);
     });
 
-    it("skips re-spawn when original session is still running", async () => {
+    it("skips re-spawn when session has a genuinely active embedded run", async () => {
       const run = makeRun({
         runId: "alive-1",
         label: "still-alive-task",
@@ -304,9 +387,15 @@ describe("subagent-restart-recovery", () => {
       registry.set("alive-1", run);
       hoisted.loadRegistryMock.mockReturnValue(registry);
 
-      // The original session is still active in the in-memory registry
-      hoisted.isRunActiveMock.mockImplementation(
-        (key: string) => key === "agent:main:subagent:alive-child",
+      // The session has a genuinely active embedded PI run
+      hoisted.loadSessionEntryMock.mockImplementation((key: string) => {
+        if (key === "agent:main:subagent:alive-child") {
+          return { entry: { sessionId: "uuid-alive" } };
+        }
+        return { entry: undefined };
+      });
+      hoisted.isEmbeddedPiRunActiveMock.mockImplementation(
+        (sessionId: string) => sessionId === "uuid-alive",
       );
 
       hoisted.callGatewayMock.mockResolvedValue({ ok: true });
@@ -327,7 +416,7 @@ describe("subagent-restart-recovery", () => {
       expect(terminateCalls).toHaveLength(0);
     });
 
-    it("re-spawns when original session is no longer running", async () => {
+    it("re-spawns when session entry exists but no active embedded run (post-restart)", async () => {
       const run = makeRun({
         runId: "dead-1",
         label: "dead-task",
@@ -337,8 +426,11 @@ describe("subagent-restart-recovery", () => {
       registry.set("dead-1", run);
       hoisted.loadRegistryMock.mockReturnValue(registry);
 
-      // The original session is NOT active (dead/completed)
-      hoisted.isRunActiveMock.mockReturnValue(false);
+      // Session exists on disk but no active embedded run (typical post-restart state)
+      hoisted.loadSessionEntryMock.mockReturnValue({
+        entry: { sessionId: "uuid-dead" },
+      });
+      hoisted.isEmbeddedPiRunActiveMock.mockReturnValue(false);
 
       hoisted.callGatewayMock.mockImplementation((opts: Record<string, unknown>) => {
         if ((opts as { method: string }).method === "chat.history") {
@@ -361,7 +453,41 @@ describe("subagent-restart-recovery", () => {
       expect(hoisted.spawnMock).toHaveBeenCalledTimes(1);
     });
 
-    it("handles mix of still-running and dead orphaned runs", async () => {
+    it("re-spawns when session entry is gone (session deleted/missing)", async () => {
+      const run = makeRun({
+        runId: "gone-1",
+        label: "gone-task",
+        childSessionKey: "agent:main:subagent:gone-child",
+      });
+      const registry = new Map<string, SubagentRunRecord>();
+      registry.set("gone-1", run);
+      hoisted.loadRegistryMock.mockReturnValue(registry);
+
+      // Session entry doesn't exist at all
+      hoisted.loadSessionEntryMock.mockReturnValue({ entry: undefined });
+
+      hoisted.callGatewayMock.mockImplementation((opts: Record<string, unknown>) => {
+        if ((opts as { method: string }).method === "chat.history") {
+          return { messages: [] };
+        }
+        return { ok: true };
+      });
+
+      hoisted.spawnMock.mockResolvedValue({
+        status: "accepted",
+        childSessionKey: "agent:main:subagent:new-child",
+        runId: "new-run",
+      });
+
+      const { runSubagentRestartRecovery } = await import("./subagent-restart-recovery.js");
+      const outcomes = await runSubagentRestartRecovery();
+
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0].action).toBe("respawned");
+      expect(hoisted.spawnMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("handles mix of alive and dead sessions correctly", async () => {
       const aliveRun = makeRun({
         runId: "mix-alive",
         label: "alive-task",
@@ -377,9 +503,20 @@ describe("subagent-restart-recovery", () => {
       registry.set("mix-dead", deadRun);
       hoisted.loadRegistryMock.mockReturnValue(registry);
 
-      // Only the alive-child is active
-      hoisted.isRunActiveMock.mockImplementation(
-        (key: string) => key === "agent:main:subagent:alive",
+      // Map session keys to session IDs
+      hoisted.loadSessionEntryMock.mockImplementation((key: string) => {
+        if (key === "agent:main:subagent:alive") {
+          return { entry: { sessionId: "uuid-alive" } };
+        }
+        if (key === "agent:main:subagent:dead") {
+          return { entry: { sessionId: "uuid-dead" } };
+        }
+        return { entry: undefined };
+      });
+
+      // Only the alive session has an active embedded run
+      hoisted.isEmbeddedPiRunActiveMock.mockImplementation(
+        (sessionId: string) => sessionId === "uuid-alive",
       );
 
       hoisted.callGatewayMock.mockImplementation((opts: Record<string, unknown>) => {
@@ -419,7 +556,12 @@ describe("subagent-restart-recovery", () => {
       registry.set("notify-1", run);
       hoisted.loadRegistryMock.mockReturnValue(registry);
 
-      hoisted.isRunActiveMock.mockReturnValue(true);
+      // Session is genuinely alive
+      hoisted.loadSessionEntryMock.mockReturnValue({
+        entry: { sessionId: "uuid-notify" },
+      });
+      hoisted.isEmbeddedPiRunActiveMock.mockReturnValue(true);
+
       hoisted.callGatewayMock.mockResolvedValue({ ok: true });
 
       const { runSubagentRestartRecovery } = await import("./subagent-restart-recovery.js");

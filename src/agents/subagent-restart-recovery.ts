@@ -11,9 +11,10 @@
  */
 
 import { callGateway } from "../gateway/call.js";
+import { loadSessionEntry } from "../gateway/session-utils.js";
 import { defaultRuntime } from "../runtime.js";
+import { isEmbeddedPiRunActive } from "./pi-embedded-runner.js";
 import type { SubagentRunRecord } from "./subagent-registry.js";
-import { isSubagentSessionRunActive } from "./subagent-registry.js";
 import {
   loadSubagentRegistryFromDisk,
   saveSubagentRegistryToDisk,
@@ -90,6 +91,29 @@ async function readSessionProgressSummary(
     };
   } catch {
     return { hasHistory: false, progressSummary: "" };
+  }
+}
+
+/**
+ * Check whether a session actually has a live agent run in the gateway.
+ *
+ * After a restart, `initSubagentRegistry()` loads all runs (including orphaned ones)
+ * from disk into the in-memory registry. Checking the in-memory `subagentRuns` Map
+ * for entries without `endedAt` would always return true for orphaned runs — a
+ * false positive. Instead, this function checks the gateway's embedded PI runner
+ * which tracks genuinely active agent loops. After a restart, no embedded runs are
+ * active so this correctly returns false for all orphaned sessions.
+ */
+export function isSessionRunActuallyAlive(childSessionKey: string): boolean {
+  try {
+    const { entry } = loadSessionEntry(childSessionKey);
+    if (!entry?.sessionId) {
+      return false;
+    }
+    return isEmbeddedPiRunActive(entry.sessionId);
+  } catch {
+    // If the session entry can't be loaded, the session is gone.
+    return false;
   }
 }
 
@@ -248,11 +272,12 @@ export async function runSubagentRestartRecovery(): Promise<RecoveryOutcome[]> {
   for (const run of orphaned) {
     const label = run.label || run.runId.slice(0, 12);
     try {
-      // Check if the original session's run is still active in the in-memory registry.
-      // After a restart, `initSubagentRegistry()` restores runs from disk and
-      // `resumeSubagentRun()` re-attaches watchers for still-alive sessions.
-      // If the run is still active there, re-spawning would create a duplicate.
-      if (isSubagentSessionRunActive(run.childSessionKey)) {
+      // Check if the session actually has a live agent run in the gateway's embedded
+      // runner. The old `isSubagentSessionRunActive()` checked the in-memory registry
+      // which is circular after restart — `initSubagentRegistry()` loads orphaned runs
+      // into memory so they falsely appear active. This check queries the real embedded
+      // PI runner state instead (empty after restart → all orphans correctly detected).
+      if (isSessionRunActuallyAlive(run.childSessionKey)) {
         outcomes.push({
           runId: run.runId,
           label,
