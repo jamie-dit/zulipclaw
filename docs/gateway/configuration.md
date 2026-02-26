@@ -235,6 +235,10 @@ When validation fails:
 
     - `every`: duration string (`30m`, `2h`). Set `0m` to disable.
     - `target`: `last` | `whatsapp` | `telegram` | `discord` | `none`
+<<<<<<< HEAD
+=======
+    - `directPolicy`: `allow` (default) or `block` for DM-style heartbeat targets
+>>>>>>> 8a006a3260 (feat(heartbeat): add directPolicy and restore default direct delivery)
     - See [Heartbeat](/gateway/heartbeat) for the full guide.
 
   </Accordion>

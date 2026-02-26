@@ -205,17 +205,146 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     updatedAt: Date.now(),
   };
 
-  it("respects target none", () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { heartbeat: { target: "none" } } },
-    };
-    expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
-      channel: "none",
-      reason: "target-none",
-      accountId: undefined,
-      lastChannel: undefined,
-      lastAccountId: undefined,
-    });
+  it("resolves target variants across route and allowlist rules", () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      entry: typeof baseEntry & {
+        lastChannel?: "whatsapp" | "telegram" | "webchat";
+        lastTo?: string;
+      };
+      expected: ReturnType<typeof resolveHeartbeatDeliveryTarget>;
+    }> = [
+      {
+        name: "target none",
+        cfg: { agents: { defaults: { heartbeat: { target: "none" } } } },
+        entry: baseEntry,
+        expected: {
+          channel: "none",
+          reason: "target-none",
+          accountId: undefined,
+          lastChannel: undefined,
+          lastAccountId: undefined,
+        },
+      },
+      {
+        name: "target defaults to none when unset",
+        cfg: {},
+        entry: { ...baseEntry, lastChannel: "whatsapp", lastTo: "120363401234567890@g.us" },
+        expected: {
+          channel: "none",
+          reason: "target-none",
+          accountId: undefined,
+          lastChannel: "whatsapp",
+          lastAccountId: undefined,
+        },
+      },
+      {
+        name: "normalize explicit whatsapp target when allowFrom wildcard",
+        cfg: {
+          agents: {
+            defaults: { heartbeat: { target: "whatsapp", to: "whatsapp:120363401234567890@G.US" } },
+          },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        },
+        entry: baseEntry,
+        expected: {
+          channel: "whatsapp",
+          to: "120363401234567890@g.us",
+          accountId: undefined,
+          lastChannel: undefined,
+          lastAccountId: undefined,
+        },
+      },
+      {
+        name: "skip webchat last route",
+        cfg: {},
+        entry: { ...baseEntry, lastChannel: "webchat", lastTo: "web" },
+        expected: {
+          channel: "none",
+          reason: "target-none",
+          accountId: undefined,
+          lastChannel: undefined,
+          lastAccountId: undefined,
+        },
+      },
+      {
+        name: "reject explicit whatsapp target outside allowFrom",
+        cfg: {
+          agents: { defaults: { heartbeat: { target: "whatsapp", to: "+1999" } } },
+          channels: { whatsapp: { allowFrom: ["120363401234567890@g.us", "+1666"] } },
+        },
+        entry: { ...baseEntry, lastChannel: "whatsapp", lastTo: "+1222" },
+        expected: {
+          channel: "none",
+          reason: "no-target",
+          accountId: undefined,
+          lastChannel: "whatsapp",
+          lastAccountId: undefined,
+        },
+      },
+      {
+        name: "normalize prefixed whatsapp group targets",
+        cfg: {
+          agents: { defaults: { heartbeat: { target: "last" } } },
+          channels: { whatsapp: { allowFrom: ["120363401234567890@g.us"] } },
+        },
+        entry: {
+          ...baseEntry,
+          lastChannel: "whatsapp",
+          lastTo: "whatsapp:120363401234567890@G.US",
+        },
+        expected: {
+          channel: "whatsapp",
+          to: "120363401234567890@g.us",
+          accountId: undefined,
+          lastChannel: "whatsapp",
+          lastAccountId: undefined,
+        },
+      },
+      {
+        name: "keep explicit telegram target",
+        cfg: { agents: { defaults: { heartbeat: { target: "telegram", to: "-100123" } } } },
+        entry: baseEntry,
+        expected: {
+          channel: "telegram",
+          to: "-100123",
+          accountId: undefined,
+          lastChannel: undefined,
+          lastAccountId: undefined,
+        },
+      },
+      {
+        name: "allow direct target by default",
+        cfg: { agents: { defaults: { heartbeat: { target: "last" } } } },
+        entry: { ...baseEntry, lastChannel: "telegram", lastTo: "5232990709" },
+        expected: {
+          channel: "telegram",
+          to: "5232990709",
+          accountId: undefined,
+          lastChannel: "telegram",
+          lastAccountId: undefined,
+        },
+      },
+      {
+        name: "block direct target when directPolicy is block",
+        cfg: { agents: { defaults: { heartbeat: { target: "last", directPolicy: "block" } } } },
+        entry: { ...baseEntry, lastChannel: "telegram", lastTo: "5232990709" },
+        expected: {
+          channel: "none",
+          reason: "dm-blocked",
+          accountId: undefined,
+          lastChannel: "telegram",
+          lastAccountId: undefined,
+        },
+      },
+    ];
+    for (const testCase of cases) {
+      expect(
+        resolveHeartbeatDeliveryTarget({ cfg: testCase.cfg, entry: testCase.entry }),
+        testCase.name,
+      ).toEqual(testCase.expected);
+    }
   });
 
   it("uses last route by default", () => {

@@ -221,6 +221,29 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.humanDelay.minMs": "Human Delay Min (ms)",
   "agents.defaults.humanDelay.maxMs": "Human Delay Max (ms)",
   "agents.defaults.cliBackends": "CLI Backends",
+<<<<<<< HEAD
+=======
+  "agents.defaults.compaction": "Compaction",
+  "agents.defaults.compaction.mode": "Compaction Mode",
+  "agents.defaults.compaction.reserveTokens": "Compaction Reserve Tokens",
+  "agents.defaults.compaction.keepRecentTokens": "Compaction Keep Recent Tokens",
+  "agents.defaults.compaction.reserveTokensFloor": "Compaction Reserve Token Floor",
+  "agents.defaults.compaction.maxHistoryShare": "Compaction Max History Share",
+  "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
+  "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
+  "agents.defaults.compaction.memoryFlush.softThresholdTokens":
+    "Compaction Memory Flush Soft Threshold",
+  "agents.defaults.compaction.memoryFlush.prompt": "Compaction Memory Flush Prompt",
+  "agents.defaults.compaction.memoryFlush.systemPrompt": "Compaction Memory Flush System Prompt",
+  "agents.defaults.heartbeat.directPolicy": "Heartbeat Direct Policy",
+  "agents.list.*.heartbeat.directPolicy": "Heartbeat Direct Policy",
+  "agents.defaults.heartbeat.suppressToolErrorWarnings": "Heartbeat Suppress Tool Error Warnings",
+  "agents.defaults.sandbox.browser.network": "Sandbox Browser Network",
+  "agents.defaults.sandbox.browser.cdpSourceRange": "Sandbox Browser CDP Source Port Range",
+  "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
+    "Sandbox Docker Allow Container Namespace Join",
+  commands: "Commands",
+>>>>>>> 8a006a3260 (feat(heartbeat): add directPolicy and restore default direct delivery)
   "commands.native": "Native Commands",
   "commands.nativeSkills": "Native Skill Commands",
   "commands.text": "Text Commands",

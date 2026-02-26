@@ -265,7 +265,23 @@ export function resolveHeartbeatDeliveryTarget(params: {
       accountId: effectiveAccountId,
       lastChannel: resolvedTarget.lastChannel,
       lastAccountId: resolvedTarget.lastAccountId,
-    };
+    });
+  }
+
+  const sessionChatTypeHint =
+    target === "last" && !heartbeat?.to ? normalizeChatType(entry?.chatType) : undefined;
+  const deliveryChatType = resolveHeartbeatDeliveryChatType({
+    channel: resolvedTarget.channel,
+    to: resolved.to,
+    sessionChatType: sessionChatTypeHint,
+  });
+  if (deliveryChatType === "direct" && heartbeat?.directPolicy === "block") {
+    return buildNoHeartbeatDeliveryTarget({
+      reason: "dm-blocked",
+      accountId: effectiveAccountId,
+      lastChannel: resolvedTarget.lastChannel,
+      lastAccountId: resolvedTarget.lastAccountId,
+    });
   }
 
   let reason: string | undefined;

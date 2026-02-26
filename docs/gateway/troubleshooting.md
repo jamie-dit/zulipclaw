@@ -174,6 +174,10 @@ Common signatures:
 - `cron: timer tick failed` → scheduler tick failed; check file/log/runtime errors.
 - `heartbeat skipped` with `reason=quiet-hours` → outside active hours window.
 - `heartbeat: unknown accountId` → invalid account id for heartbeat delivery target.
+<<<<<<< HEAD
+=======
+- `heartbeat skipped` with `reason=dm-blocked` → heartbeat target resolved to a DM-style destination while `agents.defaults.heartbeat.directPolicy` (or per-agent override) is set to `block`.
+>>>>>>> 8a006a3260 (feat(heartbeat): add directPolicy and restore default direct delivery)
 
 Related:
 
