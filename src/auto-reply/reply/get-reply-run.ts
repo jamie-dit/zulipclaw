@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
+import { cancelAllSessionRuns } from "../../agents/pi-embedded-runner/session-run-registry.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
@@ -362,7 +363,11 @@ export async function runPreparedReply(
   if (resolvedQueue.mode === "interrupt" && laneSize > 0) {
     const cleared = clearCommandLane(sessionLaneKey);
     const aborted = abortEmbeddedPiRun(sessionIdFinal);
-    logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
+    // Also cancel any concurrent sibling runs tracked in the session run registry.
+    const cancelledSiblings = cancelAllSessionRuns(sessionKey ?? sessionIdFinal);
+    logVerbose(
+      `Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted}, cancelledSiblings=${cancelledSiblings})`,
+    );
   }
   const queueKey = sessionKey ?? sessionIdFinal;
   const isActive = isEmbeddedPiRunActive(sessionIdFinal);

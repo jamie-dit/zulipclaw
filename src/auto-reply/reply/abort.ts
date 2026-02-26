@@ -1,4 +1,5 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { cancelAllSessionRuns } from "../../agents/pi-embedded-runner/session-run-registry.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import {
   listSubagentRunsForRequester,
@@ -237,6 +238,8 @@ export async function tryFastAbortFromMessage(params: {
     const { entry, key } = resolveSessionEntryForKey(store, targetKey);
     const sessionId = entry?.sessionId;
     const aborted = sessionId ? abortEmbeddedPiRun(sessionId) : false;
+    // Cancel any concurrent sibling runs in this session.
+    cancelAllSessionRuns(key ?? targetKey);
     const cleared = clearSessionQueues([key ?? targetKey, sessionId]);
     if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
       logVerbose(
@@ -265,6 +268,10 @@ export async function tryFastAbortFromMessage(params: {
 
   if (abortKey) {
     setAbortMemory(abortKey, true);
+  }
+  // Cancel any concurrent sibling runs in this session.
+  if (requesterSessionKey) {
+    cancelAllSessionRuns(requesterSessionKey);
   }
   const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
   return { handled: true, aborted: false, stoppedSubagents: stopped };
