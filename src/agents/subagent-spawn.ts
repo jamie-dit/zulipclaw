@@ -2,7 +2,12 @@ import crypto from "node:crypto";
 import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import {
+  isCronSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
@@ -450,6 +455,52 @@ export async function spawnSubagentDirect(
     expectsCompletionMessage: params.expectsCompletionMessage === true,
   });
 
+<<<<<<< HEAD
+=======
+  if (hookRunner?.hasHooks("subagent_spawned")) {
+    try {
+      await hookRunner.runSubagentSpawned(
+        {
+          runId: childRunId,
+          childSessionKey,
+          agentId: targetAgentId,
+          label: label || undefined,
+          requester: {
+            channel: requesterOrigin?.channel,
+            accountId: requesterOrigin?.accountId,
+            to: requesterOrigin?.to,
+            threadId: requesterOrigin?.threadId,
+          },
+          threadRequested: requestThreadBinding,
+          mode: spawnMode,
+        },
+        {
+          runId: childRunId,
+          childSessionKey,
+          requesterSessionKey: requesterInternalKey,
+        },
+      );
+    } catch {
+      // Spawn should still return accepted if spawn lifecycle hooks fail.
+    }
+  }
+
+  // Check if we're in a cron isolated session - don't add "do not poll" note
+  // because cron sessions end immediately after the agent produces a response,
+  // so the agent needs to wait for subagent results to keep the turn alive.
+  const isCronSession = isCronSessionKey(ctx.agentSessionKey);
+  const note =
+    spawnMode === "session"
+      ? SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE
+      : isCronSession
+        ? undefined
+        : SUBAGENT_SPAWN_ACCEPTED_NOTE;
+
+  return {
+    status: "accepted",
+    childSessionKey,
+    runId: childRunId,
+>>>>>>> 452a8c9db9 (fix: use canonical cron session detection for spawn note)
     mode: spawnMode,
     note,
     modelApplied: resolvedModel ? modelApplied : undefined,
