@@ -24,6 +24,14 @@ const privateIpCases = [
   "fe80::1%lo0",
   "fd00::1",
   "fec0::1",
+<<<<<<< HEAD
+=======
+  "ff02::1",
+  "ff05::1:3",
+  "[ff02::1]",
+  "2001:db8:1234::5efe:127.0.0.1",
+  "2001:db8:1234:1:200:5efe:7f00:1",
+>>>>>>> baf656bc6f (fix: block IPv6 multicast SSRF bypass)
 ];
 
 const publicIpCases = [
