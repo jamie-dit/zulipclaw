@@ -537,49 +537,6 @@ async function sendSubagentAnnounceDirectly(params: {
     params.targetRequesterSessionKey,
   );
   try {
-    const completionDirectOrigin = normalizeDeliveryContext(params.completionDirectOrigin);
-    const completionChannelRaw =
-      typeof completionDirectOrigin?.channel === "string"
-        ? completionDirectOrigin.channel.trim()
-        : "";
-    const completionChannel =
-      completionChannelRaw && isDeliverableMessageChannel(completionChannelRaw)
-        ? completionChannelRaw
-        : "";
-    const completionTo =
-      typeof completionDirectOrigin?.to === "string" ? completionDirectOrigin.to.trim() : "";
-    const hasCompletionDirectTarget =
-      !params.requesterIsSubagent && Boolean(completionChannel) && Boolean(completionTo);
-
-    if (
-      params.expectsCompletionMessage &&
-      hasCompletionDirectTarget &&
-      params.completionMessage?.trim()
-    ) {
-      const completionThreadId =
-        completionDirectOrigin?.threadId != null && completionDirectOrigin.threadId !== ""
-          ? String(completionDirectOrigin.threadId)
-          : undefined;
-      await callGateway({
-        method: "send",
-        params: {
-          channel: completionChannel,
-          to: completionTo,
-          accountId: completionDirectOrigin?.accountId,
-          threadId: completionThreadId,
-          sessionKey: canonicalRequesterSessionKey,
-          message: params.completionMessage,
-          idempotencyKey: params.directIdempotencyKey,
-        },
-        timeoutMs: 15_000,
-      });
-
-      return {
-        delivered: true,
-        path: "direct",
-      };
-    }
-
     const directOrigin = normalizeDeliveryContext(params.directOrigin);
     const threadId =
       directOrigin?.threadId != null && directOrigin.threadId !== ""
@@ -1101,7 +1058,7 @@ export async function runSubagentAnnounceFlow(params: {
     // Send to the requester session. For nested subagents this is an internal
     // follow-up injection (deliver=false) so the orchestrator receives it.
     let directOrigin = targetRequesterOrigin;
-    if (!requesterIsSubagent) {
+    if (!requesterIsSubagent && !expectsCompletionMessage) {
       const { entry } = loadRequesterSessionEntry(targetRequesterSessionKey);
       directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin);
     }
