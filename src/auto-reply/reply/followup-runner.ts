@@ -49,7 +49,7 @@ export function createFollowupRunner(params: {
     typingMode,
     sessionEntry,
     sessionStore,
-    sessionKey: _sessionKey,
+    sessionKey,
     storePath,
     defaultModel,
     agentCfgContextTokens,
@@ -119,7 +119,7 @@ export function createFollowupRunner(params: {
 
   return async (queued: FollowupRun) => {
     const runId = crypto.randomUUID();
-    const sessionKey = queued.run.sessionKey ?? queued.run.sessionId;
+    const registrySessionKey = queued.run.sessionKey ?? queued.run.sessionId;
     const maxConcurrentPerSession = resolveMaxConcurrentPerSession(queued.run.config);
     const isConcurrent = maxConcurrentPerSession > 1;
 
@@ -129,7 +129,7 @@ export function createFollowupRunner(params: {
     if (isConcurrent && runAbortController) {
       registerSessionRun({
         runId,
-        sessionKey,
+        sessionKey: registrySessionKey,
         abortController: runAbortController,
         startedAt: Date.now(),
         prompt: queued.prompt,
@@ -311,7 +311,7 @@ export function createFollowupRunner(params: {
       await sendFollowupPayloads(finalPayloads, queued);
     } finally {
       if (isConcurrent) {
-        unregisterSessionRun(sessionKey, runId);
+        unregisterSessionRun(registrySessionKey, runId);
       }
       typing.markRunComplete();
     }
