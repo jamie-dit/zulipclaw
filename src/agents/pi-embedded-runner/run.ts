@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { resolveMaxConcurrentPerSession } from "../../config/agent-limits.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
@@ -166,6 +167,10 @@ export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
+  const maxConcurrentPerSession = resolveMaxConcurrentPerSession(params.config);
+  if (maxConcurrentPerSession > 1) {
+    setCommandLaneConcurrency(sessionLane, maxConcurrentPerSession);
+  }
   const globalLane = resolveGlobalLane(params.lane);
   const enqueueGlobal =
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
