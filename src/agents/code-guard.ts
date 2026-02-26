@@ -98,15 +98,17 @@ export function extractFilePathFromParams(
   }
 
   if (toolName === "apply_patch") {
-    // apply_patch has the file path embedded in unified diff headers
+    // apply_patch has the file path embedded in unified diff headers.
+    // Standard format: +++ b/path/to/file or +++ b/path/to/file\t2026-02-27 00:00:00
+    // The file path ends at a tab character (before timestamp) or end of line.
     const patch = typeof params.patch === "string" ? params.patch : "";
-    // Match +++ b/path/to/file (the "to" file in the diff)
-    const plusMatch = patch.match(/^\+\+\+\s+[ab]\/(.+)$/m);
+    // Match +++ b/path/to/file (the "to" file in the diff), stopping at tab or EOL
+    const plusMatch = patch.match(/^\+\+\+\s+[ab]\/([^\t\n]+)/m);
     if (plusMatch?.[1]) {
       return plusMatch[1].trim();
     }
     // Fallback: match --- a/path/to/file
-    const minusMatch = patch.match(/^---\s+[ab]\/(.+)$/m);
+    const minusMatch = patch.match(/^---\s+[ab]\/([^\t\n]+)/m);
     if (minusMatch?.[1]) {
       return minusMatch[1].trim();
     }
@@ -173,6 +175,8 @@ export function isExemptPath(filePath: string, exemptPatterns: string[]): boolea
       .replace(/\*\*/g, "<<GLOBSTAR>>")
       // Convert * to match within path segment
       .replace(/\*/g, "[^/]*")
+      // Convert ? to match a single non-separator character
+      .replace(/\?/g, "[^/]")
       // Restore globstar
       .replace(/<<GLOBSTAR>>/g, ".*");
 

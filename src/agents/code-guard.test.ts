@@ -156,6 +156,15 @@ describe("extractFilePathFromParams", () => {
     it("returns undefined when params is empty", () => {
       expect(extractFilePathFromParams("apply_patch", {})).toBeUndefined();
     });
+
+    it("handles diff headers with timestamps", () => {
+      const patch = `--- a/src/old.ts\t2026-02-27 00:00:00.000000000 +0000
++++ b/src/new.ts\t2026-02-27 00:00:00.000000000 +0000
+@@ -1,3 +1,3 @@
+-old code
++new code`;
+      expect(extractFilePathFromParams("apply_patch", { patch })).toBe("src/new.ts");
+    });
   });
 
   describe("unknown tools", () => {
@@ -290,6 +299,11 @@ describe("isExemptPath", () => {
 
   it("handles Windows-style paths", () => {
     expect(isExemptPath("C:\\src\\index.ts", ["**/*.ts"])).toBe(true);
+  });
+
+  it("supports ? wildcard for single characters", () => {
+    expect(isExemptPath("/src/file1.ts", ["**/file?.ts"])).toBe(true);
+    expect(isExemptPath("/src/file12.ts", ["**/file?.ts"])).toBe(false);
   });
 });
 
