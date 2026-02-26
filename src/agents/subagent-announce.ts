@@ -558,6 +558,52 @@ async function sendSubagentAnnounceDirectly(params: {
       timeoutMs: 15_000,
     });
 
+    // Best-effort: also send the formatted completion card directly to the
+    // channel so the user sees sub-agent metadata and raw output in a spoiler
+    // block alongside the main agent's processed reply.
+    if (
+      params.expectsCompletionMessage &&
+      !params.requesterIsSubagent &&
+      params.completionMessage?.trim()
+    ) {
+      try {
+        const completionDirectOrigin = normalizeDeliveryContext(params.completionDirectOrigin);
+        const completionChannelRaw =
+          typeof completionDirectOrigin?.channel === "string"
+            ? completionDirectOrigin.channel.trim()
+            : "";
+        const completionChannel =
+          completionChannelRaw && isDeliverableMessageChannel(completionChannelRaw)
+            ? completionChannelRaw
+            : "";
+        const completionTo =
+          typeof completionDirectOrigin?.to === "string" ? completionDirectOrigin.to.trim() : "";
+        if (completionChannel && completionTo) {
+          const completionThreadId =
+            completionDirectOrigin?.threadId != null && completionDirectOrigin.threadId !== ""
+              ? String(completionDirectOrigin.threadId)
+              : undefined;
+          await callGateway({
+            method: "send",
+            params: {
+              channel: completionChannel,
+              to: completionTo,
+              accountId: completionDirectOrigin?.accountId,
+              threadId: completionThreadId,
+              sessionKey: canonicalRequesterSessionKey,
+              message: params.completionMessage,
+              idempotencyKey: `${params.directIdempotencyKey}-card`,
+            },
+            timeoutMs: 15_000,
+          });
+        }
+      } catch (cardErr) {
+        defaultRuntime.error?.(
+          `Best-effort completion card send failed: ${summarizeDeliveryError(cardErr)}`,
+        );
+      }
+    }
+
     return {
       delivered: true,
       path: "direct",

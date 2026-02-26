@@ -1219,12 +1219,20 @@ describe("subagent announce formatting", () => {
       expectsCompletionMessage: true,
     });
 
-    expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
     const msg = call?.params?.message as string;
     // The trigger message injected into main session should contain the findings
     expect(msg).toContain("print('hello')");
+    // Best-effort completion card should also be sent directly to the channel
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const sendCall = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(sendCall?.params?.channel).toBe("zulip");
+    expect(sendCall?.params?.to).toBe("stream:marcel#general");
+    const cardMsg = sendCall?.params?.message as string;
+    expect(cardMsg).toContain("Sub-agent");
+    expect(cardMsg).toContain("finished");
+    expect(cardMsg).toContain("spoiler");
   });
 
   it("sanitizes backticks in subagent name to prevent inline code breakout", async () => {
@@ -1259,12 +1267,19 @@ describe("subagent announce formatting", () => {
       expectsCompletionMessage: true,
     });
 
-    expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
     const msg = call?.params?.message as string;
     // The trigger message should contain the findings text
     expect(msg).toContain("result text");
+    // Best-effort completion card should also be sent
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const sendCall = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(sendCall?.params?.channel).toBe("zulip");
+    expect(sendCall?.params?.to).toBe("stream:marcel#general");
+    const cardMsg = sendCall?.params?.message as string;
+    expect(cardMsg).toContain("Sub-agent");
+    expect(cardMsg).toContain("finished");
   });
 
   it("handles findings with only triple backticks (edge case)", async () => {
@@ -1294,12 +1309,167 @@ describe("subagent announce formatting", () => {
       expectsCompletionMessage: true,
     });
 
-    expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
     const msg = call?.params?.message as string;
     // The trigger message should contain the raw findings (backticks)
     expect(msg).toContain("````");
+    // Best-effort completion card should also be sent
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const sendCall = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(sendCall?.params?.channel).toBe("zulip");
+    expect(sendCall?.params?.to).toBe("stream:marcel#general");
+  });
+
+  it("sends completion card with distinct idempotency key alongside agent injection", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-card-idem",
+        inputTokens: 5,
+        outputTokens: 10,
+        totalTokens: 15,
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-card-idem",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "task done" }] }],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-card-idem",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "zulip", to: "stream:marcel#general", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    // gateway.agent should be called first for the trigger message
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    // gateway.send should be called for the completion card
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const agentCall = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    const sendCall = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    // Idempotency keys should differ
+    const agentKey = agentCall?.params?.idempotencyKey as string;
+    const sendKey = sendCall?.params?.idempotencyKey as string;
+    expect(agentKey).toBeTruthy();
+    expect(sendKey).toBeTruthy();
+    expect(sendKey).toBe(`${agentKey}-card`);
+    // Completion card should contain the formatted message with spoiler
+    const cardMsg = sendCall?.params?.message as string;
+    expect(cardMsg).toContain("Sub-agent");
+    expect(cardMsg).toContain("finished");
+    expect(cardMsg).toContain("spoiler");
+  });
+
+  it("does not send completion card when requester is a subagent", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    sessionStore = {
+      "agent:main:subagent:worker": {
+        sessionId: "child-session-no-card",
+        inputTokens: 1,
+        outputTokens: 1,
+        totalTokens: 2,
+      },
+      "agent:main:subagent:orchestrator": {
+        sessionId: "orchestrator-session",
+        spawnDepth: 1,
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "worker done" }] }],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:worker",
+      childRunId: "run-worker-no-card",
+      requesterSessionKey: "agent:main:subagent:orchestrator",
+      requesterDisplayKey: "subagent:orchestrator",
+      requesterOrigin: { channel: "zulip", to: "stream:marcel#general", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    // Completion card should NOT be sent when requester is a subagent
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it("still returns success when completion card send fails", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-card-fail",
+        inputTokens: 1,
+        outputTokens: 1,
+        totalTokens: 2,
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-card-fail",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+    });
+    // Make the completion card send fail
+    sendSpy.mockRejectedValueOnce(new Error("send channel unavailable"));
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-card-fail",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "zulip", to: "stream:marcel#general", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    // Main delivery via gateway.agent should still succeed
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    // The send was attempted but failed - still called
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not send completion card when expectsCompletionMessage is false", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-no-expect",
+        inputTokens: 1,
+        outputTokens: 1,
+        totalTokens: 2,
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-no-expect",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-no-expect",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "zulip", to: "stream:marcel#general", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      // expectsCompletionMessage is NOT set (defaults to false)
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    // No completion card when expectsCompletionMessage is false
+    expect(sendSpy).not.toHaveBeenCalled();
   });
 
   it("falls back when parent session is missing a sessionId (#18037)", async () => {
