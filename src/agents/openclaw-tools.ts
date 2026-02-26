@@ -19,7 +19,11 @@ import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
-import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
+import {
+  createWebFetchTool,
+  createWebResearchTool,
+  createWebSearchTool,
+} from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 export function createOpenClawTools(options?: {
@@ -63,10 +67,11 @@ export function createOpenClawTools(options?: {
   disableMessageTool?: boolean;
 }): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
-  const imageTool = options?.agentDir?.trim()
+  const agentDir = options?.agentDir?.trim() ? resolveWorkspaceRoot(options.agentDir) : undefined;
+  const imageTool = agentDir
     ? createImageTool({
         config: options?.config,
-        agentDir: options.agentDir,
+        agentDir,
         workspaceDir,
         sandbox:
           options?.sandboxRoot && options?.sandboxFsBridge
@@ -82,6 +87,19 @@ export function createOpenClawTools(options?: {
   const webFetchTool = createWebFetchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
+  });
+  const webResearchTool = createWebResearchTool({
+    config: options?.config,
+    agentSessionKey: options?.agentSessionKey,
+    agentChannel: options?.agentChannel,
+    agentAccountId: options?.agentAccountId,
+    agentTo: options?.agentTo,
+    agentThreadId: options?.agentThreadId,
+    agentGroupId: options?.agentGroupId,
+    agentGroupChannel: options?.agentGroupChannel,
+    agentGroupSpace: options?.agentGroupSpace,
+    sandboxed: options?.sandboxed,
+    requesterAgentIdOverride: options?.requesterAgentIdOverride,
   });
   const messageTool = options?.disableMessageTool
     ? null
@@ -157,6 +175,7 @@ export function createOpenClawTools(options?: {
     }),
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
+    ...(webResearchTool ? [webResearchTool] : []),
     ...(imageTool ? [imageTool] : []),
   ];
 
@@ -164,7 +183,7 @@ export function createOpenClawTools(options?: {
     context: {
       config: options?.config,
       workspaceDir,
-      agentDir: options?.agentDir,
+      agentDir,
       agentId: resolveSessionAgentId({
         sessionKey: options?.agentSessionKey,
         config: options?.config,

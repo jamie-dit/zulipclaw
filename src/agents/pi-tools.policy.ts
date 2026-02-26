@@ -10,6 +10,9 @@ import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
 
+const INTERNAL_WEB_RESEARCH_GROUP_ID = "__openclaw_web_research__";
+const INTERNAL_WEB_RESEARCH_BROWSER_GROUP_ID = "__openclaw_web_research_browser__";
+
 function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
   const deny = compileGlobPatterns({
     raw: expandToolGroups(policy.deny ?? []),
@@ -145,6 +148,21 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   return { channel: channel.trim().toLowerCase(), groupId };
 }
 
+function resolveInternalGroupToolPolicy(groupId?: string): SandboxToolPolicy | undefined {
+  const normalized = (groupId ?? "").trim();
+  if (normalized === INTERNAL_WEB_RESEARCH_GROUP_ID) {
+    return {
+      allow: ["web_search", "web_fetch", "read", "image"],
+    };
+  }
+  if (normalized === INTERNAL_WEB_RESEARCH_BROWSER_GROUP_ID) {
+    return {
+      allow: ["group:web-research"],
+    };
+  }
+  return undefined;
+}
+
 function resolveProviderToolPolicy(params: {
   byProvider?: Record<string, ToolPolicyConfig>;
   modelProvider?: string;
@@ -252,6 +270,10 @@ export function resolveGroupToolPolicy(params: {
   const groupId = params.groupId ?? sessionContext.groupId ?? spawnedContext.groupId;
   if (!groupId) {
     return undefined;
+  }
+  const internalPolicy = resolveInternalGroupToolPolicy(groupId);
+  if (internalPolicy) {
+    return internalPolicy;
   }
   const channelRaw = params.messageProvider ?? sessionContext.channel ?? spawnedContext.channel;
   const channel = normalizeMessageChannel(channelRaw);
