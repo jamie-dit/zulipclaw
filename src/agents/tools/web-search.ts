@@ -14,7 +14,6 @@ import {
   readResponseText,
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
-  withTimeout,
   writeCache,
 } from "./web-shared.js";
 
@@ -367,135 +366,14 @@ function resolveGrokInlineCitations(grok?: GrokConfig): boolean {
   return grok?.inlineCitations === true;
 }
 
-function resolveSearchCount(value: unknown, fallback: number): number {
-  const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  const clamped = Math.max(1, Math.min(MAX_SEARCH_COUNT, Math.floor(parsed)));
-  return clamped;
-}
+    const data = (await res.json()) as PerplexitySearchResponse;
+    const content = data.choices?.[0]?.message?.content ?? "No response";
+    const citations = data.citations ?? [];
 
-function normalizeFreshness(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
+    return { content, citations };
+  } finally {
+    await release();
   }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  const lower = trimmed.toLowerCase();
-  if (BRAVE_FRESHNESS_SHORTCUTS.has(lower)) {
-    return lower;
-  }
-
-  const match = trimmed.match(BRAVE_FRESHNESS_RANGE);
-  if (!match) {
-    return undefined;
-  }
-
-  const [, start, end] = match;
-  if (!isValidIsoDate(start) || !isValidIsoDate(end)) {
-    return undefined;
-  }
-  if (start > end) {
-    return undefined;
-  }
-
-  return `${start}to${end}`;
-}
-
-/**
- * Map normalized freshness values (pd/pw/pm/py) to Perplexity's
- * search_recency_filter values (day/week/month/year).
- */
-function freshnessToPerplexityRecency(freshness: string | undefined): string | undefined {
-  if (!freshness) {
-    return undefined;
-  }
-  const map: Record<string, string> = {
-    pd: "day",
-    pw: "week",
-    pm: "month",
-    py: "year",
-  };
-  return map[freshness] ?? undefined;
-}
-
-function isValidIsoDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return false;
-  }
-  const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
-  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
-    return false;
-  }
-
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return (
-    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
-  );
-}
-
-function resolveSiteName(url: string | undefined): string | undefined {
-  if (!url) {
-    return undefined;
-  }
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return undefined;
-  }
-}
-
-async function runPerplexitySearch(params: {
-  query: string;
-  apiKey: string;
-  baseUrl: string;
-  model: string;
-  timeoutSeconds: number;
-  freshness?: string;
-}): Promise<{ content: string; citations: string[] }> {
-  const baseUrl = params.baseUrl.trim().replace(/\/$/, "");
-  const endpoint = `${baseUrl}/chat/completions`;
-  const model = resolvePerplexityRequestModel(baseUrl, params.model);
-
-  const body: Record<string, unknown> = {
-    model,
-    messages: [
-      {
-        role: "user",
-        content: params.query,
-      },
-    ],
-  };
-
-  const recencyFilter = freshnessToPerplexityRecency(params.freshness);
-  if (recencyFilter) {
-    body.search_recency_filter = recencyFilter;
-  }
-
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${params.apiKey}`,
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-Title": "OpenClaw Web Search",
-    },
-    body: JSON.stringify(body),
-    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
-  });
-
-  if (!res.ok) {
-    const detailResult = await readResponseText(res, { maxBytes: 64_000 });
-    const detail = detailResult.text;
-    throw new Error(`Perplexity API error (${res.status}): ${detail || res.statusText}`);
-  }
-
-  const data = (await res.json()) as PerplexitySearchResponse;
-  const content = data.choices?.[0]?.message?.content ?? "No response";
-  const citations = data.citations ?? [];
-
-  return { content, citations };
 }
 
 async function runGrokSearch(params: {
@@ -525,168 +403,79 @@ async function runGrokSearch(params: {
   // citations are returned automatically when available — we just parse
   // them from the response without requesting them explicitly (#12910).
 
-  const res = await fetch(XAI_API_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${params.apiKey}`,
+  const { response: res, release } = await fetchTrustedWebSearchEndpoint({
+    url: XAI_API_ENDPOINT,
+    timeoutSeconds: params.timeoutSeconds,
+    init: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${params.apiKey}`,
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
   });
+  try {
+    if (!res.ok) {
+      return await throwWebSearchApiError(res, "xAI");
+    }
 
-  if (!res.ok) {
-    const detailResult = await readResponseText(res, { maxBytes: 64_000 });
-    const detail = detailResult.text;
-    throw new Error(`xAI API error (${res.status}): ${detail || res.statusText}`);
+    const data = (await res.json()) as GrokSearchResponse;
+    const { text: extractedText, annotationCitations } = extractGrokContent(data);
+    const content = extractedText ?? "No response";
+    // Prefer top-level citations; fall back to annotation-derived ones
+    const citations = (data.citations ?? []).length > 0 ? data.citations! : annotationCitations;
+    const inlineCitations = data.inline_citations;
+
+    return { content, citations, inlineCitations };
+  } finally {
+    await release();
   }
-
-  const data = (await res.json()) as GrokSearchResponse;
-  const { text: extractedText, annotationCitations } = extractGrokContent(data);
-  const content = extractedText ?? "No response";
-  // Prefer top-level citations; fall back to annotation-derived ones
-  const citations = (data.citations ?? []).length > 0 ? data.citations! : annotationCitations;
-  const inlineCitations = data.inline_citations;
-
-  return { content, citations, inlineCitations };
 }
 
-async function runWebSearch(params: {
-  query: string;
-  count: number;
-  apiKey: string;
-  timeoutSeconds: number;
-  cacheTtlMs: number;
-  provider: (typeof SEARCH_PROVIDERS)[number];
-  country?: string;
-  search_lang?: string;
-  ui_lang?: string;
-  freshness?: string;
-  perplexityBaseUrl?: string;
-  perplexityModel?: string;
-  grokModel?: string;
-  grokInlineCitations?: boolean;
-}): Promise<Record<string, unknown>> {
-  const cacheKey = normalizeCacheKey(
-    params.provider === "brave"
-      ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
-      : params.provider === "perplexity"
-        ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
-        : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
-  );
-  const cached = readCache(SEARCH_CACHE, cacheKey);
-  if (cached) {
-    return { ...cached.value, cached: true };
-  }
-
-  const start = Date.now();
-
-  if (params.provider === "perplexity") {
-    const { content, citations } = await runPerplexitySearch({
-      query: params.query,
-      apiKey: params.apiKey,
-      baseUrl: params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL,
-      model: params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL,
-      timeoutSeconds: params.timeoutSeconds,
-      freshness: params.freshness,
-    });
-
-    const payload = {
-      query: params.query,
-      provider: params.provider,
-      model: params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL,
-      tookMs: Date.now() - start,
-      externalContent: {
-        untrusted: true,
-        source: "web_search",
-        provider: params.provider,
-        wrapped: true,
+  const { response: res, release } = await fetchTrustedWebSearchEndpoint({
+    url: url.toString(),
+    timeoutSeconds: params.timeoutSeconds,
+    init: {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "X-Subscription-Token": params.apiKey,
       },
-      content: wrapWebContent(content),
-      citations,
-    };
-    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
-    return payload;
-  }
-
-  if (params.provider === "grok") {
-    const { content, citations, inlineCitations } = await runGrokSearch({
-      query: params.query,
-      apiKey: params.apiKey,
-      model: params.grokModel ?? DEFAULT_GROK_MODEL,
-      timeoutSeconds: params.timeoutSeconds,
-      inlineCitations: params.grokInlineCitations ?? false,
-    });
-
-    const payload = {
-      query: params.query,
-      provider: params.provider,
-      model: params.grokModel ?? DEFAULT_GROK_MODEL,
-      tookMs: Date.now() - start,
-      externalContent: {
-        untrusted: true,
-        source: "web_search",
-        provider: params.provider,
-        wrapped: true,
-      },
-      content: wrapWebContent(content),
-      citations,
-      inlineCitations,
-    };
-    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
-    return payload;
-  }
-
-  if (params.provider !== "brave") {
-    throw new Error("Unsupported web search provider.");
-  }
-
-  const url = new URL(BRAVE_SEARCH_ENDPOINT);
-  url.searchParams.set("q", params.query);
-  url.searchParams.set("count", String(params.count));
-  if (params.country) {
-    url.searchParams.set("country", params.country);
-  }
-  if (params.search_lang) {
-    url.searchParams.set("search_lang", params.search_lang);
-  }
-  if (params.ui_lang) {
-    url.searchParams.set("ui_lang", params.ui_lang);
-  }
-  if (params.freshness) {
-    url.searchParams.set("freshness", params.freshness);
-  }
-
-  const res = await fetch(url.toString(), {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-      "X-Subscription-Token": params.apiKey,
     },
-    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
   });
+  let mapped: Array<{
+    title: string;
+    url: string;
+    description: string;
+    published?: string;
+    siteName?: string;
+  }> = [];
+  try {
+    if (!res.ok) {
+      const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+      const detail = detailResult.text;
+      throw new Error(`Brave Search API error (${res.status}): ${detail || res.statusText}`);
+    }
 
-  if (!res.ok) {
-    const detailResult = await readResponseText(res, { maxBytes: 64_000 });
-    const detail = detailResult.text;
-    throw new Error(`Brave Search API error (${res.status}): ${detail || res.statusText}`);
+    const data = (await res.json()) as BraveSearchResponse;
+    const results = Array.isArray(data.web?.results) ? (data.web?.results ?? []) : [];
+    mapped = results.map((entry) => {
+      const description = entry.description ?? "";
+      const title = entry.title ?? "";
+      const url = entry.url ?? "";
+      const rawSiteName = resolveSiteName(url);
+      return {
+        title: title ? wrapWebContent(title, "web_search") : "",
+        url, // Keep raw for tool chaining
+        description: description ? wrapWebContent(description, "web_search") : "",
+        published: entry.age || undefined,
+        siteName: rawSiteName || undefined,
+      };
+    });
+  } finally {
+    await release();
   }
-
-  const data = (await res.json()) as BraveSearchResponse;
-  const results = Array.isArray(data.web?.results) ? (data.web?.results ?? []) : [];
-  const mapped = results.map((entry) => {
-    const description = entry.description ?? "";
-    const title = entry.title ?? "";
-    const url = entry.url ?? "";
-    const rawSiteName = resolveSiteName(url);
-    return {
-      title: title ? wrapWebContent(title, "web_search") : "",
-      url, // Keep raw for tool chaining
-      description: description ? wrapWebContent(description, "web_search") : "",
-      published: entry.age || undefined,
-      siteName: rawSiteName || undefined,
-    };
-  });
 
   const payload = {
     query: params.query,
