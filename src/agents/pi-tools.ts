@@ -6,7 +6,11 @@ import {
   readTool,
 } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
-import type { DelegationNudgeConfig, ToolLoopDetectionConfig } from "../config/types.tools.js";
+import type {
+  CodeGuardConfig,
+  DelegationNudgeConfig,
+  ToolLoopDetectionConfig,
+} from "../config/types.tools.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
@@ -174,6 +178,31 @@ export function resolveDelegationNudgeConfig(params: {
     ...global,
     ...agent,
     exemptTools: [...(global.exemptTools ?? []), ...(agent.exemptTools ?? [])],
+  };
+}
+
+export function resolveCodeGuardConfig(params: {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+}): CodeGuardConfig | undefined {
+  const global = params.cfg?.tools?.codeGuard;
+  const agent =
+    params.agentId && params.cfg
+      ? resolveAgentConfig(params.cfg, params.agentId)?.tools?.codeGuard
+      : undefined;
+
+  if (!agent) {
+    return global;
+  }
+  if (!global) {
+    return agent;
+  }
+
+  return {
+    ...global,
+    ...agent,
+    codeExtensions: agent.codeExtensions ?? global.codeExtensions,
+    exemptPaths: [...(global.exemptPaths ?? []), ...(agent.exemptPaths ?? [])],
   };
 }
 
@@ -521,6 +550,7 @@ export function createOpenClawCodingTools(options?: {
       sessionKey: options?.sessionKey,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
       delegationNudge: resolveDelegationNudgeConfig({ cfg: options?.config, agentId }),
+      codeGuard: resolveCodeGuardConfig({ cfg: options?.config, agentId }),
       delegationIsFirstTurn: options?.delegationNudgeIsFirstTurn,
       messageChannel: options?.messageProvider,
       agentAccountId: options?.agentAccountId,

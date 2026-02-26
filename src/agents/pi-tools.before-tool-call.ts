@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
-import type { DelegationNudgeConfig, ToolLoopDetectionConfig } from "../config/types.tools.js";
+import type {
+  CodeGuardConfig,
+  DelegationNudgeConfig,
+  ToolLoopDetectionConfig,
+} from "../config/types.tools.js";
 import { callGateway } from "../gateway/call.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -23,6 +27,7 @@ export type HookContext = {
   sessionKey?: string;
   loopDetection?: ToolLoopDetectionConfig;
   delegationNudge?: DelegationNudgeConfig;
+  codeGuard?: CodeGuardConfig;
   delegationIsFirstTurn?: boolean;
   messageChannel?: string;
   agentAccountId?: string;
@@ -505,6 +510,28 @@ export async function runBeforeToolCallHook(args: {
     }
 
     recordToolCall(sessionState, toolName, params, args.toolCallId, args.ctx.loopDetection);
+
+    // Code guard: prevent main session from directly editing code files
+    if (args.ctx.codeGuard?.enabled) {
+      const { checkCodeGuard } = await import("./code-guard.js");
+      const guardResult = checkCodeGuard({
+        toolName,
+        params: (params && typeof params === "object" ? params : {}) as Record<string, unknown>,
+        sessionKey: args.ctx.sessionKey,
+        config: args.ctx.codeGuard,
+      });
+
+      if (guardResult) {
+        if (guardResult.blocked) {
+          return {
+            blocked: true,
+            reason: guardResult.reason ?? "Code guard blocked this tool call",
+          };
+        }
+        // Warn mode: we'll let it through but the warning will be logged by checkCodeGuard
+        // The warning reason is available for downstream consumers if needed
+      }
+    }
 
     // Delegation nudge hard block (per-turn counter)
     if (
