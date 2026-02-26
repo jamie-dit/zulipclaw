@@ -1009,6 +1009,21 @@ export async function runSubagentAnnounceFlow(params: {
     let completionMessage = "";
     let triggerMessage = "";
 
+    // Write the completion marker BEFORE delivery so it survives gateway death
+    // during the announce delivery phase. This allows restart recovery to detect
+    // that the sub-agent had already completed its work.
+    if (reply?.trim()) {
+      try {
+        const { writeCompletionMarker } = await import("./subagent-registry.js");
+        writeCompletionMarker(params.childRunId, {
+          completedAt: Date.now(),
+          summary: reply.slice(0, 200),
+        });
+      } catch {
+        // Best-effort: marker write failure should not block the announce flow
+      }
+    }
+
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
     let requesterIsSubagent = !expectsCompletionMessage && requesterDepth >= 1;
     // If the requester subagent has already finished, bubble the announce to its
