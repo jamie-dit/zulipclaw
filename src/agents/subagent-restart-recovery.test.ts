@@ -182,8 +182,25 @@ describe("subagent-restart-recovery", () => {
       hoisted.isEmbeddedPiRunActiveMock.mockReturnValue(false);
 
       // Mock session history response
+      // checkLastMessageCompletion uses limit: 5, readSessionProgressSummary uses limit: 30
       hoisted.callGatewayMock.mockImplementation((opts: Record<string, unknown>) => {
+        const params = opts.params as Record<string, unknown> | undefined;
         if ((opts as { method: string }).method === "chat.history") {
+          if (params?.limit === 5) {
+            // For checkLastMessageCompletion: last message has tool calls (still running)
+            return {
+              messages: [
+                {
+                  role: "assistant",
+                  content: [
+                    { type: "text", text: "Now running tests..." },
+                    { type: "toolCall", toolName: "exec", args: { command: "pnpm test" } },
+                  ],
+                },
+              ],
+            };
+          }
+          // For readSessionProgressSummary (limit: 30)
           return {
             messages: [
               { role: "assistant", content: "I created PR #42 and pushed changes." },
@@ -577,6 +594,246 @@ describe("subagent-restart-recovery", () => {
       expect(sendParams.message).toContain("✅");
       expect(sendParams.message).toContain("notified-task");
       expect(sendParams.message).toContain("still active");
+    });
+  });
+
+  describe("checkLastMessageCompletion", () => {
+    it("returns likelyComplete when last message is pure assistant text", async () => {
+      hoisted.callGatewayMock.mockResolvedValue({
+        messages: [
+          { role: "user", content: "do the thing" },
+          { role: "assistant", content: "I completed the task. Here are the results." },
+        ],
+      });
+
+      const { checkLastMessageCompletion } = await import("./subagent-restart-recovery.js");
+      const result = await checkLastMessageCompletion("agent:main:subagent:test");
+
+      expect(result.likelyComplete).toBe(true);
+      expect(result.reason).toContain("no pending tool calls");
+    });
+
+    it("returns likelyComplete when last message has text content blocks (no toolCall)", async () => {
+      hoisted.callGatewayMock.mockResolvedValue({
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Final report: everything done." }],
+          },
+        ],
+      });
+
+      const { checkLastMessageCompletion } = await import("./subagent-restart-recovery.js");
+      const result = await checkLastMessageCompletion("agent:main:subagent:test");
+
+      expect(result.likelyComplete).toBe(true);
+    });
+
+    it("returns not complete when last assistant message has toolCall blocks", async () => {
+      hoisted.callGatewayMock.mockResolvedValue({
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Let me check..." },
+              { type: "toolCall", toolName: "exec", args: { command: "ls" } },
+            ],
+          },
+        ],
+      });
+
+      const { checkLastMessageCompletion } = await import("./subagent-restart-recovery.js");
+      const result = await checkLastMessageCompletion("agent:main:subagent:test");
+
+      expect(result.likelyComplete).toBe(false);
+      expect(result.reason).toContain("tool calls");
+    });
+
+    it("returns not complete when last message is a toolResult", async () => {
+      hoisted.callGatewayMock.mockResolvedValue({
+        messages: [
+          { role: "assistant", content: "running command" },
+          { role: "toolResult", content: "output from tool" },
+        ],
+      });
+
+      const { checkLastMessageCompletion } = await import("./subagent-restart-recovery.js");
+      const result = await checkLastMessageCompletion("agent:main:subagent:test");
+
+      expect(result.likelyComplete).toBe(false);
+      expect(result.reason).toContain("toolResult");
+    });
+
+    it("returns not complete when last message is a user message", async () => {
+      hoisted.callGatewayMock.mockResolvedValue({
+        messages: [{ role: "user", content: "do the thing" }],
+      });
+
+      const { checkLastMessageCompletion } = await import("./subagent-restart-recovery.js");
+      const result = await checkLastMessageCompletion("agent:main:subagent:test");
+
+      expect(result.likelyComplete).toBe(false);
+      expect(result.reason).toContain("user");
+    });
+
+    it("returns not complete when session has no messages", async () => {
+      hoisted.callGatewayMock.mockResolvedValue({ messages: [] });
+
+      const { checkLastMessageCompletion } = await import("./subagent-restart-recovery.js");
+      const result = await checkLastMessageCompletion("agent:main:subagent:test");
+
+      expect(result.likelyComplete).toBe(false);
+      expect(result.reason).toContain("no messages");
+    });
+
+    it("returns not complete when chat.history fails", async () => {
+      hoisted.callGatewayMock.mockRejectedValue(new Error("session not found"));
+
+      const { checkLastMessageCompletion } = await import("./subagent-restart-recovery.js");
+      const result = await checkLastMessageCompletion("agent:main:subagent:test");
+
+      expect(result.likelyComplete).toBe(false);
+      expect(result.reason).toContain("failed to read");
+    });
+
+    it("returns not complete when result is null/undefined", async () => {
+      hoisted.callGatewayMock.mockResolvedValue(null);
+
+      const { checkLastMessageCompletion } = await import("./subagent-restart-recovery.js");
+      const result = await checkLastMessageCompletion("agent:main:subagent:test");
+
+      expect(result.likelyComplete).toBe(false);
+      expect(result.reason).toContain("no messages");
+    });
+  });
+
+  describe("smart skip integration in runSubagentRestartRecovery", () => {
+    it("skips re-spawn when run has a completion marker", async () => {
+      const run = makeRun({
+        runId: "marker-1",
+        label: "completed-task",
+        completionMarker: {
+          completedAt: Date.now() - 5_000,
+          summary: "PR created and merged successfully",
+        },
+      });
+      const registry = new Map<string, SubagentRunRecord>();
+      registry.set("marker-1", run);
+      hoisted.loadRegistryMock.mockReturnValue(registry);
+
+      hoisted.loadSessionEntryMock.mockReturnValue({ entry: { sessionId: "uuid-marker" } });
+      hoisted.isEmbeddedPiRunActiveMock.mockReturnValue(false);
+      hoisted.callGatewayMock.mockResolvedValue({ ok: true });
+
+      const { runSubagentRestartRecovery } = await import("./subagent-restart-recovery.js");
+      const outcomes = await runSubagentRestartRecovery();
+
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0].action).toBe("skipped");
+      expect(outcomes[0].detail).toContain("completion marker");
+      expect(hoisted.spawnMock).not.toHaveBeenCalled();
+    });
+
+    it("skips re-spawn when last message indicates completion", async () => {
+      const run = makeRun({ runId: "lastmsg-1", label: "done-task" });
+      const registry = new Map<string, SubagentRunRecord>();
+      registry.set("lastmsg-1", run);
+      hoisted.loadRegistryMock.mockReturnValue(registry);
+
+      hoisted.loadSessionEntryMock.mockReturnValue({ entry: { sessionId: "uuid-lastmsg" } });
+      hoisted.isEmbeddedPiRunActiveMock.mockReturnValue(false);
+
+      // First call is checkLastMessageCompletion (limit: 5),
+      // subsequent calls may be readSessionProgressSummary or send
+      hoisted.callGatewayMock.mockImplementation((opts: Record<string, unknown>) => {
+        const params = opts.params as Record<string, unknown> | undefined;
+        if ((opts as { method: string }).method === "chat.history" && params?.limit === 5) {
+          return {
+            messages: [
+              { role: "user", content: "do this" },
+              { role: "assistant", content: "All done! Here is your report." },
+            ],
+          };
+        }
+        if ((opts as { method: string }).method === "chat.history") {
+          return { messages: [] };
+        }
+        return { ok: true };
+      });
+
+      const { runSubagentRestartRecovery } = await import("./subagent-restart-recovery.js");
+      const outcomes = await runSubagentRestartRecovery();
+
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0].action).toBe("skipped");
+      expect(outcomes[0].detail).toContain("likely complete");
+      expect(hoisted.spawnMock).not.toHaveBeenCalled();
+    });
+
+    it("proceeds to re-spawn when last message has tool calls (not complete)", async () => {
+      const run = makeRun({ runId: "inprog-1", label: "in-progress-task" });
+      const registry = new Map<string, SubagentRunRecord>();
+      registry.set("inprog-1", run);
+      hoisted.loadRegistryMock.mockReturnValue(registry);
+
+      hoisted.loadSessionEntryMock.mockReturnValue({ entry: { sessionId: "uuid-inprog" } });
+      hoisted.isEmbeddedPiRunActiveMock.mockReturnValue(false);
+
+      hoisted.callGatewayMock.mockImplementation((opts: Record<string, unknown>) => {
+        if ((opts as { method: string }).method === "chat.history") {
+          return {
+            messages: [
+              {
+                role: "assistant",
+                content: [
+                  { type: "text", text: "Running tests now..." },
+                  { type: "toolCall", toolName: "exec", args: { command: "pnpm test" } },
+                ],
+              },
+            ],
+          };
+        }
+        return { ok: true };
+      });
+
+      hoisted.spawnMock.mockResolvedValue({
+        status: "accepted",
+        childSessionKey: "agent:main:subagent:new",
+        runId: "new",
+      });
+
+      const { runSubagentRestartRecovery } = await import("./subagent-restart-recovery.js");
+      const outcomes = await runSubagentRestartRecovery();
+
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0].action).toBe("respawned");
+      expect(hoisted.spawnMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("checks completion marker before last-message check (cheaper first)", async () => {
+      // Run has a completion marker, so last-message check should not be called
+      const run = makeRun({
+        runId: "order-1",
+        label: "order-test",
+        completionMarker: { completedAt: Date.now() - 1000 },
+      });
+      const registry = new Map<string, SubagentRunRecord>();
+      registry.set("order-1", run);
+      hoisted.loadRegistryMock.mockReturnValue(registry);
+
+      hoisted.loadSessionEntryMock.mockReturnValue({ entry: { sessionId: "uuid-order" } });
+      hoisted.isEmbeddedPiRunActiveMock.mockReturnValue(false);
+      hoisted.callGatewayMock.mockResolvedValue({ ok: true });
+
+      const { runSubagentRestartRecovery } = await import("./subagent-restart-recovery.js");
+      await runSubagentRestartRecovery();
+
+      // chat.history should only be called for the Zulip summary send,
+      // NOT for checkLastMessageCompletion (skipped due to marker)
+      const historyCalls = hoisted.callGatewayMock.mock.calls.filter(
+        (call: unknown[]) => (call[0] as { method: string }).method === "chat.history",
+      );
+      expect(historyCalls).toHaveLength(0);
     });
   });
 });

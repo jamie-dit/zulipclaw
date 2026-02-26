@@ -49,6 +49,15 @@ export type SubagentRunRecord = {
   announceRetryCount?: number;
   /** Timestamp of the last announce retry attempt (for backoff). */
   lastAnnounceRetryAt?: number;
+  /**
+   * Written by the announce flow after successfully reading sub-agent output.
+   * Survives gateway restarts so the restart recovery can skip re-spawning
+   * runs that already completed their work.
+   */
+  completionMarker?: {
+    completedAt: number;
+    summary?: string;
+  };
 };
 
 const subagentRuns = new Map<string, SubagentRunRecord>();
@@ -1152,6 +1161,29 @@ export function getSubagentRunRecord(runId: string): SubagentRunRecord | undefin
     return undefined;
   }
   return subagentRuns.get(key);
+}
+
+/**
+ * Write a completion marker to the run record and persist to disk.
+ * Called from the announce flow after successfully reading sub-agent output,
+ * BEFORE delivering the announcement. This ensures the marker survives
+ * gateway death during delivery so restart recovery can skip re-spawning.
+ */
+export function writeCompletionMarker(
+  runId: string,
+  marker: { completedAt: number; summary?: string },
+): boolean {
+  const key = typeof runId === "string" ? runId.trim() : "";
+  if (!key) {
+    return false;
+  }
+  const entry = subagentRuns.get(key);
+  if (!entry) {
+    return false;
+  }
+  entry.completionMarker = marker;
+  persistSubagentRuns();
+  return true;
 }
 
 export function getSubagentRelayDeliveryContext(

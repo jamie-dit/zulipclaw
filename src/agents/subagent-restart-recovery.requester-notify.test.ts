@@ -113,7 +113,22 @@ describe("restart recovery requester notification", () => {
     hoisted.loadConfigMock.mockReturnValue({});
 
     hoisted.callGatewayMock.mockImplementation((opts: Record<string, unknown>) => {
+      const params = opts.params as Record<string, unknown> | undefined;
       if ((opts as { method: string }).method === "chat.history") {
+        if (params?.limit === 5) {
+          // For checkLastMessageCompletion: last message has tool calls (still running)
+          return {
+            messages: [
+              {
+                role: "assistant",
+                content: [
+                  { type: "text", text: "Working on the PR..." },
+                  { type: "toolCall", toolName: "exec", args: { command: "git push" } },
+                ],
+              },
+            ],
+          };
+        }
         return {
           messages: [{ role: "assistant", content: "Working on the PR..." }],
         };

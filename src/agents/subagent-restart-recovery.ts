@@ -23,6 +23,12 @@ import {
 } from "./subagent-registry.store.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 
+/** Result of inspecting the last session message to detect completion. */
+export type LastMessageCompletionCheck = {
+  likelyComplete: boolean;
+  reason: string;
+};
+
 /** Lightweight summary of a single orphaned run's recovery outcome. */
 export type RecoveryOutcome = {
   runId: string;
@@ -93,6 +99,69 @@ export async function readSessionProgressSummary(
     };
   } catch {
     return { hasHistory: false, progressSummary: "" };
+  }
+}
+
+/**
+ * Inspect the last message in a sub-agent session to determine whether the
+ * task was likely completed before the gateway died.
+ *
+ * Heuristic:
+ * - Last message is assistant text with no toolCall blocks → likely complete
+ * - Last message has pending tool calls → still running
+ * - Last message is a toolResult / user message / empty → still running
+ *
+ * Returns `likelyComplete: false` when chat.history is unavailable.
+ */
+export async function checkLastMessageCompletion(
+  sessionKey: string,
+): Promise<LastMessageCompletionCheck> {
+  try {
+    const result = await callGateway<{ messages: Array<Record<string, unknown>> }>({
+      method: "chat.history",
+      params: { sessionKey, limit: 5 },
+      timeoutMs: 10_000,
+    });
+
+    const messages = Array.isArray(result?.messages) ? result.messages : [];
+    if (messages.length === 0) {
+      return { likelyComplete: false, reason: "no messages in session" };
+    }
+
+    const lastMsg = messages[messages.length - 1];
+    const role = lastMsg?.role as string | undefined;
+
+    if (role !== "assistant") {
+      return {
+        likelyComplete: false,
+        reason: `last message role is "${String(role)}", not assistant`,
+      };
+    }
+
+    // Check content for tool call blocks
+    const content = lastMsg?.content;
+    if (Array.isArray(content)) {
+      const hasToolCall = content.some(
+        (block: unknown) =>
+          block !== null &&
+          typeof block === "object" &&
+          (block as Record<string, unknown>).type === "toolCall",
+      );
+      if (hasToolCall) {
+        return {
+          likelyComplete: false,
+          reason: "last assistant message contains tool calls (still executing)",
+        };
+      }
+    }
+
+    // Last message is pure assistant text - likely the final response
+    return {
+      likelyComplete: true,
+      reason: "last message is assistant text with no pending tool calls",
+    };
+  } catch {
+    return { likelyComplete: false, reason: "failed to read session history" };
   }
 }
 
@@ -333,6 +402,45 @@ export async function runSubagentRestartRecovery(): Promise<RecoveryOutcome[]> {
         );
         continue;
       }
+
+      // --- Smart skip checks (cheapest first) ---
+
+      // Check 1: Completion marker (cheap - just a field on the persisted record).
+      // Written by the announce flow after reading sub-agent output. If present,
+      // the sub-agent completed its work but the gateway died before lifecycle end.
+      if (run.completionMarker?.completedAt) {
+        markRunTerminatedInRegistry(run.runId);
+        outcomes.push({
+          runId: run.runId,
+          label,
+          action: "skipped",
+          detail: `Task already completed (completion marker set at ${new Date(run.completionMarker.completedAt).toISOString()})`,
+        });
+        defaultRuntime.log?.(
+          `[info] subagent restart recovery: ${label} has completion marker, skipping re-spawn`,
+        );
+        continue;
+      }
+
+      // Check 2: Last message heuristic (requires RPC to read session history).
+      // If the last message is pure assistant text (no tool calls), the sub-agent
+      // likely finished its work and was about to return.
+      const lastMsgCheck = await checkLastMessageCompletion(run.childSessionKey);
+      if (lastMsgCheck.likelyComplete) {
+        markRunTerminatedInRegistry(run.runId);
+        outcomes.push({
+          runId: run.runId,
+          label,
+          action: "skipped",
+          detail: `Task likely complete: ${lastMsgCheck.reason}`,
+        });
+        defaultRuntime.log?.(
+          `[info] subagent restart recovery: ${label} last message indicates completion, skipping re-spawn`,
+        );
+        continue;
+      }
+
+      // --- End smart skip checks ---
 
       // Read session history to determine progress.
       const { hasHistory, progressSummary } = await readSessionProgressSummary(run.childSessionKey);
