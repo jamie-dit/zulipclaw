@@ -450,11 +450,8 @@ export async function spawnSubagentDirect(
     expectsCompletionMessage: params.expectsCompletionMessage === true,
   });
 
-  return {
-    status: "accepted",
-    childSessionKey,
-    runId: childRunId,
-    note: SUBAGENT_SPAWN_ACCEPTED_NOTE,
+    mode: spawnMode,
+    note,
     modelApplied: resolvedModel ? modelApplied : undefined,
   };
 }
