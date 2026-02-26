@@ -3,7 +3,12 @@ import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js"
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
+import {
+  registerSessionRun,
+  unregisterSessionRun,
+} from "../../agents/pi-embedded-runner/session-run-registry.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { resolveMaxConcurrentPerSession } from "../../config/agent-limits.js";
 import { resolveAgentIdFromSessionKey, type SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
@@ -44,7 +49,7 @@ export function createFollowupRunner(params: {
     typingMode,
     sessionEntry,
     sessionStore,
-    sessionKey,
+    sessionKey: _sessionKey,
     storePath,
     defaultModel,
     agentCfgContextTokens,
@@ -113,8 +118,25 @@ export function createFollowupRunner(params: {
   };
 
   return async (queued: FollowupRun) => {
+    const runId = crypto.randomUUID();
+    const sessionKey = queued.run.sessionKey ?? queued.run.sessionId;
+    const maxConcurrentPerSession = resolveMaxConcurrentPerSession(queued.run.config);
+    const isConcurrent = maxConcurrentPerSession > 1;
+
+    // Create AbortController for this run. When concurrent, register it so
+    // sibling runs can cancel it.
+    const runAbortController = isConcurrent ? new AbortController() : undefined;
+    if (isConcurrent && runAbortController) {
+      registerSessionRun({
+        runId,
+        sessionKey,
+        abortController: runAbortController,
+        startedAt: Date.now(),
+        prompt: queued.prompt,
+      });
+    }
+
     try {
-      const runId = crypto.randomUUID();
       if (queued.run.sessionKey) {
         registerAgentRunContext(runId, {
           sessionKey: queued.run.sessionKey,
@@ -171,6 +193,7 @@ export function createFollowupRunner(params: {
               bashElevated: queued.run.bashElevated,
               timeoutMs: queued.run.timeoutMs,
               runId,
+              abortSignal: runAbortController?.signal,
               blockReplyBreak: queued.run.blockReplyBreak,
               onAgentEvent: (evt) => {
                 if (evt.stream !== "compaction") {
@@ -287,6 +310,9 @@ export function createFollowupRunner(params: {
 
       await sendFollowupPayloads(finalPayloads, queued);
     } finally {
+      if (isConcurrent) {
+        unregisterSessionRun(sessionKey, runId);
+      }
       typing.markRunComplete();
     }
   };

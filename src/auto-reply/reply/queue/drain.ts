@@ -1,3 +1,4 @@
+import { resolveMaxConcurrentPerSession } from "../../../config/agent-limits.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
   buildCollectPrompt,
@@ -45,7 +46,7 @@ export function scheduleFollowupDrain(
         await waitForQueueDebounce(queue);
         if (queue.mode === "collect") {
           // Once the batch is mixed, never collect again within this drain.
-          // Prevents “collect after shift” collapsing different targets.
+          // Prevents "collect after shift" collapsing different targets.
           //
           // Debug: `pnpm test src/auto-reply/reply/queue.collect-routing.test.ts`
           if (forceIndividualCollect) {
@@ -127,6 +128,8 @@ export function scheduleFollowupDrain(
           continue;
         }
 
+        // --- Non-collect modes: followup / steer-backlog / etc. ---
+
         const summaryPrompt = previewQueueSummaryPrompt(queue);
         if (summaryPrompt) {
           const run = queue.lastRun;
@@ -147,6 +150,26 @@ export function scheduleFollowupDrain(
           continue;
         }
 
+        // Resolve max concurrency from config (available on queued items).
+        const maxConcurrent = resolveMaxConcurrentPerSession(
+          queue.items[0]?.run?.config ?? queue.lastRun?.config,
+        );
+
+        if (maxConcurrent > 1 && queue.items.length > 1) {
+          // Fire up to maxConcurrent followups in parallel.
+          const batch = queue.items.splice(0, maxConcurrent);
+          const results = await Promise.allSettled(batch.map((item) => runFollowup(item)));
+          for (const result of results) {
+            if (result.status === "rejected") {
+              defaultRuntime.error?.(
+                `followup queue concurrent run failed for ${key}: ${String(result.reason)}`,
+              );
+            }
+          }
+          continue;
+        }
+
+        // Sequential (default): process one at a time.
         const next = queue.items[0];
         if (!next) {
           break;
