@@ -175,6 +175,19 @@ export type DelegationNudgeConfig = {
   exemptTools?: string[];
 };
 
+export type CodeGuardConfig = {
+  /** Enable main-session code file edit guard (default: false). */
+  enabled?: boolean;
+  /** Guard mode: 'block' rejects the tool call, 'warn' allows but logs a violation (default: 'warn'). */
+  mode?: "block" | "warn";
+  /** File extensions considered "code files" (overrides default set when provided). */
+  codeExtensions?: string[];
+  /** Paths always exempt from the guard (glob patterns supported, e.g. "**\/*.test.ts"). */
+  exemptPaths?: string[];
+  /** Max edit size (chars) exempt in block mode - for single-line fixes (default: 200). */
+  singleLineExemptMaxChars?: number;
+};
+
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
 
 export type ToolPolicyConfig = {
@@ -276,6 +289,8 @@ export type AgentToolsConfig = {
   loopDetection?: ToolLoopDetectionConfig;
   /** Delegation nudge for excessive direct tool use in main session. */
   delegationNudge?: DelegationNudgeConfig;
+  /** Main session code file edit guard (block or warn on direct code edits). */
+  codeGuard?: CodeGuardConfig;
   sandbox?: {
     tools?: {
       allow?: string[];
@@ -540,6 +555,8 @@ export type ToolsConfig = {
   loopDetection?: ToolLoopDetectionConfig;
   /** Delegation nudge for excessive direct tool use in main session. */
   delegationNudge?: DelegationNudgeConfig;
+  /** Main session code file edit guard (block or warn on direct code edits). */
+  codeGuard?: CodeGuardConfig;
   /** Sub-agent tool policy defaults (deny wins). */
   subagents?: {
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
