@@ -10,7 +10,6 @@ type WebResearchDepth = (typeof WEB_RESEARCH_DEPTHS)[number];
 
 type WebResearchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["webResearch"]>;
 
-const QUICK_RESEARCH_MODEL = "anthropic/claude-haiku-3-5";
 const WEB_RESEARCH_GROUP_ID = "__openclaw_web_research__";
 const WEB_RESEARCH_BROWSER_GROUP_ID = "__openclaw_web_research_browser__";
 
@@ -115,9 +114,7 @@ function resolveDepthOptions(params: {
   const maxIterations = overrideMaxIterations ?? defaultMaxIterations;
   const model =
     sanitizeOptionalString(params.modelOverride) ??
-    (params.depth === "quick"
-      ? configuredQuickModel || QUICK_RESEARCH_MODEL
-      : configuredDefaultModel);
+    (params.depth === "quick" ? configuredQuickModel : configuredDefaultModel);
 
   return {
     maxIterations,
@@ -309,6 +306,5 @@ export const __testing = {
   resolveWebResearchSandboxConfig,
   WEB_RESEARCH_GROUP_ID,
   WEB_RESEARCH_BROWSER_GROUP_ID,
-  QUICK_RESEARCH_MODEL,
   DEFAULT_MAX_ITERATIONS,
 } as const;

@@ -3,6 +3,7 @@ import {
   buildCompletionDeliveryMessage,
   sanitizeForCodeFence,
   sanitizeInlineCodeName,
+  truncateMarkdownSafe,
 } from "./subagent-announce.js";
 
 describe("sanitizeForCodeFence", () => {
@@ -160,5 +161,64 @@ describe("buildCompletionDeliveryMessage", () => {
       spoilerEnd,
     );
     expect(findingsSection).not.toMatch(/`{3,}/);
+  });
+
+  it("shows visible preview for long findings before the spoiler", () => {
+    const longFindings = "A".repeat(800);
+    const result = buildCompletionDeliveryMessage({
+      findings: longFindings,
+      subagentName: "research-task",
+    });
+    // Preview is truncated (may be up to 600 chars since there are no newline breakpoints)
+    expect(result).toContain("_(truncated - see full output below)_");
+    // Should also contain the full output in the spoiler
+    expect(result).toContain("```spoiler Sub-agent output");
+    // Full output in spoiler should have all 800 A's (after sanitization)
+    const spoilerStart = result.indexOf("```spoiler Sub-agent output\n");
+    expect(spoilerStart).toBeGreaterThan(-1);
+  });
+
+  it("does not show preview for short findings", () => {
+    const result = buildCompletionDeliveryMessage({
+      findings: "Short result text.",
+      subagentName: "quick-task",
+    });
+    expect(result).not.toContain("_(truncated");
+    expect(result).toContain("```spoiler Sub-agent output");
+    expect(result).toContain("Short result text.");
+  });
+});
+
+describe("truncateMarkdownSafe", () => {
+  it("returns text unchanged when under the limit", () => {
+    expect(truncateMarkdownSafe("short text", 100)).toBe("short text");
+  });
+
+  it("prefers truncating at a newline boundary", () => {
+    const text = "line one\nline two\nline three is much longer and pushes over";
+    const result = truncateMarkdownSafe(text, 30);
+    expect(result).toBe("line one\nline two");
+  });
+
+  it("falls back to raw slice when no suitable newline exists", () => {
+    const text = "A".repeat(100);
+    const result = truncateMarkdownSafe(text, 50);
+    expect(result).toBe("A".repeat(50));
+  });
+
+  it("closes unclosed code fences", () => {
+    const text = "before\n```python\ncode here\nmore code\neven more code padding text";
+    const result = truncateMarkdownSafe(text, 50);
+    expect(result).toContain("```python");
+    // Should end with a closing fence
+    expect(result.trimEnd()).toMatch(/```$/);
+  });
+
+  it("does not add extra fence when fences are balanced", () => {
+    const text = "```js\ncode\n```\nafter text that goes beyond the limit here";
+    const result = truncateMarkdownSafe(text, 30);
+    // Count ``` sequences - should be even
+    const fences = result.match(/`{3,}/g) || [];
+    expect(fences.length % 2).toBe(0);
   });
 });

@@ -64,6 +64,30 @@ export function sanitizeInlineCodeName(name: string): string {
 }
 
 /**
+ * Truncate text at a character limit without leaving unclosed markdown
+ * constructs. Prefers breaking at the last newline before the limit.
+ * Any unclosed code fences (odd count of ```) in the result are closed
+ * with a trailing ``` to prevent rendering breakage.
+ */
+export function truncateMarkdownSafe(text: string, maxChars: number): string {
+  if (text.length <= maxChars) {
+    return text;
+  }
+  // Prefer truncating at a line boundary to avoid mid-word / mid-syntax cuts.
+  const slice = text.slice(0, maxChars);
+  const lastNewline = slice.lastIndexOf("\n");
+  const breakpoint = lastNewline > maxChars * 0.3 ? lastNewline : maxChars;
+  let preview = text.slice(0, breakpoint);
+
+  // Close any unclosed code fences (odd count of triple-backtick sequences).
+  const fenceCount = (preview.match(/`{3,}/g) || []).length;
+  if (fenceCount % 2 !== 0) {
+    preview += "\n```";
+  }
+  return preview;
+}
+
+/**
  * Builds the completion delivery message for sub-agent announcements.
  *
  * This function constructs the user-facing message when a sub-agent completes,
@@ -106,6 +130,13 @@ export function buildCompletionDeliveryMessage(params: {
   }
   if (!hasFindings) {
     return sections.join("\n\n");
+  }
+  // Show a visible preview so users see key findings without clicking the spoiler.
+  const PREVIEW_MAX_CHARS = 600;
+  const isLong = findingsText.length > PREVIEW_MAX_CHARS;
+  if (isLong) {
+    const preview = truncateMarkdownSafe(findingsText, PREVIEW_MAX_CHARS);
+    sections.push(`${preview}\n\n_(truncated - see full output below)_`);
   }
   const safeFindings = sanitizeForCodeFence(findingsText);
   sections.push(`\`\`\`spoiler Sub-agent output\n${safeFindings}\n\`\`\``);

@@ -29,10 +29,10 @@ describe("web_research helpers", () => {
   });
 
   describe("resolveDepthOptions", () => {
-    it("applies default quick depth options", () => {
+    it("applies default quick depth options (no hardcoded model fallback)", () => {
       expect(__testing.resolveDepthOptions({ depth: "quick" })).toEqual({
         maxIterations: __testing.DEFAULT_MAX_ITERATIONS.quick,
-        model: __testing.QUICK_RESEARCH_MODEL,
+        model: undefined,
         browserEnabled: false,
         groupId: __testing.WEB_RESEARCH_GROUP_ID,
       });
