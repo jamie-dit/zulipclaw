@@ -18,6 +18,13 @@ export type QueueConfig = {
   debounceMsByChannel?: InboundDebounceByProvider;
   cap?: number;
   drop?: QueueDropPolicy;
+  /**
+   * Max concurrent followup runs per session.
+   * When >1, independent followup messages in the same session can execute
+   * in parallel (each getting their own reply with full tool access).
+   * Default: 2 (allows one parallel followup). Set to 1 for sequential.
+   */
+  maxConcurrentPerSession?: number;
 };
 
 export type InboundDebounceByProvider = Record<string, number>;

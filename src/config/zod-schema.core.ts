@@ -364,6 +364,7 @@ export const QueueSchema = z
     debounceMsByChannel: DebounceMsBySurfaceSchema,
     cap: z.number().int().positive().optional(),
     drop: QueueDropSchema.optional(),
+    maxConcurrentPerSession: z.number().int().positive().optional(),
   })
   .strict()
   .optional();
