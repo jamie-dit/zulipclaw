@@ -2,6 +2,7 @@ import { stopBrowserBridgeServer } from "../../browser/bridge-server.js";
 import { defaultRuntime } from "../../runtime.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { dockerContainerState, execDocker } from "./docker.js";
+import { removeNetworkRestrictions } from "./network-restrict.js";
 import {
   readBrowserRegistry,
   readRegistry,
@@ -49,6 +50,8 @@ async function pruneSandboxRegistryEntries<TEntry extends PruneableRegistryEntry
       continue;
     }
     try {
+      // Clean up iptables rules before removing the container (best-effort).
+      await removeNetworkRestrictions(entry.containerName).catch(() => undefined);
       await execDocker(["rm", "-f", entry.containerName], {
         allowFailure: true,
       });

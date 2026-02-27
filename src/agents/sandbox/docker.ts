@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { removeNetworkRestrictions } from "./network-restrict.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
 type ExecDockerRawOptions = {
@@ -432,6 +433,8 @@ export async function ensureSandboxContainer(params: {
           `Sandbox config changed for ${containerName} (recently used). Recreate to apply: ${hint}`,
         );
       } else {
+        // Clean up iptables rules before removing the container (best-effort).
+        await removeNetworkRestrictions(containerName).catch(() => undefined);
         await execDocker(["rm", "-f", containerName], { allowFailure: true });
         hasContainer = false;
         running = false;

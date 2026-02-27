@@ -180,6 +180,23 @@ function buildResearchTaskPrompt(params: {
   ].join("\n");
 }
 
+type WebResearchSandboxConfig = {
+  forceSandbox: boolean;
+  networkRestrictions: boolean;
+  workspaceAccess: "none" | "ro";
+};
+
+function resolveWebResearchSandboxConfig(
+  webResearchConfig?: WebResearchConfig,
+): WebResearchSandboxConfig {
+  const sandbox = webResearchConfig?.sandbox;
+  return {
+    forceSandbox: sandbox?.enabled !== false,
+    networkRestrictions: sandbox?.networkRestrictions !== false,
+    workspaceAccess: sandbox?.workspaceAccess === "none" ? "none" : "ro",
+  };
+}
+
 function resolveWebResearchEnabled(config?: OpenClawConfig): boolean {
   const enabled = resolveWebResearchConfig(config)?.enabled;
   if (typeof enabled === "boolean") {
@@ -233,6 +250,8 @@ export function createWebResearchTool(opts?: {
         webResearchConfig,
       });
 
+      const sandboxConfig = resolveWebResearchSandboxConfig(webResearchConfig);
+
       const taskPrompt = buildResearchTaskPrompt({
         query,
         urls,
@@ -247,6 +266,9 @@ export function createWebResearchTool(opts?: {
           model: depthOptions.model,
           maxIterations: depthOptions.maxIterations,
           expectsCompletionMessage: true,
+          forceSandbox: sandboxConfig.forceSandbox,
+          sandboxWorkspaceAccess: sandboxConfig.workspaceAccess,
+          sandboxNetworkRestrictions: sandboxConfig.networkRestrictions,
         },
         {
           agentSessionKey: opts?.agentSessionKey,
@@ -284,6 +306,7 @@ export const __testing = {
   resolveDepthOptions,
   buildResearchTaskPrompt,
   resolveWebResearchEnabled,
+  resolveWebResearchSandboxConfig,
   WEB_RESEARCH_GROUP_ID,
   WEB_RESEARCH_BROWSER_GROUP_ID,
   QUICK_RESEARCH_MODEL,
