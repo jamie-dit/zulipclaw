@@ -1,5 +1,6 @@
 import type { startGatewayServer } from "../../gateway/server.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import { killStaleGatewayProcesses } from "../../infra/kill-stale-gateways.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
 import {
   consumeGatewaySigusr1RestartAuthorization,
@@ -24,6 +25,15 @@ export async function runGatewayLoop(params: {
   runtime: typeof defaultRuntime;
 }) {
   const lock = await acquireGatewayLock();
+
+  // Kill any stale/orphaned gateway processes before starting.
+  const killResults = await killStaleGatewayProcesses(process.pid);
+  if (killResults.length > 0) {
+    gatewayLog.info(
+      `killed ${killResults.filter((r) => r.killed).length}/${killResults.length} stale gateway process(es)`,
+    );
+  }
+
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;
