@@ -11,7 +11,6 @@ import {
   QueueSchema,
   TtsConfigSchema,
 } from "./zod-schema.core.js";
-import { sensitive } from "./zod-schema.sensitive.js";
 
 const SessionResetConfigSchema = z
   .object({
@@ -140,4 +139,4 @@ export const CommandsSchema = z
   })
   .strict()
   .optional()
-  .default({ native: "auto", nativeSkills: "auto" });
+  .default({ native: "auto", nativeSkills: "auto", ownerDisplay: "raw" });

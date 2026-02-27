@@ -8,7 +8,6 @@ import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import { buildPromptSections, formatPromptSections, type SessionScope } from "./prompt-sections.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
-import { createHmac, createHash } from "node:crypto";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.

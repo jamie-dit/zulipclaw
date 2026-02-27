@@ -88,6 +88,7 @@ export type RunEmbeddedPiAgentParams = {
   onBlockReply?: (payload: {
     text?: string;
     mediaUrls?: string[];
+    isReasoning?: boolean;
     audioAsVoice?: boolean;
     replyToId?: string;
     replyToTag?: boolean;
