@@ -239,4 +239,93 @@ describe("subagent-relay", () => {
       expect(msg).not.toContain("(");
     });
   });
+
+  describe("renderRelayMessage completionText", () => {
+    it("includes completion text in a spoiler block when present", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "web-research",
+        model: "anthropic/claude-sonnet-4-20250514",
+        toolLines: [],
+        startedAt: 1_000,
+        toolCount: 0,
+        status: "ok",
+        lastUpdatedAt: 5_000,
+        completionText: "Found 3 relevant articles about TypeScript patterns.",
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+      expect(msg).toContain("spoiler Output");
+      expect(msg).toContain("Found 3 relevant articles about TypeScript patterns.");
+    });
+
+    it("does not include output spoiler when completionText is absent", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "anthropic/claude-sonnet-4-20250514",
+        toolLines: ["📄 read file.ts +0:01"],
+        startedAt: 1_000,
+        toolCount: 1,
+        status: "ok",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+      expect(msg).not.toContain("spoiler Output");
+    });
+
+    it("truncates long completion text with ellipsis", () => {
+      const longText = "A".repeat(2500);
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "research",
+        model: "anthropic/claude-sonnet-4-20250514",
+        toolLines: [],
+        startedAt: 1_000,
+        toolCount: 0,
+        status: "ok",
+        lastUpdatedAt: 5_000,
+        completionText: longText,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+      expect(msg).toContain("spoiler Output");
+      expect(msg).toContain("_(truncated)_");
+      expect(msg).not.toContain("A".repeat(2500));
+    });
+
+    it("does not include output spoiler when completionText is empty/whitespace", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "anthropic/claude-sonnet-4-20250514",
+        toolLines: [],
+        startedAt: 1_000,
+        toolCount: 0,
+        status: "ok",
+        lastUpdatedAt: 5_000,
+        completionText: "   ",
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+      expect(msg).not.toContain("spoiler Output");
+    });
+
+    it("sanitizes triple backticks in completion text", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "research",
+        model: "anthropic/claude-sonnet-4-20250514",
+        toolLines: [],
+        startedAt: 1_000,
+        toolCount: 0,
+        status: "ok",
+        lastUpdatedAt: 5_000,
+        completionText: "Here is code:\n```python\nprint('hi')\n```\nDone.",
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+      expect(msg).toContain("spoiler Output");
+      expect(msg).toContain("print('hi')");
+      // Triple backticks inside should be broken with zero-width spaces
+      const outputSpoiler = msg.split("spoiler Output")[1];
+      expect(outputSpoiler).not.toContain("```python");
+    });
+  });
 });

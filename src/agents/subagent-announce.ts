@@ -107,6 +107,13 @@ export function buildCompletionDeliveryMessage(params: {
   if (!hasFindings) {
     return sections.join("\n\n");
   }
+  // Show a visible preview so users see key findings without clicking the spoiler.
+  const PREVIEW_MAX_CHARS = 600;
+  const isLong = findingsText.length > PREVIEW_MAX_CHARS;
+  if (isLong) {
+    const preview = findingsText.slice(0, PREVIEW_MAX_CHARS);
+    sections.push(`${preview}\n\n_(truncated - see full output below)_`);
+  }
   const safeFindings = sanitizeForCodeFence(findingsText);
   sections.push(`\`\`\`spoiler Sub-agent output\n${safeFindings}\n\`\`\``);
   return sections.join("\n\n");

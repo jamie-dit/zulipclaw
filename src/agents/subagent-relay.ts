@@ -6,6 +6,7 @@ import { callGateway } from "../gateway/call.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "../plugin-sdk/json-store.js";
 import { defaultRuntime } from "../runtime.js";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
   buildResumptionTask,
   readSessionProgressSummary,
@@ -56,6 +57,8 @@ export type RelayState = {
   toolCount: number;
   status?: "running" | "ok" | "error";
   lastUpdatedAt: number;
+  /** Sub-agent's final text output, populated at completion for the relay card. */
+  completionText?: string;
   /** Watchdog fields */
   watchdogTimer?: NodeJS.Timeout;
   watchdogFollowUpTimer?: NodeJS.Timeout;
@@ -498,6 +501,9 @@ export function extractProfileShortName(profileId: string): string {
   return profileId.slice(colonIdx + 1);
 }
 
+/** Maximum characters of completion text to embed in the relay message. */
+const RELAY_COMPLETION_TEXT_MAX_CHARS = 2000;
+
 export function renderRelayMessage(state: RelayState, originTopic?: string) {
   const callWord = state.toolCount === 1 ? "tool call" : "tool calls";
   const updatedTime = formatRelayUpdatedTime(state.lastUpdatedAt);
@@ -509,7 +515,20 @@ export function renderRelayMessage(state: RelayState, originTopic?: string) {
   const respawnSuffix = state.respawnedAs ? ` · ⚡ re-spawned as \`${state.respawnedAs}\`` : "";
   const header = `${emoji} **\`${state.label}\`** · ${modelShort}${profileSuffix} · ${state.toolCount} ${callWord} · updated ${updatedTime}${watchdogEmoji}${originSuffix}${respawnSuffix}`;
   const sanitizedLines = state.toolLines.map((line) => sanitizeForCodeFence(line));
-  return `${header}\n\n\`\`\`spoiler Tool calls\n${sanitizedLines.join("\n")}\n\`\`\``;
+  const sections = [`${header}\n\n\`\`\`spoiler Tool calls\n${sanitizedLines.join("\n")}\n\`\`\``];
+
+  // Append sub-agent completion output when available (populated at lifecycle end).
+  const completionText = state.completionText?.trim();
+  if (completionText) {
+    const truncated =
+      completionText.length > RELAY_COMPLETION_TEXT_MAX_CHARS
+        ? `${completionText.slice(0, RELAY_COMPLETION_TEXT_MAX_CHARS)}…\n\n_(truncated)_`
+        : completionText;
+    const safeText = sanitizeForCodeFence(truncated);
+    sections.push(`\`\`\`spoiler Output\n${safeText}\n\`\`\``);
+  }
+
+  return sections.join("\n\n");
 }
 
 function parseMessageId(result: unknown): string | undefined {
@@ -1261,6 +1280,80 @@ function handleToolEvent(evt: AgentEventPayload) {
   resetWatchdog(evt.runId, toolName, argsRecord);
 }
 
+/**
+ * Read the latest text output from a sub-agent's chat history.
+ * Scans backwards through messages looking for assistant or tool text.
+ * Best-effort: returns undefined on any failure.
+ */
+async function readCompletionText(sessionKey: string): Promise<string | undefined> {
+  try {
+    const history = await callGateway<{ messages?: Array<unknown> }>({
+      method: "chat.history",
+      params: { sessionKey, limit: 50 },
+      timeoutMs: 5_000,
+    });
+    const messages = Array.isArray(history?.messages) ? history.messages : [];
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const msg = messages[i] as { role?: string; content?: unknown } | undefined;
+      if (!msg || typeof msg !== "object") {
+        continue;
+      }
+      const { role, content } = msg;
+      if (role === "assistant") {
+        if (typeof content === "string" && content.trim()) {
+          return content.trim();
+        }
+        if (Array.isArray(content)) {
+          const text = extractTextFromChatContent(content, {
+            normalizeText: (t) => t.trim(),
+            joinWith: "\n",
+          });
+          if (text?.trim()) {
+            return text.trim();
+          }
+        }
+      }
+      if (role === "toolResult" || role === "tool") {
+        if (typeof content === "string" && content.trim()) {
+          return content.trim();
+        }
+        if (Array.isArray(content)) {
+          const text = extractTextFromChatContent(content, {
+            normalizeText: (t) => t.trim(),
+            joinWith: "\n",
+          });
+          if (text?.trim()) {
+            return text.trim();
+          }
+        }
+      }
+    }
+  } catch {
+    // Best-effort only
+  }
+  return undefined;
+}
+
+/**
+ * Finalize the relay message with completion text from the sub-agent's output.
+ * Reads the child session's history and includes the latest text in the relay
+ * so users can see what the sub-agent produced.
+ */
+async function finalizeRelayWithOutput(runId: string): Promise<void> {
+  const state = relayByRun.get(runId);
+  if (!state) {
+    return;
+  }
+  const registration = registrationsByRun.get(runId);
+  if (registration?.childSessionKey) {
+    const text = await readCompletionText(registration.childSessionKey);
+    if (text) {
+      state.completionText = text;
+    }
+  }
+  await flushRelayMessage(runId, { finalize: true });
+}
+
 function handleLifecycleEvent(evt: AgentEventPayload) {
   const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
   if (phase === "start") {
@@ -1295,7 +1388,9 @@ function handleLifecycleEvent(evt: AgentEventPayload) {
   // Preserve "error" status if already set (e.g. by watchdog detecting a dead agent).
   // A lifecycle "end" event fired after watchdog detection should not overwrite the ❌.
   state.status = failed || state.status === "error" ? "error" : "ok";
-  void flushRelayMessage(evt.runId, { finalize: true });
+  // Read the sub-agent's completion text before finalizing so the relay
+  // message includes the actual output alongside tool call history.
+  void finalizeRelayWithOutput(evt.runId);
 }
 
 export function initSubagentRelay() {
@@ -1339,6 +1434,7 @@ export function registerSubagentRelayRun(params: SubagentRelayRegistration) {
     model: params.model,
     startedAt: params.startedAt,
     deliveryContext: normalizeDeliveryContext(params.deliveryContext),
+    childSessionKey: params.childSessionKey,
   });
 }
 

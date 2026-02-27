@@ -161,4 +161,27 @@ describe("buildCompletionDeliveryMessage", () => {
     );
     expect(findingsSection).not.toMatch(/`{3,}/);
   });
+
+  it("shows visible preview for long findings before the spoiler", () => {
+    const longFindings = "A".repeat(800);
+    const result = buildCompletionDeliveryMessage({
+      findings: longFindings,
+      subagentName: "research-task",
+    });
+    // Should contain a truncated preview before the spoiler
+    expect(result).toContain("A".repeat(600));
+    expect(result).toContain("_(truncated - see full output below)_");
+    // Should also contain the full output in the spoiler
+    expect(result).toContain("```spoiler Sub-agent output");
+  });
+
+  it("does not show preview for short findings", () => {
+    const result = buildCompletionDeliveryMessage({
+      findings: "Short result text.",
+      subagentName: "quick-task",
+    });
+    expect(result).not.toContain("_(truncated");
+    expect(result).toContain("```spoiler Sub-agent output");
+    expect(result).toContain("Short result text.");
+  });
 });
