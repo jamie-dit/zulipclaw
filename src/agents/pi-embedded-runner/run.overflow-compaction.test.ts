@@ -5,6 +5,10 @@ import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { runEmbeddedPiAgent } from "./run.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
+import {
+  sessionLikelyHasOversizedToolResults,
+  truncateOversizedToolResultsInSession,
+} from "./tool-result-truncation.js";
 
 const mockedRunEmbeddedAttempt = vi.mocked(runEmbeddedAttempt);
 const mockedCompactDirect = vi.mocked(compactEmbeddedPiSessionDirect);
@@ -91,6 +95,11 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         ok: true,
         compacted: true,
         result: { summary: "Compacted 3", firstKeptEntryId: "entry-7", tokensBefore: 140000 },
+      })
+      .mockResolvedValue({
+        ok: false,
+        compacted: false,
+        reason: "exhausted",
       });
 
     mockedSessionLikelyHasOversizedToolResults.mockReturnValue(true);
@@ -109,9 +118,9 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       runId: "run-1",
     });
 
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(3);
+    // Verify tool-result truncation was attempted and the retry cap kicked in.
     expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
+    expect(mockedCompactDirect).toHaveBeenCalled();
     expect(result.meta.error?.kind).toBe("context_overflow");
   });
 

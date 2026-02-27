@@ -36,6 +36,17 @@ function makeSnapshot<TConfig extends Record<string, unknown>>(
   } as unknown as TestSnapshot<TConfig>;
 }
 
+function expectGatewayAuthFieldValue(
+  result: ReturnType<typeof redactConfigSnapshot>,
+  field: "token" | "password",
+  expected: string,
+): void {
+  const gateway = result.config.gateway as Record<string, Record<string, string>>;
+  const resolved = result.resolved as Record<string, Record<string, Record<string, string>>>;
+  expect(gateway.auth[field]).toBe(expected);
+  expect(resolved.gateway.auth[field]).toBe(expected);
+}
+
 function restoreRedactedValues<TOriginal>(
   incoming: unknown,
   original: TOriginal,
