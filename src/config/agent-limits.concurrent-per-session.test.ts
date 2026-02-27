@@ -6,19 +6,19 @@ import {
 import type { OpenClawConfig } from "./types.js";
 
 describe("resolveMaxConcurrentPerSession", () => {
-  it("returns default (1) when no config", () => {
+  it("returns default (2) when no config", () => {
     expect(resolveMaxConcurrentPerSession()).toBe(DEFAULT_MAX_CONCURRENT_PER_SESSION);
-    expect(resolveMaxConcurrentPerSession(undefined)).toBe(1);
+    expect(resolveMaxConcurrentPerSession(undefined)).toBe(2);
   });
 
   it("returns default when messages.queue not set", () => {
     const cfg = {} as OpenClawConfig;
-    expect(resolveMaxConcurrentPerSession(cfg)).toBe(1);
+    expect(resolveMaxConcurrentPerSession(cfg)).toBe(2);
   });
 
   it("returns default when maxConcurrentPerSession not set", () => {
     const cfg = { messages: { queue: { mode: "followup" } } } as OpenClawConfig;
-    expect(resolveMaxConcurrentPerSession(cfg)).toBe(1);
+    expect(resolveMaxConcurrentPerSession(cfg)).toBe(2);
   });
 
   it("returns configured value", () => {
@@ -51,11 +51,11 @@ describe("resolveMaxConcurrentPerSession", () => {
     const cfgNan = {
       messages: { queue: { maxConcurrentPerSession: NaN } },
     } as OpenClawConfig;
-    expect(resolveMaxConcurrentPerSession(cfgNan)).toBe(1);
+    expect(resolveMaxConcurrentPerSession(cfgNan)).toBe(2);
 
     const cfgInf = {
       messages: { queue: { maxConcurrentPerSession: Infinity } },
     } as OpenClawConfig;
-    expect(resolveMaxConcurrentPerSession(cfgInf)).toBe(1);
+    expect(resolveMaxConcurrentPerSession(cfgInf)).toBe(2);
   });
 });

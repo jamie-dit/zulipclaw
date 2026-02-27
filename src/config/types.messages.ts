@@ -22,7 +22,7 @@ export type QueueConfig = {
    * Max concurrent followup runs per session.
    * When >1, independent followup messages in the same session can execute
    * in parallel (each getting their own reply with full tool access).
-   * Default: 1 (sequential, backward-compatible).
+   * Default: 2 (allows one parallel followup). Set to 1 for sequential.
    */
   maxConcurrentPerSession?: number;
 };

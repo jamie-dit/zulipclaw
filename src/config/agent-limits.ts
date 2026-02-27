@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "./types.js";
 
 export const DEFAULT_AGENT_MAX_CONCURRENT = 4;
 export const DEFAULT_SUBAGENT_MAX_CONCURRENT = 8;
-export const DEFAULT_MAX_CONCURRENT_PER_SESSION = 1;
+export const DEFAULT_MAX_CONCURRENT_PER_SESSION = 2;
 
 export function resolveAgentMaxConcurrent(cfg?: OpenClawConfig): number {
   const raw = cfg?.agents?.defaults?.maxConcurrent;
