@@ -265,6 +265,50 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.claudeCliSessionId).toBeUndefined();
   });
 
+  it("preserves sandbox override fields when writing subagent session metadata", async () => {
+    const subagentKey = "agent:main:subagent:test-child";
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "existing-subagent-session-id",
+        updatedAt: Date.now(),
+        forceSandbox: true,
+        sandboxWorkspaceAccess: "ro",
+        sandboxNetworkRestrictions: true,
+      },
+      canonicalKey: subagentKey,
+    });
+
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {};
+      await updater(store);
+      capturedEntry = store[subagentKey] as Record<string, unknown>;
+    });
+
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "test",
+        agentId: "main",
+        sessionKey: subagentKey,
+        idempotencyKey: "test-idem-subagent-sandbox-overrides",
+      },
+      { reqId: "subagent-sandbox-overrides" },
+    );
+
+    expect(mocks.updateSessionStore).toHaveBeenCalled();
+    expect(capturedEntry).toBeDefined();
+    expect(capturedEntry?.forceSandbox).toBe(true);
+    expect(capturedEntry?.sandboxWorkspaceAccess).toBe("ro");
+    expect(capturedEntry?.sandboxNetworkRestrictions).toBe(true);
+  });
+
   it("prunes legacy main alias keys when writing a canonical session entry", async () => {
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {
