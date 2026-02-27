@@ -18,6 +18,7 @@ vi.mock("../channels/plugins/message-actions.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   loadConfig: vi.fn(() => ({})),
+  STATE_DIR: os.tmpdir(),
 }));
 
 vi.mock("../gateway/call.js", () => ({
