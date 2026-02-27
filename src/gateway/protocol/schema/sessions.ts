@@ -81,6 +81,11 @@ export const SessionsPatchParamsSchema = Type.Object(
     groupActivation: Type.Optional(
       Type.Union([Type.Literal("mention"), Type.Literal("always"), Type.Null()]),
     ),
+    forceSandbox: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+    sandboxWorkspaceAccess: Type.Optional(
+      Type.Union([Type.Literal("none"), Type.Literal("ro"), Type.Literal("rw"), Type.Null()]),
+    ),
+    sandboxNetworkRestrictions: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
   },
   { additionalProperties: false },
 );

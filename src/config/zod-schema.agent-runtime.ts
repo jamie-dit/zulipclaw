@@ -287,6 +287,14 @@ export const ToolsWebResearchSchema = z
       })
       .strict()
       .optional(),
+    sandbox: z
+      .object({
+        enabled: z.boolean().optional(),
+        networkRestrictions: z.boolean().optional(),
+        workspaceAccess: z.enum(["none", "ro"]).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

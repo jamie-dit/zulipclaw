@@ -27,6 +27,12 @@ export type SpawnSubagentParams = {
   maxIterations?: number;
   cleanup?: "delete" | "keep";
   expectsCompletionMessage?: boolean;
+  /** Force Docker sandbox for the spawned session regardless of global sandbox.mode. */
+  forceSandbox?: boolean;
+  /** Override workspace access mode for the sandboxed session. */
+  sandboxWorkspaceAccess?: "none" | "ro" | "rw";
+  /** Apply network restrictions (block private IPs) in the sandbox container. */
+  sandboxNetworkRestrictions?: boolean;
 };
 
 export type SpawnSubagentContext = {
@@ -312,6 +318,11 @@ export async function spawnSubagentDirect(
         key: childSessionKey,
         spawnDepth: childDepth,
         ...(maxIterations !== undefined ? { maxIterations } : {}),
+        ...(params.forceSandbox === true ? { forceSandbox: true } : {}),
+        ...(params.sandboxWorkspaceAccess
+          ? { sandboxWorkspaceAccess: params.sandboxWorkspaceAccess }
+          : {}),
+        ...(params.sandboxNetworkRestrictions === true ? { sandboxNetworkRestrictions: true } : {}),
       },
       timeoutMs: 10_000,
     });

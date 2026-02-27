@@ -45,6 +45,8 @@ function resolveComparableSessionKeyForSandbox(params: {
 export function resolveSandboxRuntimeStatus(params: {
   cfg?: OpenClawConfig;
   sessionKey?: string;
+  /** When true, force sandbox regardless of global sandbox.mode setting. */
+  forceSandbox?: boolean;
 }): {
   agentId: string;
   sessionKey: string;
@@ -61,13 +63,16 @@ export function resolveSandboxRuntimeStatus(params: {
   const cfg = params.cfg;
   const sandboxCfg = resolveSandboxConfigForAgent(cfg, agentId);
   const mainSessionKey = resolveMainSessionKeyForSandbox({ cfg, agentId });
-  const sandboxed = sessionKey
-    ? shouldSandboxSession(
-        sandboxCfg,
-        resolveComparableSessionKeyForSandbox({ cfg, agentId, sessionKey }),
-        mainSessionKey,
-      )
-    : false;
+  const sandboxed =
+    params.forceSandbox === true
+      ? true
+      : sessionKey
+        ? shouldSandboxSession(
+            sandboxCfg,
+            resolveComparableSessionKeyForSandbox({ cfg, agentId, sessionKey }),
+            mainSessionKey,
+          )
+        : false;
   return {
     agentId,
     sessionKey,

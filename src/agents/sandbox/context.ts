@@ -3,6 +3,8 @@ import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../browser/constants.js";
 import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "../../browser/control-auth.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { loadSessionEntry } from "../../gateway/session-utils.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
 import { syncSkillsToWorkspace } from "../skills.js";
@@ -11,6 +13,7 @@ import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { ensureSandboxContainer } from "./docker.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
+import { applyNetworkRestrictions } from "./network-restrict.js";
 import { maybePruneSandboxes } from "./prune.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
@@ -64,22 +67,56 @@ async function ensureSandboxWorkspaceLayout(params: {
   return { agentWorkspaceDir, scopeKey, sandboxWorkspaceDir, workspaceDir };
 }
 
+/**
+ * Load the session entry for sandbox override checks.
+ * Returns undefined if the session store cannot be loaded (e.g., during tests).
+ */
+function loadSessionEntryForSandbox(sessionKey: string): SessionEntry | undefined {
+  try {
+    const { entry } = loadSessionEntry(sessionKey);
+    return entry;
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: string }) {
   const rawSessionKey = params.sessionKey?.trim();
   if (!rawSessionKey) {
     return null;
   }
 
+  const sessionEntry = loadSessionEntryForSandbox(rawSessionKey);
+  const forceSandbox = sessionEntry?.forceSandbox === true;
+
   const runtime = resolveSandboxRuntimeStatus({
     cfg: params.config,
     sessionKey: rawSessionKey,
+    forceSandbox,
   });
   if (!runtime.sandboxed) {
     return null;
   }
 
   const cfg = resolveSandboxConfigForAgent(params.config, runtime.agentId);
-  return { rawSessionKey, runtime, cfg };
+
+  // Apply per-session sandbox overrides from the session entry.
+  if (sessionEntry?.sandboxWorkspaceAccess) {
+    cfg.workspaceAccess = sessionEntry.sandboxWorkspaceAccess;
+  }
+
+  // When network restrictions are requested, switch from "none" to "bridge"
+  // and configure public DNS so outbound internet access works.
+  if (sessionEntry?.sandboxNetworkRestrictions) {
+    if (cfg.docker.network === "none") {
+      cfg.docker = { ...cfg.docker, network: "bridge" };
+    }
+    if (!cfg.docker.dns?.length) {
+      cfg.docker = { ...cfg.docker, dns: ["8.8.8.8", "1.1.1.1"] };
+    }
+  }
+
+  return { rawSessionKey, runtime, cfg, sessionEntry };
 }
 
 export async function resolveSandboxContext(params: {
@@ -91,7 +128,7 @@ export async function resolveSandboxContext(params: {
   if (!resolved) {
     return null;
   }
-  const { rawSessionKey, cfg } = resolved;
+  const { rawSessionKey, cfg, sessionEntry } = resolved;
 
   await maybePruneSandboxes(cfg);
 
@@ -108,6 +145,16 @@ export async function resolveSandboxContext(params: {
     agentWorkspaceDir,
     cfg,
   });
+
+  // Apply network restrictions (block private IPs) when requested.
+  if (sessionEntry?.sandboxNetworkRestrictions) {
+    try {
+      await applyNetworkRestrictions(containerName);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : JSON.stringify(error);
+      defaultRuntime.error?.(`Sandbox network restriction failed for ${containerName}: ${message}`);
+    }
+  }
 
   const evaluateEnabled =
     params.config?.browser?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;

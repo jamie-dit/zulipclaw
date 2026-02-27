@@ -505,6 +505,15 @@ export type ToolsConfig = {
       standard?: number;
       deep?: number;
     };
+    /** Docker sandbox isolation for web_research sub-agents. */
+    sandbox?: {
+      /** Force Docker sandbox for web_research sub-agents (default: true). */
+      enabled?: boolean;
+      /** Block access to private/reserved IP ranges from the sandbox container (default: true). */
+      networkRestrictions?: boolean;
+      /** Workspace access mode for the sandbox (default: "ro"). */
+      workspaceAccess?: "none" | "ro";
+    };
   };
   media?: MediaToolsConfig;
   links?: LinkToolsConfig;

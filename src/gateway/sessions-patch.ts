@@ -381,6 +381,46 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  if ("forceSandbox" in patch) {
+    const raw = patch.forceSandbox;
+    if (raw === null) {
+      delete next.forceSandbox;
+    } else if (raw !== undefined) {
+      if (typeof raw !== "boolean") {
+        return invalid("invalid forceSandbox (use true or false)");
+      }
+      if (!isSubagentSessionKey(storeKey)) {
+        return invalid("forceSandbox is only supported for subagent:* sessions");
+      }
+      next.forceSandbox = raw;
+    }
+  }
+
+  if ("sandboxWorkspaceAccess" in patch) {
+    const raw = patch.sandboxWorkspaceAccess;
+    if (raw === null) {
+      delete next.sandboxWorkspaceAccess;
+    } else if (raw !== undefined) {
+      const trimmed = String(raw).trim().toLowerCase();
+      if (trimmed !== "none" && trimmed !== "ro" && trimmed !== "rw") {
+        return invalid('invalid sandboxWorkspaceAccess (use "none"|"ro"|"rw")');
+      }
+      next.sandboxWorkspaceAccess = trimmed;
+    }
+  }
+
+  if ("sandboxNetworkRestrictions" in patch) {
+    const raw = patch.sandboxNetworkRestrictions;
+    if (raw === null) {
+      delete next.sandboxNetworkRestrictions;
+    } else if (raw !== undefined) {
+      if (typeof raw !== "boolean") {
+        return invalid("invalid sandboxNetworkRestrictions (use true or false)");
+      }
+      next.sandboxNetworkRestrictions = raw;
+    }
+  }
+
   store[storeKey] = next;
   return { ok: true, entry: next };
 }

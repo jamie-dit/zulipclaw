@@ -60,6 +60,12 @@ export type SessionEntry = {
   groupActivation?: "mention" | "always";
   groupActivationNeedsSystemIntro?: boolean;
   sendPolicy?: "allow" | "deny";
+  /** Force Docker sandbox for this session regardless of global sandbox.mode. */
+  forceSandbox?: boolean;
+  /** Override sandbox workspace access for this session. */
+  sandboxWorkspaceAccess?: "none" | "ro" | "rw";
+  /** Apply network restrictions (block private IPs) in the sandbox container. */
+  sandboxNetworkRestrictions?: boolean;
   queueMode?:
     | "steer"
     | "followup"
