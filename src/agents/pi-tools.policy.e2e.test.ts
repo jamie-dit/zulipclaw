@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   filterToolsByPolicy,
   isToolAllowedByPolicyName,
+  resolveGroupToolPolicy,
   resolveSubagentToolPolicy,
 } from "./pi-tools.policy.js";
 
@@ -128,5 +129,44 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     const policy = resolveSubagentToolPolicy(leafCfg);
     // Default depth=1, maxSpawnDepth=1 → leaf
     expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
+  });
+});
+
+describe("internal web_research group policy", () => {
+  const cfg = {} as OpenClawConfig;
+
+  it("restricts non-browser web researcher to web+read+image and explicit denylist", () => {
+    const policy = resolveGroupToolPolicy({
+      config: cfg,
+      groupId: "__openclaw_web_research__",
+    });
+
+    expect(policy).toBeDefined();
+    expect(isToolAllowedByPolicyName("web_search", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("web_fetch", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("read", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("image", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("browser", policy)).toBe(false);
+
+    expect(isToolAllowedByPolicyName("exec", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("process", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("message", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("write", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("edit", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("apply_patch", policy)).toBe(false);
+  });
+
+  it("allows browser in browser-enabled web researcher profile", () => {
+    const policy = resolveGroupToolPolicy({
+      config: cfg,
+      groupId: "__openclaw_web_research_browser__",
+    });
+
+    expect(policy).toBeDefined();
+    expect(isToolAllowedByPolicyName("browser", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("web_search", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("exec", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("message", policy)).toBe(false);
   });
 });

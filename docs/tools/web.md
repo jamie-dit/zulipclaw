@@ -1,5 +1,5 @@
 ---
-summary: "Web search + fetch tools (Brave Search API, Perplexity direct/OpenRouter)"
+summary: "Web research/search/fetch tools (isolated web_research, Brave Search API, Perplexity direct/OpenRouter)"
 read_when:
   - You want to enable web_search or web_fetch
   - You need Brave Search API key setup
@@ -9,16 +9,20 @@ title: "Web Tools"
 
 # Web tools
 
-OpenClaw ships two lightweight web tools:
+OpenClaw ships three web tools:
 
+- `web_research` — Spawns an isolated researcher sub-agent with restricted tools (`web_search`, `web_fetch`, optional `browser`, `read`, `image`) and returns a summarized result.
 - `web_search` — Search the web via Brave Search API (default) or Perplexity Sonar (direct or via OpenRouter).
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
-These are **not** browser automation. For JS-heavy sites or logins, use the
-[Browser tool](/tools/browser).
+For JS-heavy sites or logins, use `web_research` with `depth: "deep"` (browser-enabled) or call the [Browser tool](/tools/browser) directly.
 
 ## How it works
 
+- `web_research` creates a sandboxed sub-agent with explicit tool restrictions.
+  - Non-browser mode allowlist: `web_search`, `web_fetch`, `read`, `image`.
+  - Browser mode adds `browser` and still denies runtime/messaging/edit tools.
+  - The researcher is instructed to treat web content as untrusted and report injection attempts.
 - `web_search` calls your configured provider and returns results.
   - **Brave** (default): returns structured results (title, URL, snippet).
   - **Perplexity**: returns AI-synthesized answers with citations from real-time web search.
@@ -138,6 +142,41 @@ If no base URL is set, OpenClaw chooses a default based on the API key source:
 | `perplexity/sonar`               | Fast Q&A with web search             | Quick lookups     |
 | `perplexity/sonar-pro` (default) | Multi-step reasoning with web search | Complex questions |
 | `perplexity/sonar-reasoning-pro` | Chain-of-thought analysis            | Deep research     |
+
+## web_research
+
+Spawn a dedicated web researcher sub-agent for multi-step research.
+
+### web_research config
+
+```json5
+{
+  tools: {
+    webResearch: {
+      enabled: true,
+      defaultDepth: "standard", // quick | standard | deep
+      defaultModel: "anthropic/claude-sonnet-4-5",
+      quickModel: "anthropic/claude-haiku-3-5",
+      maxIterations: {
+        quick: 5,
+        standard: 10,
+        deep: 25,
+      },
+    },
+  },
+}
+```
+
+### web_research parameters
+
+- `query` (required)
+- `urls` (optional)
+- `task` (optional)
+- `depth` (`quick` | `standard` | `deep`, defaults to `tools.webResearch.defaultDepth`)
+- `browser` (optional boolean override)
+- `model` (optional per-call override)
+
+Use `depth: "deep"` when browser automation is likely needed.
 
 ## web_search
 
