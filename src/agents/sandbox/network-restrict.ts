@@ -1,5 +1,4 @@
-import { execDocker } from "./docker.js";
-import { execIptables } from "./network-restrict-exec.js";
+import { execIptables, execShellCommand } from "./network-restrict-exec.js";
 
 /**
  * Private/reserved IP ranges to block from sandbox containers.
@@ -15,12 +14,16 @@ const BLOCKED_RANGES = [
 
 /**
  * Resolve the container's IP address on its primary network.
+ * Uses `docker inspect` directly (via execShellCommand) to avoid circular
+ * imports with docker.ts which imports this module for cleanup.
  */
 async function getContainerIp(containerName: string): Promise<string | null> {
-  const result = await execDocker(
-    ["inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", containerName],
-    { allowFailure: true },
-  );
+  const result = await execShellCommand("docker", [
+    "inspect",
+    "-f",
+    "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+    containerName,
+  ]);
   if (result.code !== 0) {
     return null;
   }

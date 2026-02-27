@@ -1,18 +1,17 @@
 import { spawn } from "node:child_process";
 
-export type IptablesResult = {
+export type ShellCommandResult = {
   code: number;
   stdout: string;
   stderr: string;
 };
 
 /**
- * Execute an iptables command on the host.
- * Always allows failure (returns exit code) so callers can check rule existence.
+ * Execute a shell command. Returns exit code and output; never rejects on non-zero exit.
  */
-export function execIptables(args: string[]): Promise<IptablesResult> {
-  return new Promise<IptablesResult>((resolve, reject) => {
-    const child = spawn("iptables", args, { stdio: ["pipe", "pipe", "pipe"] });
+export function execShellCommand(command: string, args: string[]): Promise<ShellCommandResult> {
+  return new Promise<ShellCommandResult>((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
 
@@ -30,4 +29,12 @@ export function execIptables(args: string[]): Promise<IptablesResult> {
 
     child.stdin?.end();
   });
+}
+
+/**
+ * Execute an iptables command on the host.
+ * Always allows failure (returns exit code) so callers can check rule existence.
+ */
+export function execIptables(args: string[]): Promise<ShellCommandResult> {
+  return execShellCommand("iptables", args);
 }

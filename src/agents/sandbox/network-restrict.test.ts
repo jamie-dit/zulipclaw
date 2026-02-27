@@ -1,27 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./docker.js", () => ({
-  execDocker: vi.fn(),
-}));
-
 vi.mock("./network-restrict-exec.js", () => ({
   execIptables: vi.fn(),
+  execShellCommand: vi.fn(),
 }));
 
-import { execDocker } from "./docker.js";
-import { execIptables } from "./network-restrict-exec.js";
+import { execIptables, execShellCommand } from "./network-restrict-exec.js";
 import {
   __testing,
   applyNetworkRestrictions,
   removeNetworkRestrictions,
 } from "./network-restrict.js";
 
-const mockExecDocker = vi.mocked(execDocker);
+const mockExecShellCommand = vi.mocked(execShellCommand);
 const mockExecIptables = vi.mocked(execIptables);
 
 describe("network-restrict", () => {
   beforeEach(() => {
-    mockExecDocker.mockReset();
+    mockExecShellCommand.mockReset();
     mockExecIptables.mockReset();
   });
 
@@ -38,7 +34,7 @@ describe("network-restrict", () => {
 
   describe("applyNetworkRestrictions", () => {
     it("adds iptables rules for each blocked range", async () => {
-      mockExecDocker.mockResolvedValue({ stdout: "172.17.0.5", stderr: "", code: 0 });
+      mockExecShellCommand.mockResolvedValue({ stdout: "172.17.0.5", stderr: "", code: 0 });
       // -C (check) returns non-zero = rule doesn't exist
       mockExecIptables.mockImplementation(async (args: string[]) => {
         if (args[0] === "-C") {
@@ -50,9 +46,9 @@ describe("network-restrict", () => {
       await applyNetworkRestrictions("test-container");
 
       // Should call docker inspect for IP
-      expect(mockExecDocker).toHaveBeenCalledWith(
+      expect(mockExecShellCommand).toHaveBeenCalledWith(
+        "docker",
         expect.arrayContaining(["inspect", "-f", expect.any(String), "test-container"]),
-        { allowFailure: true },
       );
 
       // Should have checked and inserted a rule for each blocked range
@@ -68,7 +64,7 @@ describe("network-restrict", () => {
     });
 
     it("skips rule insertion when rule already exists", async () => {
-      mockExecDocker.mockResolvedValue({ stdout: "172.17.0.5", stderr: "", code: 0 });
+      mockExecShellCommand.mockResolvedValue({ stdout: "172.17.0.5", stderr: "", code: 0 });
       // -C returns 0 = rule already exists
       mockExecIptables.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
 
@@ -79,7 +75,7 @@ describe("network-restrict", () => {
     });
 
     it("throws when container IP cannot be resolved", async () => {
-      mockExecDocker.mockResolvedValue({ stdout: "", stderr: "no such container", code: 1 });
+      mockExecShellCommand.mockResolvedValue({ stdout: "", stderr: "no such container", code: 1 });
 
       await expect(applyNetworkRestrictions("missing-container")).rejects.toThrow(
         "Cannot resolve IP",
@@ -89,7 +85,7 @@ describe("network-restrict", () => {
 
   describe("removeNetworkRestrictions", () => {
     it("removes existing iptables rules", async () => {
-      mockExecDocker.mockResolvedValue({ stdout: "172.17.0.5", stderr: "", code: 0 });
+      mockExecShellCommand.mockResolvedValue({ stdout: "172.17.0.5", stderr: "", code: 0 });
       // -C returns 0 = rule exists
       mockExecIptables.mockImplementation(async (args: string[]) => {
         if (args[0] === "-C") {
@@ -105,7 +101,7 @@ describe("network-restrict", () => {
     });
 
     it("does nothing when container has no IP", async () => {
-      mockExecDocker.mockResolvedValue({ stdout: "", stderr: "", code: 1 });
+      mockExecShellCommand.mockResolvedValue({ stdout: "", stderr: "", code: 1 });
 
       await removeNetworkRestrictions("missing-container");
 
