@@ -490,6 +490,22 @@ export type ToolsConfig = {
       };
     };
   };
+  webResearch?: {
+    /** Enable web_research tool (default: true). */
+    enabled?: boolean;
+    /** Default research depth when the tool call omits depth (default: standard). */
+    defaultDepth?: "quick" | "standard" | "deep";
+    /** Default model for standard/deep research when model is omitted. */
+    defaultModel?: string;
+    /** Default model for quick research (defaults to anthropic/claude-haiku-3-5). */
+    quickModel?: string;
+    /** Per-depth max iteration overrides. */
+    maxIterations?: {
+      quick?: number;
+      standard?: number;
+      deep?: number;
+    };
+  };
   media?: MediaToolsConfig;
   links?: LinkToolsConfig;
   /** Message tool configuration. */

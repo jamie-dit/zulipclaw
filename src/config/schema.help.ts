@@ -145,6 +145,19 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.firecrawl.maxAgeMs":
     "Firecrawl maxAge (ms) for cached results when supported by the API.",
   "tools.web.fetch.firecrawl.timeoutSeconds": "Timeout in seconds for Firecrawl requests.",
+  "tools.webResearch.enabled": "Enable the web_research tool (default: true).",
+  "tools.webResearch.defaultDepth":
+    'Default depth for web_research when omitted ("quick", "standard", or "deep").',
+  "tools.webResearch.defaultModel":
+    "Default model used by web_research for standard/deep runs when model is omitted.",
+  "tools.webResearch.quickModel":
+    "Default model used by web_research quick runs (default: anthropic/claude-haiku-3-5).",
+  "tools.webResearch.maxIterations.quick":
+    "Override maxIterations for web_research quick depth (default: 5).",
+  "tools.webResearch.maxIterations.standard":
+    "Override maxIterations for web_research standard depth (default: 10).",
+  "tools.webResearch.maxIterations.deep":
+    "Override maxIterations for web_research deep depth (default: 25).",
   "channels.slack.allowBots":
     "Allow bot-authored messages to trigger Slack replies (default: false).",
   "channels.slack.thread.historyScope":

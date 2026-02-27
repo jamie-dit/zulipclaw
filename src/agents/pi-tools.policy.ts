@@ -13,6 +13,21 @@ import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
 const INTERNAL_WEB_RESEARCH_GROUP_ID = "__openclaw_web_research__";
 const INTERNAL_WEB_RESEARCH_BROWSER_GROUP_ID = "__openclaw_web_research_browser__";
 
+const INTERNAL_WEB_RESEARCH_DENY = [
+  "message",
+  "cron",
+  "gateway",
+  "nodes",
+  "canvas",
+  "exec",
+  "process",
+  "sessions_spawn",
+  "sessions_send",
+  "write",
+  "edit",
+  "apply_patch",
+] as const;
+
 function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
   const deny = compileGlobPatterns({
     raw: expandToolGroups(policy.deny ?? []),
@@ -153,11 +168,13 @@ function resolveInternalGroupToolPolicy(groupId?: string): SandboxToolPolicy | u
   if (normalized === INTERNAL_WEB_RESEARCH_GROUP_ID) {
     return {
       allow: ["web_search", "web_fetch", "read", "image"],
+      deny: [...INTERNAL_WEB_RESEARCH_DENY],
     };
   }
   if (normalized === INTERNAL_WEB_RESEARCH_BROWSER_GROUP_ID) {
     return {
       allow: ["group:web-research"],
+      deny: [...INTERNAL_WEB_RESEARCH_DENY],
     };
   }
   return undefined;

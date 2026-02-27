@@ -273,6 +273,24 @@ export const ToolsWebSchema = z
   .strict()
   .optional();
 
+export const ToolsWebResearchSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    defaultDepth: z.enum(["quick", "standard", "deep"]).optional(),
+    defaultModel: z.string().optional(),
+    quickModel: z.string().optional(),
+    maxIterations: z
+      .object({
+        quick: z.number().int().positive().optional(),
+        standard: z.number().int().positive().optional(),
+        deep: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 export const ToolProfileSchema = z
   .union([z.literal("minimal"), z.literal("coding"), z.literal("messaging"), z.literal("full")])
   .optional();
@@ -651,6 +669,7 @@ export const ToolsSchema = z
     deny: z.array(z.string()).optional(),
     byProvider: z.record(z.string(), ToolPolicyWithProfileSchema).optional(),
     web: ToolsWebSchema,
+    webResearch: ToolsWebResearchSchema,
     media: ToolsMediaSchema,
     links: ToolsLinksSchema,
     sessions: z
