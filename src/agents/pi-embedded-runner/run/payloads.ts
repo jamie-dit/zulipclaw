@@ -91,6 +91,7 @@ export function buildEmbeddedRunPayloads(params: {
     text: string;
     media?: string[];
     isError?: boolean;
+    isReasoning?: boolean;
     audioAsVoice?: boolean;
     replyToId?: string;
     replyToTag?: boolean;
@@ -161,7 +162,7 @@ export function buildEmbeddedRunPayloads(params: {
       ? formatReasoningMessage(extractAssistantThinking(params.lastAssistant))
       : "";
   if (reasoningText) {
-    replyItems.push({ text: reasoningText });
+    replyItems.push({ text: reasoningText, isReasoning: true });
   }
 
   const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";

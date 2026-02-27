@@ -135,6 +135,26 @@ describe("config cli", () => {
     });
   });
 
+  describe("config get", () => {
+    it("redacts sensitive values", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: {
+          auth: {
+            token: "super-secret-token",
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "get", "gateway.auth.token"]);
+
+      expect(mockLog).toHaveBeenCalledWith("__OPENCLAW_REDACTED__");
+    });
+  });
+
+  // Note: upstream "config set parsing flags" tests (--strict-json) omitted
+  // because ZulipClaw has not cherry-picked the --strict-json implementation.
+
   describe("config unset - issue #6070", () => {
     it("preserves existing config keys when unsetting a value", async () => {
       const resolved: OpenClawConfig = {
