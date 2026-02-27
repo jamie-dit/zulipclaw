@@ -3,6 +3,7 @@ import { loadConfig } from "../../config/config.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { dockerContainerState, execDocker } from "./docker.js";
+import { removeNetworkRestrictions } from "./network-restrict.js";
 import {
   readBrowserRegistry,
   readRegistry,
@@ -81,6 +82,8 @@ export async function listSandboxBrowsers(): Promise<SandboxBrowserInfo[]> {
 
 export async function removeSandboxContainer(containerName: string): Promise<void> {
   try {
+    // Clean up iptables rules before removing the container (best-effort).
+    await removeNetworkRestrictions(containerName).catch(() => undefined);
     await execDocker(["rm", "-f", containerName], { allowFailure: true });
   } catch {
     // ignore removal failures
