@@ -472,6 +472,25 @@ function sanitizeForCodeFence(text: string): string {
   return text.replace(/`{3,}/g, (match) => match.split("").join("\u200B"));
 }
 
+/**
+ * Truncate text at a markdown-safe boundary (prefer line breaks, close open code fences).
+ */
+function truncateMarkdownSafe(text: string, maxChars: number): string {
+  if (text.length <= maxChars) {
+    return text;
+  }
+  const slice = text.slice(0, maxChars);
+  const lastNewline = slice.lastIndexOf("\n");
+  const breakpoint = lastNewline > maxChars * 0.3 ? lastNewline : maxChars;
+  let preview = text.slice(0, breakpoint);
+  // Close any unclosed code fences (odd count of triple-backtick sequences).
+  const fenceCount = (preview.match(/`{3,}/g) || []).length;
+  if (fenceCount % 2 !== 0) {
+    preview += "\n```";
+  }
+  return preview;
+}
+
 const RELAY_STATUS_EMOJI: Record<string, string> = {
   running: "🔄",
   ok: "✅",
@@ -522,7 +541,7 @@ export function renderRelayMessage(state: RelayState, originTopic?: string) {
   if (completionText) {
     const truncated =
       completionText.length > RELAY_COMPLETION_TEXT_MAX_CHARS
-        ? `${completionText.slice(0, RELAY_COMPLETION_TEXT_MAX_CHARS)}…\n\n_(truncated)_`
+        ? `${truncateMarkdownSafe(completionText, RELAY_COMPLETION_TEXT_MAX_CHARS)}\n\n_(truncated)_`
         : completionText;
     const safeText = sanitizeForCodeFence(truncated);
     sections.push(`\`\`\`spoiler Output\n${safeText}\n\`\`\``);
