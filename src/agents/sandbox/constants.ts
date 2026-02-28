@@ -18,6 +18,12 @@ export const DEFAULT_TOOL_ALLOW = [
   "edit",
   "apply_patch",
   "image",
+  // Gateway-side HTTP tools (Perplexity, Brave Search, direct fetch).
+  // These run entirely in the gateway process and do not interact with
+  // the Docker container's filesystem or network.
+  "web_search",
+  "web_fetch",
+  "web_research",
   "sessions_list",
   "sessions_history",
   "sessions_send",
