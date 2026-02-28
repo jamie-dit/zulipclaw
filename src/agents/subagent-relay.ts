@@ -759,7 +759,8 @@ function renderToolResultText(entry: ToolEntry): string | undefined {
   if (!base) {
     return undefined;
   }
-  return base;
+  // Normalize literal \n and \t escapes to real whitespace (common in JSON-encoded stdout)
+  return base.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
 }
 
 function findLastPendingEntryIndex(entries: ToolEntry[], status?: RelayState["status"]): number {
