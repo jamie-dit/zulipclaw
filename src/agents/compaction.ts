@@ -19,7 +19,7 @@ const PATH_KEY_NAMES = new Set(["path", "file_path", "filepath"]);
 const FILE_PATH_RE =
   /(?:^|[\s"'`([])(\/?(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.[A-Za-z0-9._-]{1,12})(?=$|[\s"'`),\]:;])/g;
 
-type CompactionContextMetadata = {
+export type CompactionMetadata = {
   filesTouched: string[];
   keyDecisions: string[];
   pendingItems: string[];
@@ -132,7 +132,7 @@ function collectTaggedLines(text: string, matcher: RegExp, out: Set<string>) {
   }
 }
 
-function extractCompactionContextMetadata(messages: AgentMessage[]): CompactionContextMetadata {
+export function extractCompactionMetadata(messages: AgentMessage[]): CompactionMetadata {
   const files = new Set<string>();
   const decisions = new Set<string>();
   const pending = new Set<string>();
@@ -147,17 +147,24 @@ function extractCompactionContextMetadata(messages: AgentMessage[]): CompactionC
       collectFilePathsFromText(text, files);
       collectTaggedLines(
         text,
-        /\b(decision|decided|agreed|confirmed|approved|important|remember this|must)\b/i,
+        /\b(decision|decided|agreed|confirmed|approved|go ahead|go-ahead|yes\b|proceed|ship it|remember this|must)\b/i,
         decisions,
       );
+      if (role === "user") {
+        collectTaggedLines(
+          text,
+          /\b(yes|yep|yeah|go ahead|approved|proceed|do it|looks good|sounds good)\b/i,
+          decisions,
+        );
+      }
       collectTaggedLines(
         text,
-        /\b(todo|to do|pending|follow[- ]?up|next step|remaining|need to)\b/i,
+        /\b(todo|to do|pending|follow[- ]?up|next step|remaining|need to|action item|later)\b/i,
         pending,
       );
       collectTaggedLines(
         text,
-        /\b(error|failed|failure|exception|traceback|timed out|timeout|resolved|fixed|workaround|mitigated|retry)\b/i,
+        /\b(error|failed|failure|exception|traceback|timed out|timeout|resolved|fixed|workaround|mitigated|retry|root cause)\b/i,
         errorResolution,
       );
     }
@@ -191,15 +198,16 @@ function renderMetadataList(items: string[]): string {
 
 function buildCompactionInstructions(
   customInstructions: string | undefined,
-  metadata: CompactionContextMetadata,
+  metadata: CompactionMetadata,
 ): string {
   const instructionSections = [
     "Preserve the following with high fidelity:",
     "- User preferences, corrections, and explicit confirmations.",
-    "- System and tool configuration details (provider/model/settings/environment).",
-    "- File paths plus the purpose/context of each file.",
-    "- Any lines marked as important/remember this.",
-    "- Error messages and how they were resolved.",
+    "- Configuration details and system state (provider, model, environment, runtime settings).",
+    "- File paths and each file's purpose in the task.",
+    "- Important decisions plus the rationale behind them.",
+    "- Any 'remember this' markers and non-negotiable constraints.",
+    "- Error messages and how each issue was resolved.",
     "- TODOs, pending work, and next actions.",
   ];
 
@@ -217,30 +225,28 @@ function buildCompactionInstructions(
   return instructionSections.join("\n\n");
 }
 
-function prependCompactionContextSection(
-  summary: string,
-  metadata: CompactionContextMetadata,
-): string {
+function formatMetadataInline(items: string[]): string {
+  if (items.length === 0) {
+    return "none noted";
+  }
+  return items.join(", ");
+}
+
+function prependCompactionContextSection(summary: string, metadata: CompactionMetadata): string {
   const summaryBody = summary.trim() || DEFAULT_SUMMARY_FALLBACK;
-  const section = [
-    "## Context from compacted history",
-    "### Files touched:",
-    renderMetadataList(metadata.filesTouched),
-    "",
-    "### Key decisions:",
-    renderMetadataList(metadata.keyDecisions),
-    "",
-    "### Pending items:",
-    renderMetadataList(metadata.pendingItems),
-    "",
-    "### Errors and resolutions:",
-    renderMetadataList(metadata.errorResolutions),
-    "",
-    "### Conversation summary:",
-    summaryBody,
+  const lines = [
+    "## Compacted Context",
+    `**Files touched:** ${formatMetadataInline(metadata.filesTouched)}`,
+    `**Key decisions:** ${formatMetadataInline(metadata.keyDecisions)}`,
+    `**Pending items:** ${formatMetadataInline(metadata.pendingItems)}`,
   ];
 
-  return section.join("\n");
+  if (metadata.errorResolutions.length > 0) {
+    lines.push(`**Errors/resolutions:** ${formatMetadataInline(metadata.errorResolutions)}`);
+  }
+
+  lines.push("", "**Summary:**", summaryBody);
+  return lines.join("\n");
 }
 
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
@@ -504,7 +510,7 @@ export async function summarizeInStages(params: {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
   }
 
-  const metadata = extractCompactionContextMetadata(messages);
+  const metadata = extractCompactionMetadata(messages);
   const enhancedInstructions = buildCompactionInstructions(params.customInstructions, metadata);
   const minMessagesForSplit = Math.max(2, params.minMessagesForSplit ?? 4);
   const parts = normalizeParts(params.parts ?? DEFAULT_PARTS, messages.length);

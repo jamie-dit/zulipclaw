@@ -7,6 +7,7 @@ import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "../plugin-sdk/json-store.js";
 import { defaultRuntime } from "../runtime.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
+import { lookupContextTokens } from "./context.js";
 import { extractToolResultText } from "./pi-embedded-subscribe.tools.js";
 import {
   buildResumptionTask,
@@ -39,6 +40,8 @@ export type SubagentRelayRegistration = {
   childSessionKey?: string;
   /** True when this sub-agent run is known to execute in the sandbox. */
   sandboxed?: boolean;
+  /** Model context window tokens for this run, when known at registration time. */
+  contextWindowTokens?: number;
 };
 
 export type WatchdogStatus = "active" | "nudged" | "frozen";
@@ -92,6 +95,8 @@ export type RelayState = {
   contextWindowTokens?: number;
   /** Parent runId when nested under another sub-agent relay card. */
   parentRunId?: string;
+  /** Child runIds spawned by this run (sessions_spawn), preserving insertion order. */
+  childRunIds?: string[];
   /** Watchdog fields */
   watchdogTimer?: NodeJS.Timeout;
   watchdogFollowUpTimer?: NodeJS.Timeout;
@@ -378,6 +383,24 @@ function extractThinkingSnippet(raw: string, maxChars = 150): string | undefined
   return truncate(withoutQuote, maxChars);
 }
 
+function extractThinkingSnippetFromEventData(data: Record<string, unknown>): string | undefined {
+  const candidates = [data.delta, data.text, data.content]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .slice(0, 3);
+
+  for (const candidate of candidates) {
+    if (!/^\s*Reasoning:/i.test(candidate)) {
+      continue;
+    }
+    const snippet = extractThinkingSnippet(candidate);
+    if (snippet) {
+      return snippet;
+    }
+  }
+
+  return undefined;
+}
+
 function toFinitePositiveInt(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;
@@ -416,6 +439,19 @@ function parseSpawnResultReference(result: unknown): SpawnResultReference {
     return {};
   }
   const record = result as Record<string, unknown>;
+
+  const topLevelRunId =
+    typeof record.runId === "string" && record.runId.trim() ? record.runId.trim() : undefined;
+  const topLevelChildSessionKey =
+    typeof record.childSessionKey === "string" && record.childSessionKey.trim()
+      ? record.childSessionKey.trim()
+      : undefined;
+  if (topLevelRunId || topLevelChildSessionKey) {
+    return {
+      runId: topLevelRunId,
+      childSessionKey: topLevelChildSessionKey,
+    };
+  }
 
   const details =
     record.details && typeof record.details === "object"
@@ -1226,7 +1262,8 @@ async function flushRelayMessage(runId: string, options?: { finalize?: boolean }
 
   const parentRunId = parentRunByChildRun.get(runId) ?? state.parentRunId;
   const parentState = parentRunId ? relayByRun.get(parentRunId) : undefined;
-  const renderInlineOnly = Boolean(parentState);
+  const renderInlineOnly =
+    Boolean(parentState) && state.status === "running" && Boolean(state.messageId);
 
   if (!renderInlineOnly) {
     const message = renderRelayMessage(state, undefined, {
@@ -1332,6 +1369,10 @@ function getOrCreateRelayState(runId: string): RelayState | undefined {
       : Date.now();
   const parentRunId =
     registration.parentRunId?.trim() || parentRunByChildRun.get(runId) || undefined;
+  const registrationContextWindow = toFinitePositiveInt(registration.contextWindowTokens);
+  const inferredContextWindow =
+    registrationContextWindow ??
+    toFinitePositiveInt(lookupContextTokens(registration.model?.trim() || ""));
   const state: RelayState = {
     runId,
     label: registration.label?.trim() || "worker",
@@ -1344,6 +1385,7 @@ function getOrCreateRelayState(runId: string): RelayState | undefined {
     toolCount: 0,
     status: "running",
     lastUpdatedAt: startedAt,
+    contextWindowTokens: inferredContextWindow,
     parentRunId,
   };
 
@@ -1882,6 +1924,11 @@ function handleToolEvent(evt: AgentEventPayload) {
     if (parsed.runId) {
       entry.childRunId = parsed.runId;
       parentRunByChildRun.set(parsed.runId, evt.runId);
+      const childRunIds = state.childRunIds ?? [];
+      if (!childRunIds.includes(parsed.runId)) {
+        childRunIds.push(parsed.runId);
+      }
+      state.childRunIds = childRunIds;
       const childState = relayByRun.get(parsed.runId);
       if (childState) {
         childState.parentRunId = evt.runId;
@@ -1914,6 +1961,29 @@ function handleThinkingEvent(evt: AgentEventPayload) {
   }
   const snippet = extractThinkingSnippet(text);
   if (!snippet) {
+    return;
+  }
+  if (state.thinkingSnippet === snippet) {
+    return;
+  }
+  state.thinkingSnippet = snippet;
+  scheduleRelayFlush(evt.runId);
+}
+
+function handleAssistantEvent(evt: AgentEventPayload) {
+  if (!isRelayEnabled()) {
+    return;
+  }
+  const data = evt.data && typeof evt.data === "object" ? evt.data : undefined;
+  if (!data) {
+    return;
+  }
+  const snippet = extractThinkingSnippetFromEventData(data);
+  if (!snippet) {
+    return;
+  }
+  const state = getOrCreateRelayState(evt.runId);
+  if (!state) {
     return;
   }
   if (state.thinkingSnippet === snippet) {
@@ -2162,6 +2232,10 @@ export function initSubagentRelay() {
       handleThinkingEvent(evt);
       return;
     }
+    if (evt.stream === "assistant") {
+      handleAssistantEvent(evt);
+      return;
+    }
     if (evt.stream === "usage") {
       handleUsageEvent(evt);
       return;
@@ -2184,6 +2258,10 @@ export function registerSubagentRelayRun(params: SubagentRelayRegistration) {
   if (parentRunId) {
     parentRunByChildRun.set(runId, parentRunId);
   }
+  const inferredContextWindow =
+    toFinitePositiveInt(params.contextWindowTokens) ??
+    toFinitePositiveInt(lookupContextTokens(params.model?.trim() || ""));
+
   registrationsByRun.set(runId, {
     runId,
     label: params.label,
@@ -2193,10 +2271,16 @@ export function registerSubagentRelayRun(params: SubagentRelayRegistration) {
     parentRunId: parentRunId || undefined,
     childSessionKey: params.childSessionKey,
     sandboxed: params.sandboxed === true,
+    contextWindowTokens: inferredContextWindow,
   });
   const state = relayByRun.get(runId);
-  if (state && parentRunId) {
-    state.parentRunId = parentRunId;
+  if (state) {
+    if (parentRunId) {
+      state.parentRunId = parentRunId;
+    }
+    if (!state.contextWindowTokens && inferredContextWindow) {
+      state.contextWindowTokens = inferredContextWindow;
+    }
   }
 }
 

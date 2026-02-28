@@ -17,11 +17,43 @@ vi.mock("@mariozechner/pi-coding-agent", async () => {
   };
 });
 
-import { summarizeInStages } from "./compaction.js";
+import { extractCompactionMetadata, summarizeInStages } from "./compaction.js";
 
 describe("compaction structured metadata", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("extracts decisions, pending items, files, and error lines from compacted history", () => {
+    const metadata = extractCompactionMetadata([
+      {
+        role: "user",
+        content:
+          "Yes, go ahead with the patch. TODO: verify CI after push. Remember this: keep retries idempotent.",
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: "Error: request timed out. Resolved by reducing chunk size and retrying.",
+        timestamp: 2,
+      },
+      {
+        role: "tool",
+        toolName: "edit",
+        content: [
+          {
+            type: "toolCall",
+            arguments: { path: "/opt/zulipclaw/src/agents/compaction.ts" },
+          },
+        ],
+        timestamp: 3,
+      } as unknown as AgentMessage,
+    ]);
+
+    expect(metadata.filesTouched.join("\n")).toContain("compaction.ts");
+    expect(metadata.keyDecisions.join("\n")).toMatch(/go ahead|remember this/i);
+    expect(metadata.pendingItems.join("\n")).toContain("TODO: verify CI after push");
+    expect(metadata.errorResolutions.join("\n")).toContain("Error: request timed out");
   });
 
   it("prepends structured context and enriches summarizer instructions", async () => {
@@ -51,19 +83,20 @@ describe("compaction structured metadata", () => {
       parts: 1,
     });
 
-    expect(summary).toContain("## Context from compacted history");
-    expect(summary).toContain("### Files touched:");
+    expect(summary).toContain("## Compacted Context");
+    expect(summary).toContain("**Files touched:**");
     expect(summary).toContain("subagent-relay.ts");
-    expect(summary).toContain("### Key decisions:");
+    expect(summary).toContain("**Key decisions:**");
     expect(summary).toContain("Decision: use worktrees for this task");
-    expect(summary).toContain("### Pending items:");
+    expect(summary).toContain("**Pending items:**");
     expect(summary).toContain("TODO: run build after tests");
-    expect(summary).toContain("### Conversation summary:");
+    expect(summary).toContain("**Summary:**");
     expect(summary).toContain("Merged summary body.");
 
     const customInstructionsArg = piCodingAgentMocks.generateSummary.mock.calls[0]?.[5];
     expect(String(customInstructionsArg)).toContain("User preferences, corrections");
-    expect(String(customInstructionsArg)).toContain("File paths plus the purpose/context");
+    expect(String(customInstructionsArg)).toContain("File paths and each file's purpose");
+    expect(String(customInstructionsArg)).toContain("Important decisions plus the rationale");
     expect(String(customInstructionsArg)).toContain("Additional instructions");
   });
 });
