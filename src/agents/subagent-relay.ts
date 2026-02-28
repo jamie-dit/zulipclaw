@@ -64,6 +64,7 @@ type RelayRegistration = {
   parentRunId?: string;
   childSessionKey?: string;
   sandboxed?: boolean;
+  contextWindowTokens?: number;
 };
 
 export type WatchdogStatus = "active" | "nudged" | "frozen";
