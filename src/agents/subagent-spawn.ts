@@ -444,6 +444,7 @@ export async function spawnSubagentDirect(
     cleanup,
     label: label || undefined,
     model: resolvedModel,
+    sandboxed: params.forceSandbox === true,
     runTimeoutSeconds,
     maxIterations,
     expectsCompletionMessage: params.expectsCompletionMessage === true,

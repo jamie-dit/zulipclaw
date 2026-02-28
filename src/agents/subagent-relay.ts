@@ -33,6 +33,8 @@ export type SubagentRelayRegistration = {
   deliveryContext?: SubagentRelayDeliveryContext;
   /** Child session key — used by the watchdog to steer idle sub-agents. */
   childSessionKey?: string;
+  /** True when this sub-agent run is known to execute in the sandbox. */
+  sandboxed?: boolean;
 };
 
 export type WatchdogStatus = "active" | "nudged" | "frozen";
@@ -46,6 +48,8 @@ export type RelayState = {
   model: string;
   /** Auth profile short name (e.g. "jason") shown when provider has multiple profiles. */
   authProfile?: string;
+  /** True when this run executes in the sandbox. */
+  sandboxed?: boolean;
   toolLines: string[];
   startedAt: number;
   deliveryContext: {
@@ -530,9 +534,10 @@ export function renderRelayMessage(state: RelayState, originTopic?: string) {
   const watchdogEmoji = resolveWatchdogStatusEmoji(state.watchdogStatus);
   const modelShort = state.model.includes("/") ? state.model.split("/").pop() : state.model;
   const profileSuffix = state.authProfile ? ` (${state.authProfile})` : "";
+  const sandboxSuffix = state.sandboxed ? " · 🔒 sandbox" : "";
   const originSuffix = originTopic ? ` · 📍 ${originTopic}` : "";
   const respawnSuffix = state.respawnedAs ? ` · ⚡ re-spawned as \`${state.respawnedAs}\`` : "";
-  const header = `${emoji} **\`${state.label}\`** · ${modelShort}${profileSuffix} · ${state.toolCount} ${callWord} · updated ${updatedTime}${watchdogEmoji}${originSuffix}${respawnSuffix}`;
+  const header = `${emoji} **\`${state.label}\`**${sandboxSuffix} · ${modelShort}${profileSuffix} · ${state.toolCount} ${callWord} · updated ${updatedTime}${watchdogEmoji}${originSuffix}${respawnSuffix}`;
   const sanitizedLines = state.toolLines.map((line) => sanitizeForCodeFence(line));
   const sections = [`${header}\n\n\`\`\`spoiler Tool calls\n${sanitizedLines.join("\n")}\n\`\`\``];
 
@@ -825,6 +830,7 @@ function getOrCreateRelayState(runId: string): RelayState | undefined {
     runId,
     label: registration.label?.trim() || "worker",
     model: registration.model?.trim() || "default",
+    sandboxed: registration.sandboxed === true,
     startedAt,
     toolLines: [],
     deliveryContext,
@@ -1300,57 +1306,103 @@ function handleToolEvent(evt: AgentEventPayload) {
 }
 
 /**
- * Read the latest text output from a sub-agent's chat history.
- * Scans backwards through messages looking for assistant or tool text.
- * Best-effort: returns undefined on any failure.
+ * Best-effort extraction of readable text from a chat message payload.
  */
-async function readCompletionText(sessionKey: string): Promise<string | undefined> {
+function extractRelayMessageText(content: unknown): string | undefined {
+  if (typeof content === "string" && content.trim()) {
+    return content.trim();
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const text = extractTextFromChatContent(content, {
+    normalizeText: (t) => t.trim(),
+    joinWith: "\n",
+  });
+  return text?.trim() ? text.trim() : undefined;
+}
+
+/**
+ * Count tool calls from transcript messages.
+ *
+ * We de-duplicate by tool call ID when available because some transcripts can
+ * include both tool and toolResult records for the same call.
+ */
+export function countToolCallsFromHistory(messages: Array<unknown>): number {
+  let count = 0;
+  const seenCallIds = new Set<string>();
+
+  for (const raw of messages) {
+    if (!raw || typeof raw !== "object") {
+      continue;
+    }
+    const msg = raw as {
+      role?: unknown;
+      toolCallId?: unknown;
+      toolUseId?: unknown;
+      id?: unknown;
+    };
+    const role = typeof msg.role === "string" ? msg.role : "";
+    if (role !== "toolResult" && role !== "tool") {
+      continue;
+    }
+
+    const toolCallIdCandidates = [msg.toolCallId, msg.toolUseId, msg.id];
+    const toolCallId = toolCallIdCandidates.find(
+      (value): value is string => typeof value === "string" && value.trim().length > 0,
+    );
+
+    if (toolCallId) {
+      if (seenCallIds.has(toolCallId)) {
+        continue;
+      }
+      seenCallIds.add(toolCallId);
+    }
+
+    count += 1;
+  }
+
+  return count;
+}
+
+/**
+ * Read completion snapshot from a sub-agent's chat history.
+ * Scans backwards for output text and counts tool calls from transcript data.
+ * Best-effort: returns undefined fields on failure.
+ */
+async function readCompletionSnapshot(sessionKey: string): Promise<{
+  text?: string;
+  toolCount?: number;
+}> {
   try {
     const history = await callGateway<{ messages?: Array<unknown> }>({
       method: "chat.history",
-      params: { sessionKey, limit: 50 },
+      params: { sessionKey, limit: 1000 },
       timeoutMs: 5_000,
     });
     const messages = Array.isArray(history?.messages) ? history.messages : [];
+    const toolCount = countToolCallsFromHistory(messages);
+
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       const msg = messages[i] as { role?: string; content?: unknown } | undefined;
       if (!msg || typeof msg !== "object") {
         continue;
       }
-      const { role, content } = msg;
-      if (role === "assistant") {
-        if (typeof content === "string" && content.trim()) {
-          return content.trim();
-        }
-        if (Array.isArray(content)) {
-          const text = extractTextFromChatContent(content, {
-            normalizeText: (t) => t.trim(),
-            joinWith: "\n",
-          });
-          if (text?.trim()) {
-            return text.trim();
-          }
-        }
+      const role = msg.role;
+      if (role !== "assistant" && role !== "toolResult" && role !== "tool") {
+        continue;
       }
-      if (role === "toolResult" || role === "tool") {
-        if (typeof content === "string" && content.trim()) {
-          return content.trim();
-        }
-        if (Array.isArray(content)) {
-          const text = extractTextFromChatContent(content, {
-            normalizeText: (t) => t.trim(),
-            joinWith: "\n",
-          });
-          if (text?.trim()) {
-            return text.trim();
-          }
-        }
+      const text = extractRelayMessageText(msg.content);
+      if (text) {
+        return { text, toolCount };
       }
     }
+
+    return { toolCount };
   } catch {
     // Best-effort only
+    return {};
   }
-  return undefined;
 }
 
 /**
@@ -1365,9 +1417,20 @@ async function finalizeRelayWithOutput(runId: string): Promise<void> {
   }
   const registration = registrationsByRun.get(runId);
   if (registration?.childSessionKey) {
-    const text = await readCompletionText(registration.childSessionKey);
-    if (text) {
-      state.completionText = text;
+    const snapshot = await readCompletionSnapshot(registration.childSessionKey);
+    if (snapshot.text) {
+      state.completionText = snapshot.text;
+    }
+    if (typeof snapshot.toolCount === "number" && Number.isFinite(snapshot.toolCount)) {
+      const recoveredCount = Math.max(0, Math.floor(snapshot.toolCount));
+      if (recoveredCount > state.toolCount) {
+        const missingCount = recoveredCount - state.toolCount;
+        state.toolCount = recoveredCount;
+        const callWord = missingCount === 1 ? "call" : "calls";
+        state.toolLines.push(
+          `[recovered] ℹ️ ${missingCount} tool ${callWord} counted from transcript`,
+        );
+      }
     }
   }
   await flushRelayMessage(runId, { finalize: true });
@@ -1454,6 +1517,7 @@ export function registerSubagentRelayRun(params: SubagentRelayRegistration) {
     startedAt: params.startedAt,
     deliveryContext: normalizeDeliveryContext(params.deliveryContext),
     childSessionKey: params.childSessionKey,
+    sandboxed: params.sandboxed === true,
   });
 }
 
