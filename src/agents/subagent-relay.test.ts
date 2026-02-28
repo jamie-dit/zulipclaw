@@ -535,7 +535,7 @@ describe("subagent-relay", () => {
       expect(msg).toContain("[+0:03] 📄 read: /tmp/b.ts");
     });
 
-    it("renders edit old/new fields as diff-like output", () => {
+    it("renders edit diff block before the result confirmation", () => {
       const msg = renderRelayMessage({
         runId: "test-run",
         label: "worker",
@@ -544,7 +544,8 @@ describe("subagent-relay", () => {
           {
             line: "[+0:01] ✏️ edit: /tmp/file.ts",
             name: "edit",
-            resultText: '{"old_string":"const a = 1;","new_string":"const a = 2;"}',
+            editDiff: { oldText: "const a = 1;", newText: "const a = 2;" },
+            resultText: "Successfully replaced text in /tmp/file.ts",
           },
         ],
         pendingToolCallIds: new Map(),
@@ -555,9 +556,136 @@ describe("subagent-relay", () => {
         deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
       });
 
+      expect(msg).toContain("```diff");
       expect(msg).toContain("- const a = 1;");
       expect(msg).toContain("+ const a = 2;");
-      expect(msg).not.toContain("old_string");
+      const diffIdx = msg.indexOf("```diff");
+      const resultIdx = msg.indexOf("Successfully replaced text in /tmp/file.ts");
+      expect(diffIdx).toBeGreaterThanOrEqual(0);
+      expect(resultIdx).toBeGreaterThan(diffIdx);
+    });
+
+    it("renders write preview content before result confirmation", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "anthropic/claude-opus-4-6",
+        toolEntries: [
+          {
+            line: "[+0:01] 📝 write: /tmp/file.ts",
+            name: "write",
+            writePreview: "console.log('hello');",
+            resultText: "Successfully wrote 21 bytes to /tmp/file.ts",
+          },
+        ],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 1,
+        status: "ok",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+
+      expect(msg).toContain("**Content** (21 bytes):");
+      expect(msg).toContain("console.log('hello');");
+      expect(msg).toContain("Successfully wrote 21 bytes to /tmp/file.ts");
+    });
+
+    it("prefixes each line correctly for multi-line edit diffs", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "anthropic/claude-opus-4-6",
+        toolEntries: [
+          {
+            line: "[+0:01] ✏️ edit: /tmp/file.ts",
+            name: "edit",
+            editDiff: { oldText: "line-1\nline-2", newText: "line-a\nline-b" },
+            resultText: "Successfully replaced text in /tmp/file.ts",
+          },
+        ],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 1,
+        status: "ok",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+
+      expect(msg).toContain("- line-1\n- line-2");
+      expect(msg).toContain("+ line-a\n+ line-b");
+    });
+
+    it("truncates long edit and write previews at 500 chars", () => {
+      const longOld = "o".repeat(700);
+      const longNew = "n".repeat(700);
+      const longWrite = "w".repeat(700);
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "anthropic/claude-opus-4-6",
+        toolEntries: [
+          {
+            line: "[+0:01] ✏️ edit: /tmp/file.ts",
+            name: "edit",
+            editDiff: { oldText: longOld, newText: longNew },
+            resultText: "Successfully replaced text in /tmp/file.ts",
+          },
+          {
+            line: "[+0:02] 📝 write: /tmp/file.ts",
+            name: "write",
+            writePreview: longWrite,
+            resultText: "Successfully wrote 700 bytes to /tmp/file.ts",
+          },
+        ],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 2,
+        status: "ok",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+
+      expect(msg).toContain(`- ${"o".repeat(500)}`);
+      expect(msg).toContain(`+ ${"n".repeat(500)}`);
+      expect(msg).not.toContain(`- ${"o".repeat(501)}`);
+      expect(msg).not.toContain(`+ ${"n".repeat(501)}`);
+
+      expect(msg).toContain("**Content** (500 bytes):");
+      expect(msg).toContain("_(truncated)_");
+      expect(msg).toContain("w".repeat(500));
+      expect(msg).not.toContain("w".repeat(501));
+    });
+
+    it("does not render edit/write previews when args are missing", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "anthropic/claude-opus-4-6",
+        toolEntries: [
+          {
+            line: "[+0:01] ✏️ edit: /tmp/file.ts",
+            name: "edit",
+            resultText: "Successfully replaced text in /tmp/file.ts",
+          },
+          {
+            line: "[+0:02] 📝 write: /tmp/file.ts",
+            name: "write",
+            resultText: "Successfully wrote 42 bytes to /tmp/file.ts",
+          },
+        ],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 2,
+        status: "ok",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+
+      expect(msg).not.toContain("```diff");
+      expect(msg).not.toContain("**Content** (");
+      expect(msg).toContain("Successfully replaced text in /tmp/file.ts");
+      expect(msg).toContain("Successfully wrote 42 bytes to /tmp/file.ts");
     });
   });
 
