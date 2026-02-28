@@ -1262,10 +1262,10 @@ async function flushRelayMessage(runId: string, options?: { finalize?: boolean }
 
   const parentRunId = parentRunByChildRun.get(runId) ?? state.parentRunId;
   const parentState = parentRunId ? relayByRun.get(parentRunId) : undefined;
-  const suppressStandaloneLiveEdits =
+  const renderInlineOnly =
     Boolean(parentState) && state.status === "running" && Boolean(state.messageId);
 
-  if (!suppressStandaloneLiveEdits) {
+  if (!renderInlineOnly) {
     const message = renderRelayMessage(state, undefined, {
       resolveChildState: (childRunId) => relayByRun.get(childRunId),
     });
