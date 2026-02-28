@@ -173,6 +173,18 @@ function persistSubagentRuns() {
   }
 }
 
+function findRunIdByChildSessionKey(sessionKey?: string): string | undefined {
+  if (!sessionKey) {
+    return undefined;
+  }
+  for (const [runId, entry] of subagentRuns.entries()) {
+    if (entry.childSessionKey === sessionKey) {
+      return runId;
+    }
+  }
+  return undefined;
+}
+
 function resolveSessionMaxIterations(childSessionKey: string): number | undefined {
   const cfg = loadConfig();
   const agentId = resolveAgentIdFromSessionKey(childSessionKey);
@@ -567,6 +579,7 @@ function restoreSubagentRunsOnce() {
         label: entry.label,
         model: entry.model,
         startedAt: entry.startedAt,
+        parentRunId: findRunIdByChildSessionKey(entry.requesterSessionKey),
         childSessionKey: entry.childSessionKey,
         sandboxed: entry.sandboxed,
         deliveryContext: resolveRelayDeliveryContextForRun({
@@ -677,6 +690,7 @@ function ensureListener() {
         label: entry.label,
         model: entry.model,
         startedAt: startedAt ?? entry.startedAt,
+        parentRunId: findRunIdByChildSessionKey(entry.requesterSessionKey),
         childSessionKey: entry.childSessionKey,
         sandboxed: entry.sandboxed,
         deliveryContext: resolveRelayDeliveryContextForRun({
@@ -894,6 +908,7 @@ export function replaceSubagentRunAfterSteer(params: {
     label: next.label,
     model: next.model,
     startedAt: next.startedAt,
+    parentRunId: findRunIdByChildSessionKey(next.requesterSessionKey),
     childSessionKey: next.childSessionKey,
     sandboxed: next.sandboxed,
     deliveryContext: resolveRelayDeliveryContextForRun({
@@ -962,6 +977,7 @@ export function registerSubagentRun(params: {
     label: params.label,
     model: params.model,
     startedAt: now,
+    parentRunId: findRunIdByChildSessionKey(params.requesterSessionKey),
     childSessionKey: params.childSessionKey,
     sandboxed: params.sandboxed,
     deliveryContext: requesterDeliveryContext,

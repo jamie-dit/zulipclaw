@@ -17,6 +17,7 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
+import { derivePromptTokens, normalizeUsage, type UsageLike } from "./usage.js";
 
 const stripTrailingDirective = (text: string): string => {
   const openIndex = text.lastIndexOf("[[");
@@ -222,7 +223,27 @@ export function handleMessageEnd(
 
   const assistantMessage = msg;
   ctx.noteLastAssistant(assistantMessage);
+  const assistantUsage = normalizeUsage(
+    (assistantMessage as { usage?: unknown }).usage as UsageLike,
+  );
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
+  const promptTokens = derivePromptTokens(assistantUsage);
+  if (assistantUsage || promptTokens) {
+    const usageEventData = {
+      phase: "update",
+      usage: assistantUsage,
+      promptTokens,
+    };
+    emitAgentEvent({
+      runId: ctx.params.runId,
+      stream: "usage",
+      data: usageEventData,
+    });
+    void ctx.params.onAgentEvent?.({
+      stream: "usage",
+      data: usageEventData,
+    });
+  }
   promoteThinkingTagsToBlocks(assistantMessage);
 
   const rawText = extractAssistantText(assistantMessage);

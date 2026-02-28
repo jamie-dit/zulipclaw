@@ -14,6 +14,7 @@ import {
   taskLooksResumable,
 } from "./subagent-restart-recovery.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
+import { derivePromptTokens, type UsageLike } from "./usage.js";
 
 /**
  * ZulipClaw fork note:
@@ -32,6 +33,8 @@ export type SubagentRelayRegistration = {
   model?: string;
   startedAt?: number;
   deliveryContext?: SubagentRelayDeliveryContext;
+  /** Parent runId when this run was spawned by another relay-tracked sub-agent. */
+  parentRunId?: string;
   /** Child session key — used by the watchdog to steer idle sub-agents. */
   childSessionKey?: string;
   /** True when this sub-agent run is known to execute in the sandbox. */
@@ -47,6 +50,8 @@ export type ToolEntry = {
   completedAtMs?: number;
   resultText?: string;
   isError?: boolean;
+  /** child runId for sessions_spawn calls when available. */
+  childRunId?: string;
 };
 
 export type RelayState = {
@@ -75,6 +80,14 @@ export type RelayState = {
   lastUpdatedAt: number;
   /** Sub-agent's final text output, populated at completion for the relay card. */
   completionText?: string;
+  /** Latest streamed thinking snippet while waiting for the next tool call. */
+  thinkingSnippet?: string;
+  /** Current estimated context usage (prompt tokens). */
+  contextUsedTokens?: number;
+  /** Model context window limit for this run. */
+  contextWindowTokens?: number;
+  /** Parent runId when nested under another sub-agent relay card. */
+  parentRunId?: string;
   /** Watchdog fields */
   watchdogTimer?: NodeJS.Timeout;
   watchdogFollowUpTimer?: NodeJS.Timeout;
@@ -116,6 +129,7 @@ const MIRROR_STATE_SAVE_DEBOUNCE_MS = 500;
 
 const registrationsByRun = new Map<string, SubagentRelayRegistration>();
 const relayByRun = new Map<string, RelayState>();
+const parentRunByChildRun = new Map<string, string>();
 let listenerInitialized = false;
 
 // ---------------------------------------------------------------------------
@@ -343,6 +357,107 @@ function truncate(value: string, max = 80) {
     return value;
   }
   return `${value.slice(0, Math.max(1, max - 1))}…`;
+}
+
+function extractThinkingSnippet(raw: string, maxChars = 150): string | undefined {
+  const withoutPrefix = raw.replace(/^\s*Reasoning:\s*/i, "");
+  const withoutQuote = withoutPrefix
+    .split("\n")
+    .map((line) => line.replace(/^\s*>\s?/, "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!withoutQuote) {
+    return undefined;
+  }
+  return truncate(withoutQuote, maxChars);
+}
+
+function toFinitePositiveInt(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
+function formatContextTokenCompact(value: number): string {
+  if (value >= 1000) {
+    return `${Math.round(value / 1000)}k`;
+  }
+  return `${value}`;
+}
+
+function estimateRelayContextTokens(state: RelayState): number | undefined {
+  let chars = 0;
+  for (const entry of state.toolEntries) {
+    chars += entry.line.length;
+    chars += entry.resultText?.length ?? 0;
+  }
+  chars += state.thinkingSnippet?.length ?? 0;
+  chars += state.completionText?.length ?? 0;
+  if (chars <= 0) {
+    return undefined;
+  }
+  return Math.max(1, Math.floor(chars / 4));
+}
+
+type SpawnResultReference = {
+  runId?: string;
+  childSessionKey?: string;
+};
+
+function parseSpawnResultReference(result: unknown): SpawnResultReference {
+  if (!result || typeof result !== "object") {
+    return {};
+  }
+  const record = result as Record<string, unknown>;
+
+  const details =
+    record.details && typeof record.details === "object"
+      ? (record.details as Record<string, unknown>)
+      : undefined;
+  const detailsRunId =
+    details && typeof details.runId === "string" && details.runId.trim()
+      ? details.runId.trim()
+      : undefined;
+  const detailsChildSessionKey =
+    details && typeof details.childSessionKey === "string" && details.childSessionKey.trim()
+      ? details.childSessionKey.trim()
+      : undefined;
+  if (detailsRunId || detailsChildSessionKey) {
+    return {
+      runId: detailsRunId,
+      childSessionKey: detailsChildSessionKey,
+    };
+  }
+
+  const content = Array.isArray(record.content) ? record.content : [];
+  for (const item of content) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const text = (item as { text?: unknown }).text;
+    if (typeof text !== "string" || !text.trim()) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(text) as Record<string, unknown>;
+      const runId =
+        typeof parsed.runId === "string" && parsed.runId.trim() ? parsed.runId.trim() : undefined;
+      const childSessionKey =
+        typeof parsed.childSessionKey === "string" && parsed.childSessionKey.trim()
+          ? parsed.childSessionKey.trim()
+          : undefined;
+      if (runId || childSessionKey) {
+        return { runId, childSessionKey };
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
+
+  return {};
 }
 
 function readRecord(args: unknown): Record<string, unknown> {
@@ -749,7 +864,24 @@ function extractToolLineStamp(line: string): string {
   return match?.[0] ?? "[+0:00]";
 }
 
-function renderRelayMessageToolLines(state: RelayState): string[] {
+function renderChildToolLines(state: RelayState): string[] {
+  const lines: string[] = [];
+  const pendingIndex = findLastPendingEntryIndex(state.toolEntries, state.status);
+  for (let i = 0; i < state.toolEntries.length; i += 1) {
+    const entry = state.toolEntries[i];
+    if (!entry) {
+      continue;
+    }
+    const pendingSuffix = i === pendingIndex ? " ⏳" : "";
+    lines.push(`${sanitizeForCodeFence(entry.line)}${pendingSuffix}`);
+  }
+  return lines;
+}
+
+function renderRelayMessageToolLines(
+  state: RelayState,
+  opts?: { resolveChildState?: (runId: string) => RelayState | undefined },
+): string[] {
   const toolCallLines: string[] = [];
   const pendingIndex = findLastPendingEntryIndex(state.toolEntries, state.status);
 
@@ -832,12 +964,27 @@ function renderRelayMessageToolLines(state: RelayState): string[] {
       toolCallLines.push(safeResult);
       toolCallLines.push("```");
     }
+
+    if (toolName === "sessions_spawn" && entry.childRunId && opts?.resolveChildState) {
+      const child = opts.resolveChildState(entry.childRunId);
+      if (child) {
+        const childEmoji = RELAY_STATUS_EMOJI[child.status ?? "running"] ?? "🔄";
+        toolCallLines.push(`  ↳ ${childEmoji} ${sanitizeForCodeFence(child.label)}`);
+        for (const childLine of renderChildToolLines(child)) {
+          toolCallLines.push(`    ${childLine}`);
+        }
+      }
+    }
   }
 
   return toolCallLines;
 }
 
-export function renderRelayMessage(state: RelayState, originTopic?: string) {
+export function renderRelayMessage(
+  state: RelayState,
+  originTopic?: string,
+  opts?: { resolveChildState?: (runId: string) => RelayState | undefined },
+) {
   const callWord = state.toolCount === 1 ? "tool call" : "tool calls";
   const updatedTime = formatRelayUpdatedTime(state.lastUpdatedAt);
   const emoji = RELAY_STATUS_EMOJI[state.status ?? "running"] ?? "🔄";
@@ -847,15 +994,24 @@ export function renderRelayMessage(state: RelayState, originTopic?: string) {
   const sandboxSuffix = state.sandboxed ? " · 🔒 sandbox" : "";
   const originSuffix = originTopic ? ` · 📍 ${originTopic}` : "";
   const respawnSuffix = state.respawnedAs ? ` · ⚡ re-spawned as \`${state.respawnedAs}\`` : "";
-  const header = `${emoji} **\`${state.label}\`**${sandboxSuffix} · ${modelShort}${profileSuffix} · ${state.toolCount} ${callWord} · updated ${updatedTime}${watchdogEmoji}${originSuffix}${respawnSuffix}`;
+  const usedContextTokens = state.contextUsedTokens ?? estimateRelayContextTokens(state);
+  const contextSuffix =
+    state.contextWindowTokens && usedContextTokens
+      ? ` · ${formatContextTokenCompact(usedContextTokens)}/${formatContextTokenCompact(state.contextWindowTokens)} ctx`
+      : "";
+  const header = `${emoji} **\`${state.label}\`**${sandboxSuffix} · ${modelShort}${profileSuffix} · ${state.toolCount} ${callWord}${contextSuffix} · updated ${updatedTime}${watchdogEmoji}${originSuffix}${respawnSuffix}`;
   const summaryLine = renderToolSummaryLine(state.toolEntries, state.toolCount);
-  const toolCallLines = renderRelayMessageToolLines(state);
+  const toolCallLines = renderRelayMessageToolLines(state, opts);
 
   const headerWithSummary = summaryLine ? `${header}\n${summaryLine}` : header;
 
   const sections = [
     `${headerWithSummary}\n\n\`\`\`spoiler Tool calls\n${toolCallLines.join("\n")}\n\`\`\``,
   ];
+
+  if (state.thinkingSnippet && state.status === "running") {
+    sections.push(`_💭 ${state.thinkingSnippet}_`);
+  }
 
   // Append sub-agent completion output when available (populated at lifecycle end).
   const completionText = state.completionText?.trim();
@@ -1069,27 +1225,39 @@ async function flushRelayMessage(runId: string, options?: { finalize?: boolean }
   if (!state) {
     return;
   }
-  state.lastUpdatedAt = Date.now();
-  const message = renderRelayMessage(state);
-  try {
-    if (state.messageId) {
-      await editRelayMessage(state, message);
-    } else {
-      await sendRelayMessage(state, message);
-    }
-  } catch (err) {
-    defaultRuntime.log?.(`[warn] subagent relay flush failed for run ${runId}: ${String(err)}`);
-  }
 
-  // Mirror relay: best-effort, never blocks primary
-  const { mirrorTopic } = resolveRelayConfig();
-  if (mirrorTopic) {
-    const originTopic = extractOriginTopic(state.deliveryContext.to);
-    const mirrorMessage = renderRelayMessage(state, originTopic);
-    if (state.mirrorMessageId) {
-      await editMirrorRelayMessage(state, mirrorTopic, mirrorMessage);
-    } else {
-      await sendMirrorRelayMessage(state, mirrorTopic, mirrorMessage);
+  state.lastUpdatedAt = Date.now();
+
+  const parentRunId = parentRunByChildRun.get(runId) ?? state.parentRunId;
+  const parentState = parentRunId ? relayByRun.get(parentRunId) : undefined;
+  const renderInlineOnly = Boolean(parentState);
+
+  if (!renderInlineOnly) {
+    const message = renderRelayMessage(state, undefined, {
+      resolveChildState: (childRunId) => relayByRun.get(childRunId),
+    });
+    try {
+      if (state.messageId) {
+        await editRelayMessage(state, message);
+      } else {
+        await sendRelayMessage(state, message);
+      }
+    } catch (err) {
+      defaultRuntime.log?.(`[warn] subagent relay flush failed for run ${runId}: ${String(err)}`);
+    }
+
+    // Mirror relay: best-effort, never blocks primary
+    const { mirrorTopic } = resolveRelayConfig();
+    if (mirrorTopic) {
+      const originTopic = extractOriginTopic(state.deliveryContext.to);
+      const mirrorMessage = renderRelayMessage(state, originTopic, {
+        resolveChildState: (childRunId) => relayByRun.get(childRunId),
+      });
+      if (state.mirrorMessageId) {
+        await editMirrorRelayMessage(state, mirrorTopic, mirrorMessage);
+      } else {
+        await sendMirrorRelayMessage(state, mirrorTopic, mirrorMessage);
+      }
     }
   }
 
@@ -1103,6 +1271,7 @@ async function flushRelayMessage(runId: string, options?: { finalize?: boolean }
     removeMirrorEntry(runId);
     relayByRun.delete(runId);
     registrationsByRun.delete(runId);
+    parentRunByChildRun.delete(runId);
   }
 }
 
@@ -1123,11 +1292,34 @@ function scheduleRelayFlush(runId: string) {
     void flushRelayMessage(runId);
   }, 200);
   state.editTimer.unref?.();
+
+  const parentRunId = parentRunByChildRun.get(runId) ?? state.parentRunId;
+  if (parentRunId && parentRunId !== runId) {
+    const parent = relayByRun.get(parentRunId);
+    if (parent && !parent.editTimer) {
+      parent.editTimer = setTimeout(() => {
+        const currentParent = relayByRun.get(parentRunId);
+        if (!currentParent) {
+          return;
+        }
+        currentParent.editTimer = undefined;
+        void flushRelayMessage(parentRunId);
+      }, 200);
+      parent.editTimer.unref?.();
+    }
+  }
 }
 
 function getOrCreateRelayState(runId: string): RelayState | undefined {
   const existing = relayByRun.get(runId);
   if (existing) {
+    const registration = registrationsByRun.get(runId);
+    const parentRunId =
+      registration?.parentRunId?.trim() || parentRunByChildRun.get(runId) || undefined;
+    if (parentRunId && existing.parentRunId !== parentRunId) {
+      existing.parentRunId = parentRunId;
+      parentRunByChildRun.set(runId, parentRunId);
+    }
     return existing;
   }
   const registration = registrationsByRun.get(runId);
@@ -1142,6 +1334,8 @@ function getOrCreateRelayState(runId: string): RelayState | undefined {
     typeof registration.startedAt === "number" && Number.isFinite(registration.startedAt)
       ? registration.startedAt
       : Date.now();
+  const parentRunId =
+    registration.parentRunId?.trim() || parentRunByChildRun.get(runId) || undefined;
   const state: RelayState = {
     runId,
     label: registration.label?.trim() || "worker",
@@ -1154,7 +1348,12 @@ function getOrCreateRelayState(runId: string): RelayState | undefined {
     toolCount: 0,
     status: "running",
     lastUpdatedAt: startedAt,
+    parentRunId,
   };
+
+  if (parentRunId) {
+    parentRunByChildRun.set(runId, parentRunId);
+  }
 
   // Restore mirrorMessageId from startup recovery if available
   const recoveredMirrorId = recoveredMirrorMessageIds.get(runId);
@@ -1624,21 +1823,20 @@ function handleToolEvent(evt: AgentEventPayload) {
       name: toolName,
       startedAtMs: eventTs,
     };
-    const entryIndex = state.toolEntries.push(entry) - 1;
     const toolCallId = typeof evt.data?.toolCallId === "string" ? evt.data.toolCallId.trim() : "";
+    const entryIndex = state.toolEntries.push(entry) - 1;
     if (toolCallId) {
       state.pendingToolCallIds.set(toolCallId, entryIndex);
     }
+
+    // Thinking preview should only appear between tool calls.
+    state.thinkingSnippet = undefined;
 
     state.toolCount += 1;
     scheduleRelayFlush(evt.runId);
 
     // Reset watchdog timer on every tool call start
     resetWatchdog(evt.runId, toolName, argsRecord);
-    return;
-  }
-
-  if (phase !== "result") {
     return;
   }
 
@@ -1660,11 +1858,94 @@ function handleToolEvent(evt: AgentEventPayload) {
   if (resultText) {
     entry.resultText = resultText;
   }
+
+  if (entry.name.trim().toLowerCase() === "sessions_spawn") {
+    const parsed = parseSpawnResultReference(evt.data?.result);
+    if (parsed.runId) {
+      entry.childRunId = parsed.runId;
+      parentRunByChildRun.set(parsed.runId, evt.runId);
+      const childState = relayByRun.get(parsed.runId);
+      if (childState) {
+        childState.parentRunId = evt.runId;
+      }
+      const childRegistration = registrationsByRun.get(parsed.runId);
+      if (childRegistration && childRegistration.parentRunId !== evt.runId) {
+        childRegistration.parentRunId = evt.runId;
+      }
+    }
+  }
+
   const eventTs = typeof evt.ts === "number" && Number.isFinite(evt.ts) ? evt.ts : Date.now();
   entry.completedAtMs = eventTs;
   entry.isError = evt.data?.isError === true;
   state.pendingToolCallIds.delete(toolCallId);
   scheduleRelayFlush(evt.runId);
+}
+
+function handleThinkingEvent(evt: AgentEventPayload) {
+  if (!isRelayEnabled()) {
+    return;
+  }
+  const text = typeof evt.data?.text === "string" ? evt.data.text : "";
+  if (!text.trim()) {
+    return;
+  }
+  const state = getOrCreateRelayState(evt.runId);
+  if (!state) {
+    return;
+  }
+  const snippet = extractThinkingSnippet(text);
+  if (!snippet) {
+    return;
+  }
+  if (state.thinkingSnippet === snippet) {
+    return;
+  }
+  state.thinkingSnippet = snippet;
+  scheduleRelayFlush(evt.runId);
+}
+
+function handleUsageEvent(evt: AgentEventPayload) {
+  if (!isRelayEnabled()) {
+    return;
+  }
+  const state = getOrCreateRelayState(evt.runId);
+  if (!state) {
+    return;
+  }
+
+  let changed = false;
+
+  const contextWindow = toFinitePositiveInt(evt.data?.contextWindow);
+  if (contextWindow && state.contextWindowTokens !== contextWindow) {
+    state.contextWindowTokens = contextWindow;
+    changed = true;
+  }
+
+  const promptTokensDirect = toFinitePositiveInt(evt.data?.promptTokens);
+  if (promptTokensDirect && state.contextUsedTokens !== promptTokensDirect) {
+    state.contextUsedTokens = promptTokensDirect;
+    changed = true;
+  }
+
+  const usage =
+    evt.data?.usage && typeof evt.data.usage === "object"
+      ? (evt.data.usage as UsageLike)
+      : undefined;
+  const usagePromptTokens = usage ? derivePromptTokens(usage) : undefined;
+  const promptTokensFromUsage = toFinitePositiveInt(usagePromptTokens);
+  if (
+    !promptTokensDirect &&
+    promptTokensFromUsage &&
+    state.contextUsedTokens !== promptTokensFromUsage
+  ) {
+    state.contextUsedTokens = promptTokensFromUsage;
+    changed = true;
+  }
+
+  if (changed) {
+    scheduleRelayFlush(evt.runId);
+  }
 }
 
 /**
@@ -1859,6 +2140,14 @@ export function initSubagentRelay() {
       handleAuthEvent(evt);
       return;
     }
+    if (evt.stream === "thinking") {
+      handleThinkingEvent(evt);
+      return;
+    }
+    if (evt.stream === "usage") {
+      handleUsageEvent(evt);
+      return;
+    }
     if (evt.stream === "lifecycle") {
       handleLifecycleEvent(evt);
     }
@@ -1873,15 +2162,24 @@ export function registerSubagentRelayRun(params: SubagentRelayRegistration) {
   if (!isSupportedZulipContext(params.deliveryContext)) {
     return;
   }
+  const parentRunId = typeof params.parentRunId === "string" ? params.parentRunId.trim() : "";
+  if (parentRunId) {
+    parentRunByChildRun.set(runId, parentRunId);
+  }
   registrationsByRun.set(runId, {
     runId,
     label: params.label,
     model: params.model,
     startedAt: params.startedAt,
     deliveryContext: normalizeDeliveryContext(params.deliveryContext),
+    parentRunId: parentRunId || undefined,
     childSessionKey: params.childSessionKey,
     sandboxed: params.sandboxed === true,
   });
+  const state = relayByRun.get(runId);
+  if (state && parentRunId) {
+    state.parentRunId = parentRunId;
+  }
 }
 
 export function unregisterSubagentRelayRun(runId: string) {
@@ -1898,6 +2196,7 @@ export function unregisterSubagentRelayRun(runId: string) {
   }
   relayByRun.delete(key);
   registrationsByRun.delete(key);
+  parentRunByChildRun.delete(key);
 }
 
 /**
