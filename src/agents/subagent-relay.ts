@@ -1260,30 +1260,37 @@ async function flushRelayMessage(runId: string, options?: { finalize?: boolean }
 
   state.lastUpdatedAt = Date.now();
 
-  const message = renderRelayMessage(state, undefined, {
-    resolveChildState: (childRunId) => relayByRun.get(childRunId),
-  });
-  try {
-    if (state.messageId) {
-      await editRelayMessage(state, message);
-    } else {
-      await sendRelayMessage(state, message);
-    }
-  } catch (err) {
-    defaultRuntime.log?.(`[warn] subagent relay flush failed for run ${runId}: ${String(err)}`);
-  }
+  const parentRunId = parentRunByChildRun.get(runId) ?? state.parentRunId;
+  const parentState = parentRunId ? relayByRun.get(parentRunId) : undefined;
+  const suppressStandaloneLiveEdits =
+    Boolean(parentState) && state.status === "running" && Boolean(state.messageId);
 
-  // Mirror relay: best-effort, never blocks primary
-  const { mirrorTopic } = resolveRelayConfig();
-  if (mirrorTopic) {
-    const originTopic = extractOriginTopic(state.deliveryContext.to);
-    const mirrorMessage = renderRelayMessage(state, originTopic, {
+  if (!suppressStandaloneLiveEdits) {
+    const message = renderRelayMessage(state, undefined, {
       resolveChildState: (childRunId) => relayByRun.get(childRunId),
     });
-    if (state.mirrorMessageId) {
-      await editMirrorRelayMessage(state, mirrorTopic, mirrorMessage);
-    } else {
-      await sendMirrorRelayMessage(state, mirrorTopic, mirrorMessage);
+    try {
+      if (state.messageId) {
+        await editRelayMessage(state, message);
+      } else {
+        await sendRelayMessage(state, message);
+      }
+    } catch (err) {
+      defaultRuntime.log?.(`[warn] subagent relay flush failed for run ${runId}: ${String(err)}`);
+    }
+
+    // Mirror relay: best-effort, never blocks primary
+    const { mirrorTopic } = resolveRelayConfig();
+    if (mirrorTopic) {
+      const originTopic = extractOriginTopic(state.deliveryContext.to);
+      const mirrorMessage = renderRelayMessage(state, originTopic, {
+        resolveChildState: (childRunId) => relayByRun.get(childRunId),
+      });
+      if (state.mirrorMessageId) {
+        await editMirrorRelayMessage(state, mirrorTopic, mirrorMessage);
+      } else {
+        await sendMirrorRelayMessage(state, mirrorTopic, mirrorMessage);
+      }
     }
   }
 
