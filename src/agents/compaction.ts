@@ -13,6 +13,235 @@ const DEFAULT_PARTS = 2;
 const MERGE_SUMMARIES_INSTRUCTIONS =
   "Merge these partial summaries into a single cohesive summary. Preserve decisions," +
   " TODOs, open questions, and any constraints.";
+const MAX_METADATA_ITEMS = 12;
+const MAX_METADATA_ITEM_CHARS = 220;
+const PATH_KEY_NAMES = new Set(["path", "file_path", "filepath"]);
+const FILE_PATH_RE =
+  /(?:^|[\s"'`([])(\/?(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.[A-Za-z0-9._-]{1,12})(?=$|[\s"'`),\]:;])/g;
+
+type CompactionContextMetadata = {
+  filesTouched: string[];
+  keyDecisions: string[];
+  pendingItems: string[];
+  errorResolutions: string[];
+};
+
+function truncateMetadataItem(value: string): string {
+  if (value.length <= MAX_METADATA_ITEM_CHARS) {
+    return value;
+  }
+  return `${value.slice(0, Math.max(1, MAX_METADATA_ITEM_CHARS - 1))}…`;
+}
+
+function normalizeMetadataItems(values: Set<string>): string[] {
+  return [...values]
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map(truncateMetadataItem)
+    .slice(0, MAX_METADATA_ITEMS);
+}
+
+function collectFilePathsFromText(text: string, out: Set<string>) {
+  for (const match of text.matchAll(FILE_PATH_RE)) {
+    const candidate = match[1]?.trim();
+    if (!candidate) {
+      continue;
+    }
+    if (!candidate.includes("/")) {
+      continue;
+    }
+    out.add(candidate);
+  }
+}
+
+function collectFilePathsFromUnknown(
+  value: unknown,
+  out: Set<string>,
+  seen: Set<unknown> = new Set(),
+): void {
+  if (!value || (typeof value !== "object" && typeof value !== "string")) {
+    return;
+  }
+  if (typeof value === "string") {
+    collectFilePathsFromText(value, out);
+    return;
+  }
+  if (seen.has(value)) {
+    return;
+  }
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectFilePathsFromUnknown(item, out, seen);
+    }
+    return;
+  }
+
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    const normalizedKey = key.trim().toLowerCase();
+    if (PATH_KEY_NAMES.has(normalizedKey) && typeof child === "string" && child.trim()) {
+      out.add(child.trim());
+    }
+    collectFilePathsFromUnknown(child, out, seen);
+  }
+}
+
+function messageToText(msg: AgentMessage): string {
+  const content = (msg as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const record = block as Record<string, unknown>;
+    if (typeof record.text === "string") {
+      parts.push(record.text);
+    }
+    if (typeof record.thinking === "string") {
+      parts.push(record.thinking);
+    }
+    if (record.type === "toolCall") {
+      try {
+        parts.push(JSON.stringify(record.arguments ?? {}));
+      } catch {
+        // ignore serialization errors
+      }
+    }
+  }
+
+  return parts.join("\n");
+}
+
+function collectTaggedLines(text: string, matcher: RegExp, out: Set<string>) {
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (matcher.test(trimmed)) {
+      out.add(trimmed);
+    }
+  }
+}
+
+function extractCompactionContextMetadata(messages: AgentMessage[]): CompactionContextMetadata {
+  const files = new Set<string>();
+  const decisions = new Set<string>();
+  const pending = new Set<string>();
+  const errorResolution = new Set<string>();
+
+  for (const msg of messages) {
+    const role = (msg as { role?: string }).role ?? "";
+    const text = messageToText(msg);
+
+    collectFilePathsFromUnknown(msg, files);
+    if (text) {
+      collectFilePathsFromText(text, files);
+      collectTaggedLines(
+        text,
+        /\b(decision|decided|agreed|confirmed|approved|important|remember this|must)\b/i,
+        decisions,
+      );
+      collectTaggedLines(
+        text,
+        /\b(todo|to do|pending|follow[- ]?up|next step|remaining|need to)\b/i,
+        pending,
+      );
+      collectTaggedLines(
+        text,
+        /\b(error|failed|failure|exception|traceback|timed out|timeout|resolved|fixed|workaround|mitigated|retry)\b/i,
+        errorResolution,
+      );
+    }
+
+    if (role === "toolResult" || role === "tool") {
+      const toolName =
+        ((msg as { toolName?: unknown }).toolName as string | undefined) ||
+        ((msg as { name?: unknown }).name as string | undefined) ||
+        "";
+      const normalizedToolName = toolName.trim().toLowerCase();
+      if (["read", "edit", "write"].includes(normalizedToolName)) {
+        collectFilePathsFromUnknown(msg, files);
+      }
+    }
+  }
+
+  return {
+    filesTouched: normalizeMetadataItems(files),
+    keyDecisions: normalizeMetadataItems(decisions),
+    pendingItems: normalizeMetadataItems(pending),
+    errorResolutions: normalizeMetadataItems(errorResolution),
+  };
+}
+
+function renderMetadataList(items: string[]): string {
+  if (items.length === 0) {
+    return "- none noted";
+  }
+  return items.map((item) => `- ${item}`).join("\n");
+}
+
+function buildCompactionInstructions(
+  customInstructions: string | undefined,
+  metadata: CompactionContextMetadata,
+): string {
+  const instructionSections = [
+    "Preserve the following with high fidelity:",
+    "- User preferences, corrections, and explicit confirmations.",
+    "- System and tool configuration details (provider/model/settings/environment).",
+    "- File paths plus the purpose/context of each file.",
+    "- Any lines marked as important/remember this.",
+    "- Error messages and how they were resolved.",
+    "- TODOs, pending work, and next actions.",
+  ];
+
+  if (metadata.filesTouched.length > 0) {
+    instructionSections.push(`Known files touched:\n${renderMetadataList(metadata.filesTouched)}`);
+  }
+  if (metadata.pendingItems.length > 0) {
+    instructionSections.push(`Known pending items:\n${renderMetadataList(metadata.pendingItems)}`);
+  }
+
+  if (customInstructions?.trim()) {
+    instructionSections.push(`Additional instructions:\n${customInstructions.trim()}`);
+  }
+
+  return instructionSections.join("\n\n");
+}
+
+function prependCompactionContextSection(
+  summary: string,
+  metadata: CompactionContextMetadata,
+): string {
+  const summaryBody = summary.trim() || DEFAULT_SUMMARY_FALLBACK;
+  const section = [
+    "## Context from compacted history",
+    "### Files touched:",
+    renderMetadataList(metadata.filesTouched),
+    "",
+    "### Key decisions:",
+    renderMetadataList(metadata.keyDecisions),
+    "",
+    "### Pending items:",
+    renderMetadataList(metadata.pendingItems),
+    "",
+    "### Errors and resolutions:",
+    renderMetadataList(metadata.errorResolutions),
+    "",
+    "### Conversation summary:",
+    summaryBody,
+  ];
+
+  return section.join("\n");
+}
 
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
   // SECURITY: toolResult.details can contain untrusted/verbose payloads; never include in LLM-facing compaction.
@@ -275,17 +504,27 @@ export async function summarizeInStages(params: {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
   }
 
+  const metadata = extractCompactionContextMetadata(messages);
+  const enhancedInstructions = buildCompactionInstructions(params.customInstructions, metadata);
   const minMessagesForSplit = Math.max(2, params.minMessagesForSplit ?? 4);
   const parts = normalizeParts(params.parts ?? DEFAULT_PARTS, messages.length);
   const totalTokens = estimateMessagesTokens(messages);
 
   if (parts <= 1 || messages.length < minMessagesForSplit || totalTokens <= params.maxChunkTokens) {
-    return summarizeWithFallback(params);
+    const summary = await summarizeWithFallback({
+      ...params,
+      customInstructions: enhancedInstructions,
+    });
+    return prependCompactionContextSection(summary, metadata);
   }
 
   const splits = splitMessagesByTokenShare(messages, parts).filter((chunk) => chunk.length > 0);
   if (splits.length <= 1) {
-    return summarizeWithFallback(params);
+    const summary = await summarizeWithFallback({
+      ...params,
+      customInstructions: enhancedInstructions,
+    });
+    return prependCompactionContextSection(summary, metadata);
   }
 
   const partialSummaries: string[] = [];
@@ -294,13 +533,14 @@ export async function summarizeInStages(params: {
       await summarizeWithFallback({
         ...params,
         messages: chunk,
+        customInstructions: enhancedInstructions,
         previousSummary: undefined,
       }),
     );
   }
 
   if (partialSummaries.length === 1) {
-    return partialSummaries[0];
+    return prependCompactionContextSection(partialSummaries[0], metadata);
   }
 
   const summaryMessages: AgentMessage[] = partialSummaries.map((summary) => ({
@@ -309,15 +549,15 @@ export async function summarizeInStages(params: {
     timestamp: Date.now(),
   }));
 
-  const mergeInstructions = params.customInstructions
-    ? `${MERGE_SUMMARIES_INSTRUCTIONS}\n\nAdditional focus:\n${params.customInstructions}`
-    : MERGE_SUMMARIES_INSTRUCTIONS;
+  const mergeInstructions = `${MERGE_SUMMARIES_INSTRUCTIONS}\n\nAdditional focus:\n${enhancedInstructions}`;
 
-  return summarizeWithFallback({
+  const mergedSummary = await summarizeWithFallback({
     ...params,
     messages: summaryMessages,
     customInstructions: mergeInstructions,
   });
+
+  return prependCompactionContextSection(mergedSummary, metadata);
 }
 
 export function pruneHistoryForContextShare(params: {

@@ -490,6 +490,15 @@ export async function runEmbeddedPiAgent(
         }
       }
 
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "usage",
+        data: {
+          phase: "context",
+          contextWindow: ctxInfo.tokens,
+        },
+      });
+
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
       const MAX_RUN_LOOP_ITERATIONS = MAX_RUN_RETRY_ITERATIONS;
       let overflowCompactionAttempts = 0;

@@ -165,6 +165,91 @@ describe("subagent-relay", () => {
       expect(msg).toContain("🔒 sandbox");
     });
 
+    it("shows context usage in header when usage + context window are available", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "ctx-test",
+        model: "anthropic/claude-opus-4-6",
+        toolEntries: [],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 0,
+        status: "running",
+        contextUsedTokens: 45_123,
+        contextWindowTokens: 200_000,
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+      expect(msg).toContain("45k/200k ctx");
+    });
+
+    it("renders a live thinking snippet line outside the tool spoiler", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "thinking-test",
+        model: "anthropic/claude-opus-4-6",
+        toolEntries: [{ line: "[+0:01] 📄 read: /tmp/a.ts", name: "read" }],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 1,
+        status: "running",
+        thinkingSnippet: "Analyzing the file structure to determine the safest patch path...",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+
+      expect(msg).toContain(
+        "_💭 Analyzing the file structure to determine the safest patch path..._",
+      );
+    });
+
+    it("renders one-level nested child tool lines under sessions_spawn entries", () => {
+      const childState = {
+        runId: "child-run",
+        label: "child-task",
+        model: "anthropic/claude-sonnet-4-20250514",
+        toolEntries: [
+          { line: "[+0:01] 📄 read: /tmp/child.ts", name: "read" },
+          { line: "[+0:02] 🔧 exec: pnpm test", name: "exec" },
+        ],
+        pendingToolCallIds: new Map(),
+        startedAt: 2_000,
+        toolCount: 2,
+        status: "running",
+        lastUpdatedAt: 6_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      };
+
+      const msg = renderRelayMessage(
+        {
+          runId: "parent-run",
+          label: "parent-task",
+          model: "anthropic/claude-opus-4-6",
+          toolEntries: [
+            {
+              line: "[+0:03] 🧑‍💻 sessions spawn: do child work",
+              name: "sessions_spawn",
+              childRunId: "child-run",
+            },
+          ],
+          pendingToolCallIds: new Map(),
+          startedAt: 1_000,
+          toolCount: 1,
+          status: "running",
+          lastUpdatedAt: 5_000,
+          deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+        },
+        undefined,
+        {
+          resolveChildState: (runId) => (runId === "child-run" ? childState : undefined),
+        },
+      );
+
+      expect(msg).toContain("↳ 🔄 child-task");
+      expect(msg).toContain("[+0:01] 📄 read: /tmp/child.ts");
+      expect(msg).toContain("[+0:02] 🔧 exec: pnpm test");
+    });
+
     it("renders nested spoiler per tool result with tool name heading", () => {
       const msg = renderRelayMessage({
         runId: "test-run",
