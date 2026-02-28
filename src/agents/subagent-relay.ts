@@ -50,6 +50,10 @@ export type ToolEntry = {
   completedAtMs?: number;
   resultText?: string;
   isError?: boolean;
+  /** For edit tools: the old and new strings from args. */
+  editDiff?: { oldText: string; newText: string };
+  /** For write tools: preview of content being written. */
+  writePreview?: string;
   /** child runId for sessions_spawn calls when available. */
   childRunId?: string;
 };
@@ -655,6 +659,8 @@ export function extractProfileShortName(profileId: string): string {
 const RELAY_COMPLETION_TEXT_MAX_CHARS = 2000;
 /** Maximum characters of per-tool result text to embed in nested spoiler blocks. */
 const RELAY_TOOL_RESULT_MAX_CHARS = 1000;
+/** Maximum characters of edit/write previews captured from tool args. */
+const RELAY_TOOL_PREVIEW_MAX_CHARS = 500;
 
 const RELAY_SUMMARY_ORDER = [
   "read",
@@ -702,64 +708,50 @@ function formatToolDuration(startedAtMs?: number, completedAtMs?: number): strin
   return `${(elapsedMs / 1000).toFixed(1)}s`;
 }
 
-function normalizeEditDiffField(value: unknown): string | undefined {
+function truncatePreviewText(value: string, maxChars = RELAY_TOOL_PREVIEW_MAX_CHARS): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+  return value.slice(0, maxChars);
+}
+
+function normalizeNonEmptyString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const trimmed = value.trim();
-  return trimmed || undefined;
+  return value.trim() ? value : undefined;
 }
 
-function parseEditDiffFromResult(resultText: string): string | undefined {
-  const trimmed = resultText.trim();
-  if (!trimmed) {
-    return undefined;
+function formatDiffLines(prefix: "-" | "+", value: string): string[] {
+  const safeValue = sanitizeForCodeFence(truncatePreviewText(value));
+  return safeValue.split("\n").map((line) => `${prefix} ${line}`);
+}
+
+function renderToolDetailLines(entry: ToolEntry): string[] {
+  const details: string[] = [];
+
+  if (entry.editDiff) {
+    details.push("```diff");
+    details.push(...formatDiffLines("-", entry.editDiff.oldText));
+    details.push(...formatDiffLines("+", entry.editDiff.newText));
+    details.push("```");
   }
 
-  const looksLikeDiff =
-    /(^|\n)[+-]\s+/m.test(trimmed) ||
-    trimmed.includes("```diff") ||
-    (trimmed.includes("\n-") && trimmed.includes("\n+"));
-  if (looksLikeDiff) {
-    return trimmed;
-  }
-
-  const candidates = [trimmed];
-  const jsonFenceMatch = trimmed.match(/```json\s*([\s\S]*?)```/i);
-  if (jsonFenceMatch?.[1]) {
-    candidates.push(jsonFenceMatch[1].trim());
-  }
-
-  for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate) as Record<string, unknown>;
-      const oldValue =
-        normalizeEditDiffField(parsed.old_string) ??
-        normalizeEditDiffField(parsed.oldText) ??
-        normalizeEditDiffField(parsed.old);
-      const newValue =
-        normalizeEditDiffField(parsed.new_string) ??
-        normalizeEditDiffField(parsed.newText) ??
-        normalizeEditDiffField(parsed.new);
-      if (oldValue && newValue) {
-        return `- ${oldValue}\n+ ${newValue}`;
-      }
-    } catch {
-      // fall through to regex parsing
+  const writePreview = normalizeNonEmptyString(entry.writePreview);
+  if (writePreview) {
+    const preview = truncatePreviewText(writePreview);
+    const previewBytes = Buffer.byteLength(preview, "utf8");
+    const wasTruncated = writePreview.length >= RELAY_TOOL_PREVIEW_MAX_CHARS;
+    details.push(`**Content** (${previewBytes} bytes):`);
+    details.push("```");
+    details.push(sanitizeForCodeFence(preview));
+    details.push("```");
+    if (wasTruncated) {
+      details.push("_(truncated)_");
     }
   }
 
-  const oldMatch = trimmed.match(/old(?:_string|Text)?\s*[:=]\s*(.+)/i);
-  const newMatch = trimmed.match(/new(?:_string|Text)?\s*[:=]\s*(.+)/i);
-  if (oldMatch?.[1] && newMatch?.[1]) {
-    const oldValue = oldMatch[1].trim().replace(/^['"`]|['"`]$/g, "");
-    const newValue = newMatch[1].trim().replace(/^['"`]|['"`]$/g, "");
-    if (oldValue && newValue) {
-      return `- ${oldValue}\n+ ${newValue}`;
-    }
-  }
-
-  return undefined;
+  return details;
 }
 
 function renderToolResultText(entry: ToolEntry): string | undefined {
@@ -767,10 +759,7 @@ function renderToolResultText(entry: ToolEntry): string | undefined {
   if (!base) {
     return undefined;
   }
-  if (entry.name.trim().toLowerCase() !== "edit") {
-    return base;
-  }
-  return parseEditDiffFromResult(base) ?? base;
+  return base;
 }
 
 function findLastPendingEntryIndex(entries: ToolEntry[], status?: RelayState["status"]): number {
@@ -953,15 +942,21 @@ function renderRelayMessageToolLines(
     toolCallLines.push(`${sanitizeForCodeFence(entry.line)}${pendingSuffix}`);
 
     const resultText = renderToolResultText(entry);
-    if (resultText) {
-      const truncated =
-        resultText.length > RELAY_TOOL_RESULT_MAX_CHARS
-          ? `${truncateMarkdownSafe(resultText, RELAY_TOOL_RESULT_MAX_CHARS)}\n\n_(truncated)_`
-          : resultText;
-      const safeResult = sanitizeForCodeFence(truncated);
+    const detailLines = renderToolDetailLines(entry);
+    if (resultText || detailLines.length > 0) {
       const spoilerTitle = buildToolSpoilerTitle(entry);
       toolCallLines.push(`\`\`\`spoiler ${spoilerTitle}`);
-      toolCallLines.push(safeResult);
+      for (const detailLine of detailLines) {
+        toolCallLines.push(detailLine);
+      }
+      if (resultText) {
+        const truncated =
+          resultText.length > RELAY_TOOL_RESULT_MAX_CHARS
+            ? `${truncateMarkdownSafe(resultText, RELAY_TOOL_RESULT_MAX_CHARS)}\n\n_(truncated)_`
+            : resultText;
+        const safeResult = sanitizeForCodeFence(truncated);
+        toolCallLines.push(safeResult);
+      }
       toolCallLines.push("```");
     }
 
@@ -1823,6 +1818,28 @@ function handleToolEvent(evt: AgentEventPayload) {
       name: toolName,
       startedAtMs: eventTs,
     };
+
+    const normalizedToolName = toolName.trim().toLowerCase();
+    if (normalizedToolName === "edit") {
+      const oldText =
+        normalizeNonEmptyString(argsRecord.old_string) ??
+        normalizeNonEmptyString(argsRecord.oldText);
+      const newText =
+        normalizeNonEmptyString(argsRecord.new_string) ??
+        normalizeNonEmptyString(argsRecord.newText);
+      if (oldText && newText) {
+        entry.editDiff = {
+          oldText: truncatePreviewText(oldText),
+          newText: truncatePreviewText(newText),
+        };
+      }
+    } else if (normalizedToolName === "write") {
+      const content = normalizeNonEmptyString(argsRecord.content);
+      if (content) {
+        entry.writePreview = truncatePreviewText(content);
+      }
+    }
+
     const toolCallId = typeof evt.data?.toolCallId === "string" ? evt.data.toolCallId.trim() : "";
     const entryIndex = state.toolEntries.push(entry) - 1;
     if (toolCallId) {
