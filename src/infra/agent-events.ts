@@ -17,10 +17,34 @@ export type AgentRunContext = {
   isHeartbeat?: boolean;
 };
 
+type AgentEventsSharedState = {
+  seqByRun: Map<string, number>;
+  listeners: Set<(evt: AgentEventPayload) => void>;
+  runContextById: Map<string, AgentRunContext>;
+};
+
+const AGENT_EVENTS_SHARED_STATE_KEY = Symbol.for("openclaw.agent-events.shared-state");
+
+function getAgentEventsSharedState(): AgentEventsSharedState {
+  const globalScope = globalThis as typeof globalThis & {
+    [AGENT_EVENTS_SHARED_STATE_KEY]?: AgentEventsSharedState;
+  };
+  if (!globalScope[AGENT_EVENTS_SHARED_STATE_KEY]) {
+    globalScope[AGENT_EVENTS_SHARED_STATE_KEY] = {
+      seqByRun: new Map<string, number>(),
+      listeners: new Set<(evt: AgentEventPayload) => void>(),
+      runContextById: new Map<string, AgentRunContext>(),
+    };
+  }
+  return globalScope[AGENT_EVENTS_SHARED_STATE_KEY];
+}
+
+const sharedState = getAgentEventsSharedState();
+
 // Keep per-run counters so streams stay strictly monotonic per runId.
-const seqByRun = new Map<string, number>();
-const listeners = new Set<(evt: AgentEventPayload) => void>();
-const runContextById = new Map<string, AgentRunContext>();
+const seqByRun = sharedState.seqByRun;
+const listeners = sharedState.listeners;
+const runContextById = sharedState.runContextById;
 
 export function registerAgentRunContext(runId: string, context: AgentRunContext) {
   if (!runId) {
