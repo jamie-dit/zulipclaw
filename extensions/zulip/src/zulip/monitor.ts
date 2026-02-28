@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk";
 import { createReplyPrefixOptions } from "openclaw/plugin-sdk";
+import {
+  isRelayRunRegistered,
+  registerMainRelayRun,
+  updateRelayRunModel,
+} from "../../../../src/agents/subagent-relay.js";
 import { getZulipRuntime } from "../runtime.js";
 import {
   resolveZulipAccount,
@@ -135,6 +140,10 @@ export const DEFAULT_DISPATCH_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
 export const KEEPALIVE_INITIAL_DELAY_MS = 25_000;
 export const KEEPALIVE_REPEAT_INTERVAL_MS = 60_000;
 export const ZULIP_RECOVERY_NOTICE = "🔄 Gateway restarted - resuming the previous task now...";
+
+function buildMainRelayRunId(accountId: string, messageId: number): string {
+  return `zulip-main:${accountId}:${messageId}`;
+}
 
 function formatKeepaliveElapsed(elapsedMs: number): string {
   const totalSeconds = Math.max(1, Math.floor(elapsedMs / 1000));
@@ -1289,6 +1298,10 @@ export async function monitorZulipProvider(
         runtime.error?.(`[zulip] failed to persist in-flight checkpoint: ${String(err)}`);
       }
 
+      const mainRelayRunId = buildMainRelayRunId(account.accountId, msg.id);
+      let mainRelayRegistered = false;
+      let mainRelayModel = "default";
+
       const { onModelSelected: originalOnModelSelected, ...prefixOptions } =
         createReplyPrefixOptions({
           cfg,
@@ -1299,9 +1312,13 @@ export async function monitorZulipProvider(
       const onModelSelected = (ctx: { model: string; provider?: string; thinkLevel?: string }) => {
         originalOnModelSelected(ctx);
         if (ctx.model) {
+          mainRelayModel = ctx.model;
           toolProgress.setModel(ctx.model);
+          updateRelayRunModel(mainRelayRunId, ctx.model);
         }
       };
+
+      const isMainRelayActive = () => mainRelayRegistered && isRelayRunRegistered(mainRelayRunId);
 
       let successfulDeliveries = 0;
       const toolProgress = new ToolProgressAccumulator({
@@ -1322,6 +1339,10 @@ export async function monitorZulipProvider(
             // Only batch text-only tool payloads; media payloads go through normally.
             const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
             if (kind === "tool" && !hasMedia && payload.text?.trim()) {
+              if (isMainRelayActive()) {
+                // Main relay renders structured tool calls via AgentEvent stream.
+                return;
+              }
               toolProgress.addLine(payload.text.trim());
               // Count as a successful delivery since the accumulator handles send/edit.
               successfulDeliveries += 1;
@@ -1371,6 +1392,9 @@ export async function monitorZulipProvider(
 
       const stopKeepalive = startPeriodicKeepalive({
         sendPing: async (elapsedMs) => {
+          if (isMainRelayActive()) {
+            return;
+          }
           // If tool progress has an active batched message, update it with
           // a heartbeat instead of sending a separate keepalive message.
           if (toolProgress.hasContent) {
@@ -1387,6 +1411,18 @@ export async function monitorZulipProvider(
         },
       });
 
+      mainRelayRegistered =
+        registerMainRelayRun({
+          runId: mainRelayRunId,
+          label: botDisplayName,
+          model: mainRelayModel,
+          deliveryContext: {
+            channel: "zulip",
+            to,
+            accountId: account.accountId,
+          },
+        }) || mainRelayRegistered;
+
       let ok = false;
       let lastDispatchError: unknown;
       const MAX_DISPATCH_RETRIES = 2;
@@ -1402,8 +1438,23 @@ export async function monitorZulipProvider(
               dispatcher: dispatchDriver,
               replyOptions: {
                 ...replyOptions,
+                runId: mainRelayRunId,
                 disableBlockStreaming: true,
                 onModelSelected,
+                onAgentRunStart: (runId: string) => {
+                  replyOptions.onAgentRunStart?.(runId);
+                  const registered = registerMainRelayRun({
+                    runId,
+                    label: botDisplayName,
+                    model: mainRelayModel,
+                    deliveryContext: {
+                      channel: "zulip",
+                      to,
+                      accountId: account.accountId,
+                    },
+                  });
+                  mainRelayRegistered = registered || mainRelayRegistered;
+                },
               },
             });
             ok = true;

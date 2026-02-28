@@ -28,6 +28,8 @@ export type SubagentRelayDeliveryContext = {
   accountId?: string;
 };
 
+export type RelayRunKind = "subagent" | "main";
+
 export type SubagentRelayRegistration = {
   runId: string;
   label?: string;
@@ -41,6 +43,27 @@ export type SubagentRelayRegistration = {
   /** True when this sub-agent run is known to execute in the sandbox. */
   sandboxed?: boolean;
   /** Model context window tokens for this run, when known at registration time. */
+  contextWindowTokens?: number;
+};
+
+export type MainRelayRegistration = {
+  runId: string;
+  label?: string;
+  model?: string;
+  startedAt?: number;
+  deliveryContext?: SubagentRelayDeliveryContext;
+};
+
+type RelayRegistration = {
+  runId: string;
+  label?: string;
+  model?: string;
+  startedAt?: number;
+  deliveryContext?: SubagentRelayDeliveryContext;
+  runKind: RelayRunKind;
+  parentRunId?: string;
+  childSessionKey?: string;
+  sandboxed?: boolean;
   contextWindowTokens?: number;
 };
 
@@ -63,6 +86,7 @@ export type ToolEntry = {
 
 export type RelayState = {
   runId: string;
+  runKind?: RelayRunKind;
   messageId?: string;
   /** Message ID of the mirrored relay message, if mirrorTopic is configured. */
   mirrorMessageId?: string;
@@ -136,7 +160,7 @@ const WATCHDOG_MAX_RESPAWN_COUNT = 2;
 /** Debounce delay for writing mirror state to disk. */
 const MIRROR_STATE_SAVE_DEBOUNCE_MS = 500;
 
-const registrationsByRun = new Map<string, SubagentRelayRegistration>();
+const registrationsByRun = new Map<string, RelayRegistration>();
 const relayByRun = new Map<string, RelayState>();
 const parentRunByChildRun = new Map<string, string>();
 let listenerInitialized = false;
@@ -359,6 +383,14 @@ function isSupportedZulipContext(ctx?: SubagentRelayDeliveryContext) {
     return false;
   }
   return normalized.to.includes("#");
+}
+
+function resolveRunKind(registration?: RelayRegistration): RelayRunKind {
+  return registration?.runKind === "main" ? "main" : "subagent";
+}
+
+function isSubagentRun(state: RelayState): boolean {
+  return state.runKind !== "main";
 }
 
 function truncate(value: string, max = 80) {
@@ -1281,7 +1313,7 @@ async function flushRelayMessage(runId: string, options?: { finalize?: boolean }
 
     // Mirror relay: best-effort, never blocks primary
     const { mirrorTopic } = resolveRelayConfig();
-    if (mirrorTopic) {
+    if (isSubagentRun(state) && mirrorTopic) {
       const originTopic = extractOriginTopic(state.deliveryContext.to);
       const mirrorMessage = renderRelayMessage(state, originTopic, {
         resolveChildState: (childRunId) => relayByRun.get(childRunId),
@@ -1301,7 +1333,9 @@ async function flushRelayMessage(runId: string, options?: { finalize?: boolean }
     }
     clearWatchdog(state);
     // Clean up the persisted mirror entry now that the run has completed cleanly
-    removeMirrorEntry(runId);
+    if (isSubagentRun(state)) {
+      removeMirrorEntry(runId);
+    }
     relayByRun.delete(runId);
     registrationsByRun.delete(runId);
     parentRunByChildRun.delete(runId);
@@ -1353,6 +1387,20 @@ function getOrCreateRelayState(runId: string): RelayState | undefined {
       existing.parentRunId = parentRunId;
       parentRunByChildRun.set(runId, parentRunId);
     }
+    if (registration) {
+      existing.runKind = resolveRunKind(registration);
+      const label = registration.label?.trim();
+      if (label) {
+        existing.label = label;
+      }
+      const model = registration.model?.trim();
+      if (model) {
+        existing.model = model;
+      }
+      if (registration.sandboxed === true) {
+        existing.sandboxed = true;
+      }
+    }
     return existing;
   }
   const registration = registrationsByRun.get(runId);
@@ -1373,9 +1421,11 @@ function getOrCreateRelayState(runId: string): RelayState | undefined {
   const inferredContextWindow =
     registrationContextWindow ??
     toFinitePositiveInt(lookupContextTokens(registration.model?.trim() || ""));
+  const runKind = resolveRunKind(registration);
   const state: RelayState = {
     runId,
-    label: registration.label?.trim() || "worker",
+    runKind,
+    label: registration.label?.trim() || (runKind === "main" ? "assistant" : "worker"),
     model: registration.model?.trim() || "default",
     sandboxed: registration.sandboxed === true,
     startedAt,
@@ -1895,8 +1945,10 @@ function handleToolEvent(evt: AgentEventPayload) {
     state.toolCount += 1;
     scheduleRelayFlush(evt.runId);
 
-    // Reset watchdog timer on every tool call start
-    resetWatchdog(evt.runId, toolName, argsRecord);
+    // Reset watchdog timer on every tool call start (sub-agent runs only).
+    if (isSubagentRun(state)) {
+      resetWatchdog(evt.runId, toolName, argsRecord);
+    }
     return;
   }
 
@@ -2202,9 +2254,16 @@ function handleLifecycleEvent(evt: AgentEventPayload) {
   // Preserve "error" status if already set (e.g. by watchdog detecting a dead agent).
   // A lifecycle "end" event fired after watchdog detection should not overwrite the ❌.
   state.status = failed || state.status === "error" ? "error" : "ok";
-  // Read the sub-agent's completion text before finalizing so the relay
-  // message includes the actual output alongside tool call history.
-  void finalizeRelayWithOutput(evt.runId);
+
+  if (isSubagentRun(state)) {
+    // Read the sub-agent's completion text before finalizing so the relay
+    // message includes the actual output alongside tool call history.
+    void finalizeRelayWithOutput(evt.runId);
+    return;
+  }
+
+  // Main-session runs do not have child history snapshots.
+  void flushRelayMessage(evt.runId, { finalize: true });
 }
 
 export function initSubagentRelay() {
@@ -2246,14 +2305,17 @@ export function initSubagentRelay() {
   });
 }
 
-export function registerSubagentRelayRun(params: SubagentRelayRegistration) {
+function upsertRelayRegistration(params: RelayRegistration): boolean {
   const runId = params.runId?.trim();
   if (!runId || !isRelayEnabled()) {
-    return;
+    return false;
   }
   if (!isSupportedZulipContext(params.deliveryContext)) {
-    return;
+    return false;
   }
+
+  initSubagentRelay();
+
   const parentRunId = typeof params.parentRunId === "string" ? params.parentRunId.trim() : "";
   if (parentRunId) {
     parentRunByChildRun.set(runId, parentRunId);
@@ -2264,6 +2326,7 @@ export function registerSubagentRelayRun(params: SubagentRelayRegistration) {
 
   registrationsByRun.set(runId, {
     runId,
+    runKind: params.runKind,
     label: params.label,
     model: params.model,
     startedAt: params.startedAt,
@@ -2273,14 +2336,71 @@ export function registerSubagentRelayRun(params: SubagentRelayRegistration) {
     sandboxed: params.sandboxed === true,
     contextWindowTokens: inferredContextWindow,
   });
+
   const state = relayByRun.get(runId);
   if (state) {
+    state.runKind = params.runKind;
     if (parentRunId) {
       state.parentRunId = parentRunId;
+    }
+    const label = params.label?.trim();
+    if (label) {
+      state.label = label;
+    }
+    const model = params.model?.trim();
+    if (model) {
+      state.model = model;
+    }
+    if (params.sandboxed === true) {
+      state.sandboxed = true;
     }
     if (!state.contextWindowTokens && inferredContextWindow) {
       state.contextWindowTokens = inferredContextWindow;
     }
+  }
+
+  return true;
+}
+
+export function registerSubagentRelayRun(params: SubagentRelayRegistration) {
+  void upsertRelayRegistration({
+    ...params,
+    runKind: "subagent",
+  });
+}
+
+export function registerMainRelayRun(params: MainRelayRegistration): boolean {
+  return upsertRelayRegistration({
+    ...params,
+    runKind: "main",
+  });
+}
+
+export function isRelayRunRegistered(runId: string): boolean {
+  const key = runId.trim();
+  if (!key) {
+    return false;
+  }
+  return registrationsByRun.has(key);
+}
+
+export function updateRelayRunModel(runId: string, model?: string): void {
+  const key = runId.trim();
+  const normalizedModel = typeof model === "string" ? model.trim() : "";
+  if (!key || !normalizedModel) {
+    return;
+  }
+
+  const registration = registrationsByRun.get(key);
+  if (registration) {
+    registration.model = normalizedModel;
+    registrationsByRun.set(key, registration);
+  }
+
+  const state = relayByRun.get(key);
+  if (state && state.model !== normalizedModel) {
+    state.model = normalizedModel;
+    scheduleRelayFlush(key);
   }
 }
 

@@ -20,6 +20,9 @@ const mocks = vi.hoisted(() => ({
   prepareZulipCheckpointForRecovery: vi.fn(),
   markZulipCheckpointFailure: vi.fn(),
   buildZulipCheckpointId: vi.fn(),
+  registerMainRelayRun: vi.fn(),
+  isRelayRunRegistered: vi.fn(),
+  updateRelayRunModel: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk", async (importOriginal) => {
@@ -75,11 +78,20 @@ vi.mock("./inflight-checkpoints.js", () => ({
   buildZulipCheckpointId: mocks.buildZulipCheckpointId,
 }));
 
+vi.mock("../../../../src/agents/subagent-relay.js", () => ({
+  registerMainRelayRun: mocks.registerMainRelayRun,
+  isRelayRunRegistered: mocks.isRelayRunRegistered,
+  updateRelayRunModel: mocks.updateRelayRunModel,
+}));
+
 import { monitorZulipProvider } from "./monitor.js";
 
 describe("monitorZulipProvider cleanup race", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.registerMainRelayRun.mockReturnValue(false);
+    mocks.isRelayRunRegistered.mockReturnValue(false);
+    mocks.updateRelayRunModel.mockImplementation(() => undefined);
     mocks.loadZulipInFlightCheckpoints.mockResolvedValue([]);
     mocks.isZulipCheckpointStale.mockReturnValue(false);
     mocks.prepareZulipCheckpointForRecovery.mockImplementation(
@@ -340,5 +352,193 @@ describe("monitorZulipProvider cleanup race", () => {
 
     // Regression assertion: if cleanup aborts too early, sendZulipStreamMessage would reject
     // with AbortError before waitForIdle settles and firstSendOutcome would be "aborted".
+  });
+
+  it("skips legacy tool batching when main relay registration is active", async () => {
+    mocks.registerMainRelayRun.mockReturnValue(true);
+    mocks.isRelayRunRegistered.mockReturnValue(true);
+
+    const pendingDeliveries: Array<Promise<void>> = [];
+    let deliverFn:
+      | ((payload: { text?: string }, info?: { kind: string }) => Promise<void>)
+      | undefined;
+
+    const dispatcher = {
+      sendToolResult: vi.fn((payload: { text?: string }) => {
+        if (deliverFn) {
+          pendingDeliveries.push(deliverFn(payload, { kind: "tool" }));
+        }
+        return true;
+      }),
+      sendBlockReply: vi.fn(() => true),
+      sendFinalReply: vi.fn((payload: { text?: string }) => {
+        if (deliverFn) {
+          pendingDeliveries.push(deliverFn(payload, { kind: "final" }));
+        }
+        return true;
+      }),
+      waitForIdle: vi.fn(async () => {
+        await Promise.all(pendingDeliveries);
+      }),
+      getQueuedCounts: vi.fn(() => ({ tool: 1, block: 0, final: 1 })),
+      markComplete: vi.fn(),
+    };
+
+    const dispatchReplyFromConfig = vi.fn(
+      async ({ dispatcher: d }: { dispatcher: typeof dispatcher }) => {
+        d.sendToolResult({ text: "[tool] read file" });
+        d.sendFinalReply({ text: "final response" });
+      },
+    );
+
+    const runtime = {
+      logging: {
+        getChildLogger: vi.fn(() => ({
+          info: vi.fn(),
+          warn: vi.fn(),
+          debug: vi.fn(),
+          error: vi.fn(),
+        })),
+      },
+      channel: {
+        text: {
+          chunkMarkdownText: vi.fn((text: string) => [text]),
+        },
+        activity: {
+          record: vi.fn(),
+        },
+        routing: {
+          resolveAgentRoute: vi.fn(() => ({
+            sessionKey: "session-key",
+            agentId: "agent-1",
+            accountId: "acc-1",
+          })),
+        },
+        mentions: {
+          buildMentionRegexes: vi.fn(() => []),
+          matchesMentionPatterns: vi.fn(() => false),
+        },
+        reply: {
+          formatInboundEnvelope: vi.fn(({ body }: { body: string }) => body),
+          finalizeInboundContext: vi.fn((ctx: object) => ctx),
+          createReplyDispatcherWithTyping: vi.fn(
+            ({
+              deliver,
+            }: {
+              deliver: (payload: { text?: string }, info?: { kind: string }) => Promise<void>;
+            }) => {
+              deliverFn = deliver;
+              return {
+                dispatcher,
+                replyOptions: {},
+                markDispatchIdle: vi.fn(),
+              };
+            },
+          ),
+          resolveHumanDelayConfig: vi.fn(() => ({ mode: "off" })),
+          dispatchReplyFromConfig,
+        },
+      },
+      config: {
+        loadConfig: vi.fn(() => ({})),
+      },
+    };
+
+    mocks.getZulipRuntime.mockReturnValue(runtime);
+    mocks.createReplyPrefixOptions.mockReturnValue({ onModelSelected: undefined });
+    mocks.resolveZulipAccount.mockReturnValue({
+      accountId: "default",
+      baseUrl: "https://zulip.example.com",
+      email: "bot@zulip.example.com",
+      apiKey: "api-key",
+      streams: ["marcel"],
+      defaultTopic: "general",
+      alwaysReply: true,
+      textChunkLimit: 10_000,
+      reactions: {
+        enabled: false,
+        onStart: "eyes",
+        onSuccess: "check",
+        onFailure: "warning",
+        clearOnFinish: true,
+      },
+    });
+
+    mocks.buildZulipQueuePlan.mockReturnValue([{ stream: "marcel" }]);
+    mocks.buildZulipRegisterNarrow.mockReturnValue(JSON.stringify([["stream", "marcel"]]));
+    mocks.loadZulipInFlightCheckpoints.mockResolvedValue([]);
+
+    let pollCount = 0;
+    mocks.zulipRequest.mockImplementation(
+      async ({ path, method }: { path: string; method: string }) => {
+        if (path === "/api/v1/users/me") {
+          return { result: "success", user_id: 9 };
+        }
+        if (path === "/api/v1/register") {
+          return { result: "success", queue_id: "queue-1", last_event_id: 100 };
+        }
+        if (path === "/api/v1/events" && method === "DELETE") {
+          return { result: "success" };
+        }
+        if (path === "/api/v1/events") {
+          pollCount += 1;
+          if (pollCount === 1) {
+            return {
+              result: "success",
+              events: [
+                {
+                  id: 101,
+                  message: {
+                    id: 777,
+                    type: "stream",
+                    sender_id: 55,
+                    sender_full_name: "Tester",
+                    display_recipient: "marcel",
+                    stream_id: 42,
+                    subject: "general",
+                    content: "hello",
+                    timestamp: Math.floor(Date.now() / 1000),
+                  },
+                },
+              ],
+            };
+          }
+          return { result: "success", events: [] };
+        }
+        if (path === "/api/v1/typing") {
+          return { result: "success" };
+        }
+        return { result: "success" };
+      },
+    );
+
+    mocks.sendZulipStreamMessage.mockResolvedValue({ result: "success", id: 991 });
+    mocks.downloadZulipUploads.mockResolvedValue([]);
+    mocks.resolveOutboundMedia.mockResolvedValue({
+      buffer: Buffer.from(""),
+      contentType: "image/png",
+      filename: "x.png",
+    });
+    mocks.uploadZulipFile.mockResolvedValue("https://zulip.example.com/user_uploads/file.png");
+
+    const monitor = await monitorZulipProvider({
+      config: {} as never,
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    monitor.stop();
+    await (monitor as { done: Promise<void> }).done;
+
+    const contents = mocks.sendZulipStreamMessage.mock.calls.map((call) => call[0]?.content);
+    expect(contents).toContain("final response");
+    expect(contents).not.toContain("[tool] read file");
+    expect(mocks.registerMainRelayRun).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "zulip-main:default:777" }),
+    );
   });
 });
