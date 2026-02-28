@@ -63,9 +63,22 @@ import {
 } from "./tool-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
+const SANDBOX_TOOL_POLICY_BYPASS_GROUP_IDS = new Set([
+  "__openclaw_web_research__",
+  "__openclaw_web_research_browser__",
+]);
+
 function isOpenAIProvider(provider?: string) {
   const normalized = provider?.trim().toLowerCase();
   return normalized === "openai" || normalized === "openai-codex";
+}
+
+function shouldBypassSandboxToolPolicyForInternalGroup(groupId?: string | null): boolean {
+  const normalized = groupId?.trim();
+  if (!normalized) {
+    return false;
+  }
+  return SANDBOX_TOOL_POLICY_BYPASS_GROUP_IDS.has(normalized);
 }
 
 function isApplyPatchAllowedForModel(params: {
@@ -313,6 +326,9 @@ export function createOpenClawCodingTools(options?: {
     providerProfilePolicy,
     providerProfileAlsoAllow,
   );
+  const sandboxToolPolicy = shouldBypassSandboxToolPolicyForInternalGroup(options?.groupId)
+    ? undefined
+    : sandbox?.tools;
   // Prefer sessionKey for process isolation scope to prevent cross-session process visibility/killing.
   // Fallback to agentId if no sessionKey is available (e.g. legacy or global contexts).
   const scopeKey =
@@ -332,7 +348,7 @@ export function createOpenClawCodingTools(options?: {
     agentPolicy,
     agentProviderPolicy,
     groupPolicy,
-    sandbox?.tools,
+    sandboxToolPolicy,
     subagentPolicy,
   ]);
   const execConfig = resolveExecConfig({ cfg: options?.config, agentId });
@@ -501,7 +517,7 @@ export function createOpenClawCodingTools(options?: {
         agentPolicy,
         agentProviderPolicy,
         groupPolicy,
-        sandbox?.tools,
+        sandboxToolPolicy,
         subagentPolicy,
       ]),
       currentChannelId: options?.currentChannelId,
@@ -534,7 +550,7 @@ export function createOpenClawCodingTools(options?: {
         groupPolicy,
         agentId,
       }),
-      { policy: sandbox?.tools, label: "sandbox tools.allow" },
+      { policy: sandboxToolPolicy, label: "sandbox tools.allow" },
       { policy: subagentPolicy, label: "subagent tools.allow" },
     ],
   });
