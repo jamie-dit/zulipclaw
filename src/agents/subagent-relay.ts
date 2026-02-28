@@ -7,6 +7,7 @@ import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "../plugin-sdk/json-store.js";
 import { defaultRuntime } from "../runtime.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
+import { extractToolResultText } from "./pi-embedded-subscribe.tools.js";
 import {
   buildResumptionTask,
   readSessionProgressSummary,
@@ -39,6 +40,13 @@ export type SubagentRelayRegistration = {
 
 export type WatchdogStatus = "active" | "nudged" | "frozen";
 
+export type ToolEntry = {
+  line: string;
+  name: string;
+  resultText?: string;
+  isError?: boolean;
+};
+
 export type RelayState = {
   runId: string;
   messageId?: string;
@@ -50,7 +58,9 @@ export type RelayState = {
   authProfile?: string;
   /** True when this run executes in the sandbox. */
   sandboxed?: boolean;
-  toolLines: string[];
+  toolEntries: ToolEntry[];
+  /** toolCallId -> index within toolEntries; transient in-memory map only. */
+  pendingToolCallIds: Map<string, number>;
   startedAt: number;
   deliveryContext: {
     channel: string;
@@ -526,6 +536,8 @@ export function extractProfileShortName(profileId: string): string {
 
 /** Maximum characters of completion text to embed in the relay message. */
 const RELAY_COMPLETION_TEXT_MAX_CHARS = 2000;
+/** Maximum characters of per-tool result text to embed in nested spoiler blocks. */
+const RELAY_TOOL_RESULT_MAX_CHARS = 1000;
 
 export function renderRelayMessage(state: RelayState, originTopic?: string) {
   const callWord = state.toolCount === 1 ? "tool call" : "tool calls";
@@ -538,8 +550,23 @@ export function renderRelayMessage(state: RelayState, originTopic?: string) {
   const originSuffix = originTopic ? ` · 📍 ${originTopic}` : "";
   const respawnSuffix = state.respawnedAs ? ` · ⚡ re-spawned as \`${state.respawnedAs}\`` : "";
   const header = `${emoji} **\`${state.label}\`**${sandboxSuffix} · ${modelShort}${profileSuffix} · ${state.toolCount} ${callWord} · updated ${updatedTime}${watchdogEmoji}${originSuffix}${respawnSuffix}`;
-  const sanitizedLines = state.toolLines.map((line) => sanitizeForCodeFence(line));
-  const sections = [`${header}\n\n\`\`\`spoiler Tool calls\n${sanitizedLines.join("\n")}\n\`\`\``];
+  const toolCallLines = state.toolEntries.flatMap((entry) => {
+    const lines = [sanitizeForCodeFence(entry.line)];
+    const resultText = entry.resultText?.trim();
+    if (resultText) {
+      const truncated =
+        resultText.length > RELAY_TOOL_RESULT_MAX_CHARS
+          ? `${truncateMarkdownSafe(resultText, RELAY_TOOL_RESULT_MAX_CHARS)}\n\n_(truncated)_`
+          : resultText;
+      const safeResult = sanitizeForCodeFence(truncated);
+      const spoilerTitle = entry.name.replace(/\s+/g, " ").trim() || "tool";
+      lines.push(`\`\`\`spoiler ${spoilerTitle}`);
+      lines.push(safeResult);
+      lines.push("```");
+    }
+    return lines;
+  });
+  const sections = [`${header}\n\n\`\`\`spoiler Tool calls\n${toolCallLines.join("\n")}\n\`\`\``];
 
   // Append sub-agent completion output when available (populated at lifecycle end).
   const completionText = state.completionText?.trim();
@@ -832,7 +859,8 @@ function getOrCreateRelayState(runId: string): RelayState | undefined {
     model: registration.model?.trim() || "default",
     sandboxed: registration.sandboxed === true,
     startedAt,
-    toolLines: [],
+    toolEntries: [],
+    pendingToolCallIds: new Map<string, number>(),
     deliveryContext,
     toolCount: 0,
     status: "running",
@@ -1281,28 +1309,69 @@ function handleToolEvent(evt: AgentEventPayload) {
     return;
   }
   const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
-  if (phase !== "start") {
+  if (phase !== "start" && phase !== "result") {
     return;
   }
-  const toolName = typeof evt.data?.name === "string" ? evt.data.name : "tool";
+
   const state = getOrCreateRelayState(evt.runId);
   if (!state) {
     return;
   }
-  const args = evt.data?.args;
-  const argsRecord = readRecord(args);
-  const startedAt =
-    typeof state.startedAt === "number" && Number.isFinite(state.startedAt)
-      ? state.startedAt
-      : Date.now();
-  state.startedAt = startedAt;
-  const line = formatToolLine(toolName, args, startedAt, evt.ts);
-  state.toolLines.push(line);
-  state.toolCount += 1;
-  scheduleRelayFlush(evt.runId);
 
-  // Reset watchdog timer on every tool call
-  resetWatchdog(evt.runId, toolName, argsRecord);
+  if (phase === "start") {
+    const toolName = typeof evt.data?.name === "string" ? evt.data.name : "tool";
+    const args = evt.data?.args;
+    const argsRecord = readRecord(args);
+    const startedAt =
+      typeof state.startedAt === "number" && Number.isFinite(state.startedAt)
+        ? state.startedAt
+        : Date.now();
+    state.startedAt = startedAt;
+
+    const line = formatToolLine(toolName, args, startedAt, evt.ts);
+    const entry: ToolEntry = {
+      line,
+      name: toolName,
+    };
+    const entryIndex = state.toolEntries.push(entry) - 1;
+    const toolCallId = typeof evt.data?.toolCallId === "string" ? evt.data.toolCallId.trim() : "";
+    if (toolCallId) {
+      state.pendingToolCallIds.set(toolCallId, entryIndex);
+    }
+
+    state.toolCount += 1;
+    scheduleRelayFlush(evt.runId);
+
+    // Reset watchdog timer on every tool call start
+    resetWatchdog(evt.runId, toolName, argsRecord);
+    return;
+  }
+
+  if (phase !== "result") {
+    return;
+  }
+
+  const toolCallId = typeof evt.data?.toolCallId === "string" ? evt.data.toolCallId.trim() : "";
+  if (!toolCallId) {
+    return;
+  }
+  const entryIndex = state.pendingToolCallIds.get(toolCallId);
+  if (entryIndex === undefined) {
+    return;
+  }
+  const entry = state.toolEntries[entryIndex];
+  if (!entry) {
+    state.pendingToolCallIds.delete(toolCallId);
+    return;
+  }
+
+  const resultText = extractToolResultText(evt.data?.result);
+  if (resultText) {
+    entry.resultText = resultText;
+  }
+  entry.isError = evt.data?.isError === true;
+  state.pendingToolCallIds.delete(toolCallId);
+  scheduleRelayFlush(evt.runId);
 }
 
 /**
@@ -1427,9 +1496,10 @@ async function finalizeRelayWithOutput(runId: string): Promise<void> {
         const missingCount = recoveredCount - state.toolCount;
         state.toolCount = recoveredCount;
         const callWord = missingCount === 1 ? "call" : "calls";
-        state.toolLines.push(
-          `[recovered] ℹ️ ${missingCount} tool ${callWord} counted from transcript`,
-        );
+        state.toolEntries.push({
+          line: `[recovered] ℹ️ ${missingCount} tool ${callWord} counted from transcript`,
+          name: "recovered",
+        });
       }
     }
   }

@@ -363,6 +363,7 @@ export async function handleToolExecutionEnd(
       toolCallId,
       meta,
       isError: isToolError,
+      result: sanitizedResult,
     },
   });
 

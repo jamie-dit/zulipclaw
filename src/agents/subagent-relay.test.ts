@@ -85,7 +85,8 @@ describe("subagent-relay", () => {
         runId: "test-run",
         label: "sync-configs",
         model: "anthropic/claude-opus-4-6",
-        toolLines: ["📄 read file.ts +0:01"],
+        toolEntries: [{ line: "📄 read file.ts +0:01", name: "read" }],
+        pendingToolCallIds: new Map(),
         startedAt: 1_000,
         toolCount: 1,
         status: "running",
@@ -101,7 +102,8 @@ describe("subagent-relay", () => {
         runId: "test-run",
         label: "quick-task",
         model: "claude-opus-4-6",
-        toolLines: [],
+        toolEntries: [],
+        pendingToolCallIds: new Map(),
         startedAt: 1_000,
         toolCount: 0,
         status: "running",
@@ -117,7 +119,8 @@ describe("subagent-relay", () => {
           runId: "test-run",
           label: "mirror-task",
           model: "anthropic/claude-opus-4-6",
-          toolLines: [],
+          toolEntries: [],
+          pendingToolCallIds: new Map(),
           startedAt: 1_000,
           toolCount: 0,
           status: "running",
@@ -134,7 +137,8 @@ describe("subagent-relay", () => {
         runId: "test-run",
         label: "no-mirror-task",
         model: "anthropic/claude-opus-4-6",
-        toolLines: [],
+        toolEntries: [],
+        pendingToolCallIds: new Map(),
         startedAt: 1_000,
         toolCount: 0,
         status: "running",
@@ -150,7 +154,8 @@ describe("subagent-relay", () => {
         label: "web-research",
         model: "anthropic/claude-opus-4-6",
         sandboxed: true,
-        toolLines: [],
+        toolEntries: [],
+        pendingToolCallIds: new Map(),
         startedAt: 1_000,
         toolCount: 0,
         status: "running",
@@ -158,6 +163,55 @@ describe("subagent-relay", () => {
         deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
       });
       expect(msg).toContain("🔒 sandbox");
+    });
+
+    it("renders nested spoiler per tool result with tool name heading", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "anthropic/claude-opus-4-6",
+        toolEntries: [
+          {
+            line: "[+0:01] 📄 read: /tmp/file.txt",
+            name: "read",
+            resultText: "file contents",
+          },
+        ],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 1,
+        status: "running",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+      expect(msg).toContain("[+0:01] 📄 read: /tmp/file.txt");
+      expect(msg).toContain("```spoiler read\nfile contents\n```");
+    });
+
+    it("truncates nested tool result text at 1000 chars", () => {
+      const longResult = "A".repeat(1200);
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "anthropic/claude-opus-4-6",
+        toolEntries: [
+          {
+            line: "[+0:01] 🔧 exec: cat huge.log",
+            name: "exec",
+            resultText: longResult,
+          },
+        ],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 1,
+        status: "running",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+
+      expect(msg).toContain("```spoiler exec");
+      expect(msg).toContain("_(truncated)_");
+      expect(msg).not.toContain(longResult);
     });
   });
 
@@ -234,7 +288,8 @@ describe("subagent-relay", () => {
         label: "worker",
         model: "anthropic/claude-opus-4-6",
         authProfile: "jason",
-        toolLines: [],
+        toolEntries: [],
+        pendingToolCallIds: new Map(),
         startedAt: 1_000,
         toolCount: 21,
         status: "ok",
@@ -249,7 +304,8 @@ describe("subagent-relay", () => {
         runId: "test-run",
         label: "worker",
         model: "anthropic/claude-opus-4-6",
-        toolLines: [],
+        toolEntries: [],
+        pendingToolCallIds: new Map(),
         startedAt: 1_000,
         toolCount: 5,
         status: "running",
@@ -266,7 +322,8 @@ describe("subagent-relay", () => {
         label: "worker",
         model: "claude-opus-4-6",
         authProfile: undefined,
-        toolLines: [],
+        toolEntries: [],
+        pendingToolCallIds: new Map(),
         startedAt: 1_000,
         toolCount: 0,
         status: "running",
@@ -283,7 +340,8 @@ describe("subagent-relay", () => {
         runId: "test-run",
         label: "web-research",
         model: "anthropic/claude-sonnet-4-20250514",
-        toolLines: [],
+        toolEntries: [],
+        pendingToolCallIds: new Map(),
         startedAt: 1_000,
         toolCount: 0,
         status: "ok",
@@ -300,7 +358,8 @@ describe("subagent-relay", () => {
         runId: "test-run",
         label: "worker",
         model: "anthropic/claude-sonnet-4-20250514",
-        toolLines: ["📄 read file.ts +0:01"],
+        toolEntries: [{ line: "📄 read file.ts +0:01", name: "read" }],
+        pendingToolCallIds: new Map(),
         startedAt: 1_000,
         toolCount: 1,
         status: "ok",
@@ -316,7 +375,8 @@ describe("subagent-relay", () => {
         runId: "test-run",
         label: "research",
         model: "anthropic/claude-sonnet-4-20250514",
-        toolLines: [],
+        toolEntries: [],
+        pendingToolCallIds: new Map(),
         startedAt: 1_000,
         toolCount: 0,
         status: "ok",
@@ -334,7 +394,8 @@ describe("subagent-relay", () => {
         runId: "test-run",
         label: "worker",
         model: "anthropic/claude-sonnet-4-20250514",
-        toolLines: [],
+        toolEntries: [],
+        pendingToolCallIds: new Map(),
         startedAt: 1_000,
         toolCount: 0,
         status: "ok",
@@ -350,7 +411,8 @@ describe("subagent-relay", () => {
         runId: "test-run",
         label: "research",
         model: "anthropic/claude-sonnet-4-20250514",
-        toolLines: [],
+        toolEntries: [],
+        pendingToolCallIds: new Map(),
         startedAt: 1_000,
         toolCount: 0,
         status: "ok",
