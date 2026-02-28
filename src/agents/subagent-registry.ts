@@ -30,6 +30,8 @@ export type SubagentRunRecord = {
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
+  /** True when this sub-agent run is known to execute in sandbox mode. */
+  sandboxed?: boolean;
   runTimeoutSeconds?: number;
   maxIterations?: number;
   iterationsUsed?: number;
@@ -566,6 +568,7 @@ function restoreSubagentRunsOnce() {
         model: entry.model,
         startedAt: entry.startedAt,
         childSessionKey: entry.childSessionKey,
+        sandboxed: entry.sandboxed,
         deliveryContext: resolveRelayDeliveryContextForRun({
           requesterDeliveryContext: entry.requesterDeliveryContext,
           requesterOrigin: entry.requesterOrigin,
@@ -675,6 +678,7 @@ function ensureListener() {
         model: entry.model,
         startedAt: startedAt ?? entry.startedAt,
         childSessionKey: entry.childSessionKey,
+        sandboxed: entry.sandboxed,
         deliveryContext: resolveRelayDeliveryContextForRun({
           requesterDeliveryContext: entry.requesterDeliveryContext,
           requesterOrigin: entry.requesterOrigin,
@@ -891,6 +895,7 @@ export function replaceSubagentRunAfterSteer(params: {
     model: next.model,
     startedAt: next.startedAt,
     childSessionKey: next.childSessionKey,
+    sandboxed: next.sandboxed,
     deliveryContext: resolveRelayDeliveryContextForRun({
       requesterDeliveryContext: next.requesterDeliveryContext,
       requesterOrigin: next.requesterOrigin,
@@ -916,6 +921,7 @@ export function registerSubagentRun(params: {
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
+  sandboxed?: boolean;
   runTimeoutSeconds?: number;
   maxIterations?: number;
   expectsCompletionMessage?: boolean;
@@ -943,6 +949,7 @@ export function registerSubagentRun(params: {
     expectsCompletionMessage: params.expectsCompletionMessage,
     label: params.label,
     model: params.model,
+    sandboxed: params.sandboxed,
     runTimeoutSeconds,
     maxIterations: normalizeMaxIterations(params.maxIterations),
     createdAt: now,
@@ -956,6 +963,7 @@ export function registerSubagentRun(params: {
     model: params.model,
     startedAt: now,
     childSessionKey: params.childSessionKey,
+    sandboxed: params.sandboxed,
     deliveryContext: requesterDeliveryContext,
   });
   ensureListener();

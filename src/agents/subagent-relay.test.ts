@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  countToolCallsFromHistory,
   extractOriginTopic,
   extractProfileShortName,
   formatRelayFooter,
@@ -142,6 +143,22 @@ describe("subagent-relay", () => {
       });
       expect(msg).not.toContain("📍");
     });
+
+    it("includes sandbox badge in header when run is sandboxed", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "web-research",
+        model: "anthropic/claude-opus-4-6",
+        sandboxed: true,
+        toolLines: [],
+        startedAt: 1_000,
+        toolCount: 0,
+        status: "running",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+      expect(msg).toContain("🔒 sandbox");
+    });
   });
 
   describe("extractOriginTopic", () => {
@@ -187,6 +204,26 @@ describe("subagent-relay", () => {
 
     it("handles empty string after colon", () => {
       expect(extractProfileShortName("anthropic:")).toBe("");
+    });
+  });
+
+  describe("countToolCallsFromHistory", () => {
+    it("counts toolResult and tool messages", () => {
+      const count = countToolCallsFromHistory([
+        { role: "assistant", content: "start" },
+        { role: "toolResult", toolCallId: "call-1", content: "result" },
+        { role: "tool", id: "tool-2", content: "tool payload" },
+      ]);
+      expect(count).toBe(2);
+    });
+
+    it("de-duplicates entries with the same tool call id", () => {
+      const count = countToolCallsFromHistory([
+        { role: "tool", id: "dup-1", content: "call payload" },
+        { role: "toolResult", toolCallId: "dup-1", content: "call result" },
+        { role: "toolResult", toolUseId: "dup-1", content: "duplicate format" },
+      ]);
+      expect(count).toBe(1);
     });
   });
 
