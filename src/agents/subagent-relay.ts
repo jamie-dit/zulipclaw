@@ -43,6 +43,8 @@ export type WatchdogStatus = "active" | "nudged" | "frozen";
 export type ToolEntry = {
   line: string;
   name: string;
+  startedAtMs?: number;
+  completedAtMs?: number;
   resultText?: string;
   isError?: boolean;
 };
@@ -539,6 +541,302 @@ const RELAY_COMPLETION_TEXT_MAX_CHARS = 2000;
 /** Maximum characters of per-tool result text to embed in nested spoiler blocks. */
 const RELAY_TOOL_RESULT_MAX_CHARS = 1000;
 
+const RELAY_SUMMARY_ORDER = [
+  "read",
+  "edit",
+  "write",
+  "exec",
+  "web_search",
+  "web_fetch",
+  "browser",
+  "message",
+  "memory_search",
+  "sessions_spawn",
+] as const;
+
+function extractReadPathFromLine(line: string): string | undefined {
+  const marker = " read: ";
+  const markerIdx = line.indexOf(marker);
+  if (markerIdx < 0) {
+    return undefined;
+  }
+  const detail = line.slice(markerIdx + marker.length).trim();
+  if (!detail) {
+    return undefined;
+  }
+  const withoutRange = detail.replace(/\s+\[(?:lines\s+\d+-\d+|from line\s+\d+)\]$/i, "").trim();
+  return withoutRange || undefined;
+}
+
+function formatToolDuration(startedAtMs?: number, completedAtMs?: number): string | undefined {
+  if (
+    typeof startedAtMs !== "number" ||
+    !Number.isFinite(startedAtMs) ||
+    typeof completedAtMs !== "number" ||
+    !Number.isFinite(completedAtMs)
+  ) {
+    return undefined;
+  }
+  const elapsedMs = Math.max(0, completedAtMs - startedAtMs);
+  if (elapsedMs >= 60_000) {
+    const totalSeconds = Math.floor(elapsedMs / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}m${seconds}s`;
+  }
+  return `${(elapsedMs / 1000).toFixed(1)}s`;
+}
+
+function normalizeEditDiffField(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function parseEditDiffFromResult(resultText: string): string | undefined {
+  const trimmed = resultText.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const looksLikeDiff =
+    /(^|\n)[+-]\s+/m.test(trimmed) ||
+    trimmed.includes("```diff") ||
+    (trimmed.includes("\n-") && trimmed.includes("\n+"));
+  if (looksLikeDiff) {
+    return trimmed;
+  }
+
+  const candidates = [trimmed];
+  const jsonFenceMatch = trimmed.match(/```json\s*([\s\S]*?)```/i);
+  if (jsonFenceMatch?.[1]) {
+    candidates.push(jsonFenceMatch[1].trim());
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as Record<string, unknown>;
+      const oldValue =
+        normalizeEditDiffField(parsed.old_string) ??
+        normalizeEditDiffField(parsed.oldText) ??
+        normalizeEditDiffField(parsed.old);
+      const newValue =
+        normalizeEditDiffField(parsed.new_string) ??
+        normalizeEditDiffField(parsed.newText) ??
+        normalizeEditDiffField(parsed.new);
+      if (oldValue && newValue) {
+        return `- ${oldValue}\n+ ${newValue}`;
+      }
+    } catch {
+      // fall through to regex parsing
+    }
+  }
+
+  const oldMatch = trimmed.match(/old(?:_string|Text)?\s*[:=]\s*(.+)/i);
+  const newMatch = trimmed.match(/new(?:_string|Text)?\s*[:=]\s*(.+)/i);
+  if (oldMatch?.[1] && newMatch?.[1]) {
+    const oldValue = oldMatch[1].trim().replace(/^['"`]|['"`]$/g, "");
+    const newValue = newMatch[1].trim().replace(/^['"`]|['"`]$/g, "");
+    if (oldValue && newValue) {
+      return `- ${oldValue}\n+ ${newValue}`;
+    }
+  }
+
+  return undefined;
+}
+
+function renderToolResultText(entry: ToolEntry): string | undefined {
+  const base = entry.resultText?.trim();
+  if (!base) {
+    return undefined;
+  }
+  if (entry.name.trim().toLowerCase() !== "edit") {
+    return base;
+  }
+  return parseEditDiffFromResult(base) ?? base;
+}
+
+function findLastPendingEntryIndex(entries: ToolEntry[], status?: RelayState["status"]): number {
+  if (status !== "running") {
+    return -1;
+  }
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const resultText = entries[i]?.resultText?.trim();
+    if (!resultText) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function formatToolSummaryLabel(toolName: string, count: number): string {
+  switch (toolName) {
+    case "read":
+      return count === 1 ? "read" : "reads";
+    case "edit":
+      return count === 1 ? "edit" : "edits";
+    case "write":
+      return count === 1 ? "write" : "writes";
+    case "exec":
+      return count === 1 ? "exec" : "execs";
+    case "web_search":
+      return count === 1 ? "search" : "searches";
+    case "web_fetch":
+      return count === 1 ? "fetch" : "fetches";
+    case "browser":
+      return count === 1 ? "browser" : "browsers";
+    case "message":
+      return count === 1 ? "message" : "messages";
+    case "memory_search":
+      return count === 1 ? "memory search" : "memory searches";
+    case "sessions_spawn":
+      return count === 1 ? "spawn" : "spawns";
+    case "other":
+      return count === 1 ? "other" : "others";
+    default:
+      return count === 1 ? toolName : `${toolName}s`;
+  }
+}
+
+function renderToolSummaryLine(entries: ToolEntry[], toolCount: number): string | undefined {
+  if (toolCount < 3) {
+    return undefined;
+  }
+
+  const counts = new Map<string, number>();
+  let otherCount = 0;
+  const knownNames = new Set<string>(RELAY_SUMMARY_ORDER);
+
+  for (const entry of entries) {
+    const normalized = entry.name.trim().toLowerCase();
+    if (knownNames.has(normalized)) {
+      counts.set(normalized, (counts.get(normalized) ?? 0) + 1);
+    } else {
+      otherCount += 1;
+    }
+  }
+
+  const segments: string[] = [];
+  for (const toolName of RELAY_SUMMARY_ORDER) {
+    const count = counts.get(toolName) ?? 0;
+    if (count <= 0) {
+      continue;
+    }
+    const emoji = TOOL_EMOJI[toolName] ?? "🔨";
+    const label = formatToolSummaryLabel(toolName, count);
+    segments.push(`${emoji} ${count} ${label}`);
+  }
+  if (otherCount > 0) {
+    segments.push(`🔨 ${otherCount} ${formatToolSummaryLabel("other", otherCount)}`);
+  }
+
+  return segments.length > 0 ? segments.join(" · ") : undefined;
+}
+
+function buildToolSpoilerTitle(entry: ToolEntry): string {
+  const toolName = entry.name.replace(/\s+/g, " ").trim() || "tool";
+  const duration = formatToolDuration(entry.startedAtMs, entry.completedAtMs);
+  if (!duration) {
+    return toolName;
+  }
+  return `${toolName} (${duration})`;
+}
+
+function extractToolLineStamp(line: string): string {
+  const match = line.match(/^\[[^\]]+\]/);
+  return match?.[0] ?? "[+0:00]";
+}
+
+function renderRelayMessageToolLines(state: RelayState): string[] {
+  const toolCallLines: string[] = [];
+  const pendingIndex = findLastPendingEntryIndex(state.toolEntries, state.status);
+
+  for (let i = 0; i < state.toolEntries.length; i += 1) {
+    const entry = state.toolEntries[i];
+    if (!entry) {
+      continue;
+    }
+
+    const toolName = entry.name.trim().toLowerCase();
+
+    if (toolName === "read") {
+      let end = i;
+      while (
+        end + 1 < state.toolEntries.length &&
+        state.toolEntries[end + 1]?.name.trim().toLowerCase() === "read"
+      ) {
+        end += 1;
+      }
+
+      const runLength = end - i + 1;
+      if (runLength >= 2) {
+        const runEntries = state.toolEntries.slice(i, end + 1);
+        const runPaths = runEntries.map((candidate) => extractReadPathFromLine(candidate.line));
+        const allPathsPresent = runPaths.every((value) => Boolean(value));
+        const uniquePathCount = new Set(runPaths.filter((value): value is string => Boolean(value)))
+          .size;
+        const isGroupable = allPathsPresent && uniquePathCount === runEntries.length;
+
+        if (isGroupable) {
+          const groupStamp = extractToolLineStamp(runEntries[0]?.line ?? "");
+          const groupHasPending = runEntries.some((_, idx) => i + idx === pendingIndex);
+          const groupLine = `${groupStamp} ${TOOL_EMOJI.read ?? "📄"} read (${runEntries.length} files)${groupHasPending ? " ⏳" : ""}`;
+          toolCallLines.push(sanitizeForCodeFence(groupLine));
+
+          const groupHasError = runEntries.some((candidate) => candidate.isError === true);
+          const groupTitle = `${groupHasError ? "❌ " : ""}read (${runEntries.length} files)`;
+          toolCallLines.push(`\`\`\`spoiler ${groupTitle}`);
+
+          for (let groupIdx = 0; groupIdx < runEntries.length; groupIdx += 1) {
+            const groupEntry = runEntries[groupIdx];
+            const filePath = runPaths[groupIdx] ?? "(unknown path)";
+            const resultText = renderToolResultText(groupEntry);
+            toolCallLines.push(`**${sanitizeForCodeFence(filePath)}**`);
+            if (resultText) {
+              const truncated =
+                resultText.length > RELAY_TOOL_RESULT_MAX_CHARS
+                  ? `${truncateMarkdownSafe(resultText, RELAY_TOOL_RESULT_MAX_CHARS)}\n\n_(truncated)_`
+                  : resultText;
+              toolCallLines.push(sanitizeForCodeFence(truncated));
+            } else if (state.status === "running" && i + groupIdx === pendingIndex) {
+              toolCallLines.push("_(pending)_");
+            } else {
+              toolCallLines.push("_(no result)_");
+            }
+            if (groupIdx < runEntries.length - 1) {
+              toolCallLines.push("");
+            }
+          }
+
+          toolCallLines.push("```");
+          i = end;
+          continue;
+        }
+      }
+    }
+
+    const pendingSuffix = i === pendingIndex ? " ⏳" : "";
+    toolCallLines.push(`${sanitizeForCodeFence(entry.line)}${pendingSuffix}`);
+
+    const resultText = renderToolResultText(entry);
+    if (resultText) {
+      const truncated =
+        resultText.length > RELAY_TOOL_RESULT_MAX_CHARS
+          ? `${truncateMarkdownSafe(resultText, RELAY_TOOL_RESULT_MAX_CHARS)}\n\n_(truncated)_`
+          : resultText;
+      const safeResult = sanitizeForCodeFence(truncated);
+      const spoilerTitle = buildToolSpoilerTitle(entry);
+      toolCallLines.push(`\`\`\`spoiler ${spoilerTitle}`);
+      toolCallLines.push(safeResult);
+      toolCallLines.push("```");
+    }
+  }
+
+  return toolCallLines;
+}
+
 export function renderRelayMessage(state: RelayState, originTopic?: string) {
   const callWord = state.toolCount === 1 ? "tool call" : "tool calls";
   const updatedTime = formatRelayUpdatedTime(state.lastUpdatedAt);
@@ -550,23 +848,14 @@ export function renderRelayMessage(state: RelayState, originTopic?: string) {
   const originSuffix = originTopic ? ` · 📍 ${originTopic}` : "";
   const respawnSuffix = state.respawnedAs ? ` · ⚡ re-spawned as \`${state.respawnedAs}\`` : "";
   const header = `${emoji} **\`${state.label}\`**${sandboxSuffix} · ${modelShort}${profileSuffix} · ${state.toolCount} ${callWord} · updated ${updatedTime}${watchdogEmoji}${originSuffix}${respawnSuffix}`;
-  const toolCallLines = state.toolEntries.flatMap((entry) => {
-    const lines = [sanitizeForCodeFence(entry.line)];
-    const resultText = entry.resultText?.trim();
-    if (resultText) {
-      const truncated =
-        resultText.length > RELAY_TOOL_RESULT_MAX_CHARS
-          ? `${truncateMarkdownSafe(resultText, RELAY_TOOL_RESULT_MAX_CHARS)}\n\n_(truncated)_`
-          : resultText;
-      const safeResult = sanitizeForCodeFence(truncated);
-      const spoilerTitle = entry.name.replace(/\s+/g, " ").trim() || "tool";
-      lines.push(`\`\`\`spoiler ${spoilerTitle}`);
-      lines.push(safeResult);
-      lines.push("```");
-    }
-    return lines;
-  });
-  const sections = [`${header}\n\n\`\`\`spoiler Tool calls\n${toolCallLines.join("\n")}\n\`\`\``];
+  const summaryLine = renderToolSummaryLine(state.toolEntries, state.toolCount);
+  const toolCallLines = renderRelayMessageToolLines(state);
+
+  const headerWithSummary = summaryLine ? `${header}\n${summaryLine}` : header;
+
+  const sections = [
+    `${headerWithSummary}\n\n\`\`\`spoiler Tool calls\n${toolCallLines.join("\n")}\n\`\`\``,
+  ];
 
   // Append sub-agent completion output when available (populated at lifecycle end).
   const completionText = state.completionText?.trim();
@@ -1329,9 +1618,11 @@ function handleToolEvent(evt: AgentEventPayload) {
     state.startedAt = startedAt;
 
     const line = formatToolLine(toolName, args, startedAt, evt.ts);
+    const eventTs = typeof evt.ts === "number" && Number.isFinite(evt.ts) ? evt.ts : Date.now();
     const entry: ToolEntry = {
       line,
       name: toolName,
+      startedAtMs: eventTs,
     };
     const entryIndex = state.toolEntries.push(entry) - 1;
     const toolCallId = typeof evt.data?.toolCallId === "string" ? evt.data.toolCallId.trim() : "";
@@ -1369,6 +1660,8 @@ function handleToolEvent(evt: AgentEventPayload) {
   if (resultText) {
     entry.resultText = resultText;
   }
+  const eventTs = typeof evt.ts === "number" && Number.isFinite(evt.ts) ? evt.ts : Date.now();
+  entry.completedAtMs = eventTs;
   entry.isError = evt.data?.isError === true;
   state.pendingToolCallIds.delete(toolCallId);
   scheduleRelayFlush(evt.runId);

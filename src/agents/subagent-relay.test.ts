@@ -213,6 +213,267 @@ describe("subagent-relay", () => {
       expect(msg).toContain("_(truncated)_");
       expect(msg).not.toContain(longResult);
     });
+
+    it("shows running indicator only on the last pending tool call", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "anthropic/claude-opus-4-6",
+        toolEntries: [
+          {
+            line: "[+0:01] 📄 read: /tmp/a.ts",
+            name: "read",
+            resultText: "done",
+          },
+          {
+            line: "[+0:02] 🔧 exec: npm test",
+            name: "exec",
+          },
+          {
+            line: "[+0:03] 🔍 web search: nested spoilers",
+            name: "web_search",
+          },
+        ],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 3,
+        status: "running",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+
+      expect(msg).toContain("[+0:03] 🔍 web search: nested spoilers ⏳");
+      expect(msg).toContain("[+0:02] 🔧 exec: npm test");
+      expect(msg).not.toContain("[+0:02] 🔧 exec: npm test ⏳");
+    });
+
+    it("hides running indicator once no pending tool calls remain", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "anthropic/claude-opus-4-6",
+        toolEntries: [
+          {
+            line: "[+0:01] 🔧 exec: npm test",
+            name: "exec",
+            resultText: "ok",
+          },
+        ],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 1,
+        status: "running",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+
+      expect(msg).not.toContain("⏳");
+    });
+
+    it("shows per-tool duration in spoiler heading (seconds and minutes)", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "anthropic/claude-opus-4-6",
+        toolEntries: [
+          {
+            line: "[+0:01] 🔧 exec: echo hi",
+            name: "exec",
+            startedAtMs: 1_000,
+            completedAtMs: 2_200,
+            resultText: "ok",
+          },
+          {
+            line: "[+0:02] 📄 read: /tmp/a.ts",
+            name: "read",
+            startedAtMs: 1_000,
+            completedAtMs: 73_000,
+            resultText: "content",
+          },
+        ],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 2,
+        status: "ok",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+
+      expect(msg).toContain("```spoiler exec (1.2s)");
+      expect(msg).toContain("```spoiler read (1m12s)");
+    });
+
+    it("shows footer summary by tool type for 3+ tool calls", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "anthropic/claude-opus-4-6",
+        toolEntries: [
+          { line: "[+0:01] 📄 read: /tmp/a.ts", name: "read" },
+          { line: "[+0:02] 📄 read: /tmp/b.ts", name: "read" },
+          { line: "[+0:03] ✏️ edit: /tmp/a.ts", name: "edit" },
+          { line: "[+0:04] 🔧 exec: npm test", name: "exec" },
+          { line: "[+0:05] 🔍 web search: relay ux", name: "web_search" },
+          { line: "[+0:06] 🔨 custom", name: "custom_tool" },
+        ],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 6,
+        status: "running",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+
+      expect(msg).toContain("📄 2 reads · ✏️ 1 edit · 🔧 1 exec · 🔍 1 search · 🔨 1 other");
+    });
+
+    it("does not show footer summary for fewer than 3 tool calls", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "anthropic/claude-opus-4-6",
+        toolEntries: [
+          { line: "[+0:01] 📄 read: /tmp/a.ts", name: "read" },
+          { line: "[+0:02] 🔧 exec: npm test", name: "exec" },
+        ],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 2,
+        status: "running",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+
+      expect(msg).not.toContain("reads ·");
+      expect(msg).not.toContain("execs");
+    });
+
+    it("groups consecutive reads across different files", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "anthropic/claude-opus-4-6",
+        toolEntries: [
+          {
+            line: "[+0:01] 📄 read: /tmp/a.ts",
+            name: "read",
+            resultText: "a-content",
+          },
+          {
+            line: "[+0:02] 📄 read: /tmp/b.ts",
+            name: "read",
+            resultText: "b-content",
+          },
+          {
+            line: "[+0:03] 🔧 exec: npm test",
+            name: "exec",
+            resultText: "ok",
+          },
+        ],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 3,
+        status: "ok",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+
+      expect(msg).toContain("[+0:01] 📄 read (2 files)");
+      expect(msg).toContain("```spoiler read (2 files)");
+      expect(msg).toContain("**/tmp/a.ts**");
+      expect(msg).toContain("**/tmp/b.ts**");
+      expect(msg).not.toContain("[+0:02] 📄 read: /tmp/b.ts");
+    });
+
+    it("does not group reads when the same file is paginated", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "anthropic/claude-opus-4-6",
+        toolEntries: [
+          {
+            line: "[+0:01] 📄 read: /tmp/a.ts [lines 1-100]",
+            name: "read",
+            resultText: "chunk-1",
+          },
+          {
+            line: "[+0:02] 📄 read: /tmp/a.ts [lines 101-200]",
+            name: "read",
+            resultText: "chunk-2",
+          },
+        ],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 2,
+        status: "ok",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+
+      expect(msg).toContain("[+0:01] 📄 read: /tmp/a.ts [lines 1-100]");
+      expect(msg).toContain("[+0:02] 📄 read: /tmp/a.ts [lines 101-200]");
+      expect(msg).not.toContain("read (2 files)");
+    });
+
+    it("does not group reads when a non-read entry breaks the sequence", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "anthropic/claude-opus-4-6",
+        toolEntries: [
+          {
+            line: "[+0:01] 📄 read: /tmp/a.ts",
+            name: "read",
+            resultText: "a-content",
+          },
+          {
+            line: "[+0:02] 🔧 exec: npm test",
+            name: "exec",
+            resultText: "ok",
+          },
+          {
+            line: "[+0:03] 📄 read: /tmp/b.ts",
+            name: "read",
+            resultText: "b-content",
+          },
+        ],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 3,
+        status: "ok",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+
+      expect(msg).not.toContain("read (2 files)");
+      expect(msg).toContain("[+0:01] 📄 read: /tmp/a.ts");
+      expect(msg).toContain("[+0:03] 📄 read: /tmp/b.ts");
+    });
+
+    it("renders edit old/new fields as diff-like output", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "anthropic/claude-opus-4-6",
+        toolEntries: [
+          {
+            line: "[+0:01] ✏️ edit: /tmp/file.ts",
+            name: "edit",
+            resultText: '{"old_string":"const a = 1;","new_string":"const a = 2;"}',
+          },
+        ],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 1,
+        status: "ok",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+
+      expect(msg).toContain("- const a = 1;");
+      expect(msg).toContain("+ const a = 2;");
+      expect(msg).not.toContain("old_string");
+    });
   });
 
   describe("extractOriginTopic", () => {
