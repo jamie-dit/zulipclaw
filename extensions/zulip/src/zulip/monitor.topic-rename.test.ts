@@ -24,6 +24,9 @@ const mocks = vi.hoisted(() => ({
   writeZulipProcessedMessageState: vi.fn(),
   isZulipMessageAlreadyProcessed: vi.fn(),
   markZulipMessageProcessed: vi.fn(),
+  registerMainRelayRun: vi.fn(),
+  isRelayRunRegistered: vi.fn(),
+  updateRelayRunModel: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk", async (importOriginal) => {
@@ -84,6 +87,12 @@ vi.mock("./processed-message-state.js", () => ({
   writeZulipProcessedMessageState: mocks.writeZulipProcessedMessageState,
   isZulipMessageAlreadyProcessed: mocks.isZulipMessageAlreadyProcessed,
   markZulipMessageProcessed: mocks.markZulipMessageProcessed,
+}));
+
+vi.mock("../../../../src/agents/subagent-relay.js", () => ({
+  registerMainRelayRun: mocks.registerMainRelayRun,
+  isRelayRunRegistered: mocks.isRelayRunRegistered,
+  updateRelayRunModel: mocks.updateRelayRunModel,
 }));
 
 import { monitorZulipProvider } from "./monitor.js";
@@ -358,6 +367,9 @@ function makeMessage(messageId: number, topic: string): ZulipEventMessage {
 describe("monitorZulipProvider topic rename session continuity", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.registerMainRelayRun.mockReturnValue(false);
+    mocks.isRelayRunRegistered.mockReturnValue(false);
+    mocks.updateRelayRunModel.mockImplementation(() => undefined);
   });
 
   it("subscribes to update_message events and creates rename aliases", async () => {
@@ -769,6 +781,9 @@ function createCrossStreamHarness(streamEvents: Record<string, ZulipQueueEvent[]
 describe("monitorZulipProvider cross-stream topic move session continuity", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.registerMainRelayRun.mockReturnValue(false);
+    mocks.isRelayRunRegistered.mockReturnValue(false);
+    mocks.updateRelayRunModel.mockImplementation(() => undefined);
   });
 
   it("maintains session key from original stream after cross-stream move", async () => {

@@ -21,6 +21,9 @@ const mocks = vi.hoisted(() => ({
   markZulipCheckpointFailure: vi.fn(),
   buildZulipCheckpointId: vi.fn(),
   loadZulipProcessedMessageState: vi.fn(),
+  registerMainRelayRun: vi.fn(),
+  isRelayRunRegistered: vi.fn(),
+  updateRelayRunModel: vi.fn(),
   writeZulipProcessedMessageState: vi.fn(),
   isZulipMessageAlreadyProcessed: vi.fn(),
   markZulipMessageProcessed: vi.fn(),
@@ -84,6 +87,12 @@ vi.mock("./processed-message-state.js", () => ({
   writeZulipProcessedMessageState: mocks.writeZulipProcessedMessageState,
   isZulipMessageAlreadyProcessed: mocks.isZulipMessageAlreadyProcessed,
   markZulipMessageProcessed: mocks.markZulipMessageProcessed,
+}));
+
+vi.mock("../../../../src/agents/subagent-relay.js", () => ({
+  registerMainRelayRun: mocks.registerMainRelayRun,
+  isRelayRunRegistered: mocks.isRelayRunRegistered,
+  updateRelayRunModel: mocks.updateRelayRunModel,
 }));
 
 import { monitorZulipProvider, ZULIP_RECOVERY_NOTICE } from "./monitor.js";
@@ -331,6 +340,10 @@ function createHarness(params?: {
     },
   );
 
+  mocks.registerMainRelayRun.mockReturnValue(false);
+  mocks.isRelayRunRegistered.mockReturnValue(false);
+  mocks.updateRelayRunModel.mockImplementation(() => undefined);
+
   let pollCount = 0;
   const eventList = params?.events ?? [];
 
@@ -392,6 +405,76 @@ function createHarness(params?: {
 describe("monitorZulipProvider recovery checkpoints", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.registerMainRelayRun.mockReturnValue(false);
+    mocks.isRelayRunRegistered.mockReturnValue(false);
+    mocks.updateRelayRunModel.mockImplementation(() => undefined);
+  });
+
+  it("uses a stable main runId and registers relay context", async () => {
+    const event: ZulipEventMessage = {
+      id: 7001,
+      type: "stream",
+      sender_id: 55,
+      sender_full_name: "Tester",
+      display_recipient: "marcel",
+      stream_id: 42,
+      subject: "general",
+      content: "hello",
+      timestamp: Math.floor(Date.now() / 1000),
+    };
+
+    const { dispatchReplyFromConfig } = createHarness({ events: [event] });
+
+    mocks.registerMainRelayRun.mockReturnValue(true);
+    mocks.isRelayRunRegistered.mockReturnValue(true);
+
+    dispatchReplyFromConfig.mockImplementation(
+      async ({
+        dispatcher,
+        replyOptions,
+      }: {
+        dispatcher: Record<string, (...args: unknown[]) => void>;
+        replyOptions: Record<string, unknown>;
+      }) => {
+        expect(replyOptions.runId).toBe("zulip-main:default:7001");
+        const onAgentRunStart = replyOptions.onAgentRunStart;
+        if (typeof onAgentRunStart === "function") {
+          onAgentRunStart("zulip-main:default:7001");
+        }
+        dispatcher.sendToolResult({ text: "[tool] read file" });
+        dispatcher.sendFinalReply({ text: "done" });
+      },
+    );
+
+    const monitor = await monitorZulipProvider({
+      config: {} as never,
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    });
+
+    await waitForCondition(() => dispatchReplyFromConfig.mock.calls.length > 0);
+
+    expect(mocks.registerMainRelayRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "zulip-main:default:7001",
+        deliveryContext: {
+          channel: "zulip",
+          to: "stream:marcel#general",
+          accountId: "default",
+        },
+      }),
+    );
+
+    const firstDispatchCall = dispatchReplyFromConfig.mock.calls[0]?.[0] as
+      | { replyOptions?: { runId?: string } }
+      | undefined;
+    expect(firstDispatchCall?.replyOptions?.runId).toBe("zulip-main:default:7001");
+
+    monitor.stop();
+    await (monitor as { done: Promise<void> }).done;
   });
 
   it("writes then clears the replayed in-flight checkpoint on success", async () => {
