@@ -707,11 +707,14 @@ const REDIRECT_TIMEOUT_MS = 5000;
  */
 async function resolveRedirectUrl(url: string): Promise<string> {
   try {
+    // Use default SSRF policy (no private network access) for redirect resolution.
+    // Citation URLs come from external AI output and must not be allowed to reach
+    // private/internal networks. TRUSTED_NETWORK_SSRF_POLICY is reserved for
+    // user-configured API endpoint calls only.
     const { finalUrl, release } = await fetchWithSsrFGuard({
       url,
       init: { method: "HEAD" },
       timeoutMs: REDIRECT_TIMEOUT_MS,
-      policy: TRUSTED_NETWORK_SSRF_POLICY,
       proxy: "env",
     });
     try {
