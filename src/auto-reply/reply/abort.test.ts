@@ -10,72 +10,122 @@ import {
   isAbortRequestText,
   isAbortTrigger,
   resetAbortMemoryForTest,
-  it("extracts abort cutoff metadata from context", () => {
-    expect(
-      resolveAbortCutoffFromContext(
-        buildTestCtx({
-          MessageSid: "42",
-          Timestamp: 123,
-        }),
-      ),
-    ).toEqual({
-      messageSid: "42",
-      timestamp: 123,
+  setAbortMemory,
+  tryFastAbortFromMessage,
+} from "./abort.js";
+import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./queue.js";
+import { initSessionState } from "./session.js";
+import { buildTestCtx } from "./test-ctx.js";
+
+vi.mock("../../agents/pi-embedded.js", () => ({
+  abortEmbeddedPiRun: vi.fn().mockReturnValue(true),
+  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+}));
+
+const commandQueueMocks = vi.hoisted(() => ({
+  clearCommandLane: vi.fn(),
+}));
+
+vi.mock("../../process/command-queue.js", () => commandQueueMocks);
+
+const subagentRegistryMocks = vi.hoisted(() => ({
+  listSubagentRunsForRequester: vi.fn<(requesterSessionKey: string) => SubagentRunRecord[]>(
+    () => [],
+  ),
+  markSubagentRunTerminated: vi.fn(() => 1),
+}));
+
+vi.mock("../../agents/subagent-registry.js", () => ({
+  listSubagentRunsForRequester: subagentRegistryMocks.listSubagentRunsForRequester,
+  markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
+}));
+
+describe("abort detection", () => {
+  async function runStopCommand(params: {
+    cfg: OpenClawConfig;
+    sessionKey: string;
+    from: string;
+    to: string;
+  }) {
+    return tryFastAbortFromMessage({
+      ctx: buildTestCtx({
+        CommandBody: "/stop",
+        RawBody: "/stop",
+        CommandAuthorized: true,
+        SessionKey: params.sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+        From: params.from,
+        To: params.to,
+      }),
+      cfg: params.cfg,
     });
+  }
+
+  afterEach(() => {
+    resetAbortMemoryForTest();
   });
 
-  it("treats numeric message IDs at or before cutoff as stale", () => {
-    expect(
-      shouldSkipMessageByAbortCutoff({
-        cutoffMessageSid: "200",
-        messageSid: "199",
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipMessageByAbortCutoff({
-        cutoffMessageSid: "200",
-        messageSid: "200",
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipMessageByAbortCutoff({
-        cutoffMessageSid: "200",
-        messageSid: "201",
-      }),
-    ).toBe(false);
-  });
+  it("triggerBodyNormalized extracts /stop from RawBody for abort detection", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-abort-"));
+    const storePath = path.join(root, "sessions.json");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
 
-  it("falls back to timestamp cutoff when message IDs are unavailable", () => {
-    expect(
-      shouldSkipMessageByAbortCutoff({
-        cutoffTimestamp: 2000,
-        timestamp: 1999,
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipMessageByAbortCutoff({
-        cutoffTimestamp: 2000,
-        timestamp: 2000,
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipMessageByAbortCutoff({
-        cutoffTimestamp: 2000,
-        timestamp: 2001,
-      }),
-    ).toBe(false);
-  });
+    const groupMessageCtx = {
+      Body: `[Context]\nJake: /stop\n[from: Jake]`,
+      RawBody: "/stop",
+      ChatType: "group",
+      SessionKey: "agent:main:whatsapp:group:g1",
+    };
 
-  it("resolves session entry when key exists in store", () => {
-    const store = {
-      "session-1": { sessionId: "abc", updatedAt: 0 },
-    } as const;
-    expect(resolveSessionEntryForKey(store, "session-1")).toEqual({
-      entry: store["session-1"],
-      key: "session-1",
+    const result = await initSessionState({
+      ctx: groupMessageCtx,
+      cfg,
+      commandAuthorized: true,
     });
-    expect(resolveSessionEntryForKey(store, "session-2")).toEqual({});
-    expect(resolveSessionEntryForKey(undefined, "session-1")).toEqual({});
+
+    // /stop is detected via exact match in handleAbort, not isAbortTrigger
+    expect(result.triggerBodyNormalized).toBe("/stop");
+  });
+
+  it("isAbortTrigger matches bare word triggers (without slash)", () => {
+    expect(isAbortTrigger("stop")).toBe(true);
+    expect(isAbortTrigger("esc")).toBe(true);
+    expect(isAbortTrigger("abort")).toBe(true);
+    expect(isAbortTrigger("wait")).toBe(true);
+    expect(isAbortTrigger("exit")).toBe(true);
+    expect(isAbortTrigger("interrupt")).toBe(true);
+    expect(isAbortTrigger("hello")).toBe(false);
+    // /stop is NOT matched by isAbortTrigger - it's handled separately
+    expect(isAbortTrigger("/stop")).toBe(false);
+  });
+
+  it("isAbortRequestText aligns abort command semantics", () => {
+    expect(isAbortRequestText("/stop")).toBe(true);
+    expect(isAbortRequestText("stop")).toBe(true);
+    expect(isAbortRequestText("/stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
+
+    expect(isAbortRequestText("/status")).toBe(false);
+    expect(isAbortRequestText("stop please")).toBe(false);
+    expect(isAbortRequestText("/abort")).toBe(false);
+  });
+
+  it("removes abort memory entry when flag is reset", () => {
+    setAbortMemory("session-1", true);
+    expect(getAbortMemory("session-1")).toBe(true);
+
+    setAbortMemory("session-1", false);
+    expect(getAbortMemory("session-1")).toBeUndefined();
+    expect(getAbortMemorySizeForTest()).toBe(0);
+  });
+
+  it("caps abort memory tracking to a bounded max size", () => {
+    for (let i = 0; i < 2105; i += 1) {
+      setAbortMemory(`session-${i}`, true);
+    }
+    expect(getAbortMemorySizeForTest()).toBe(2000);
+    expect(getAbortMemory("session-0")).toBeUndefined();
+    expect(getAbortMemory("session-2104")).toBe(true);
   });
 
   it("fast-aborts even when text commands are disabled", async () => {
@@ -149,64 +199,6 @@ import {
     expect(result.handled).toBe(true);
     expect(getFollowupQueueDepth(sessionKey)).toBe(0);
     expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith(`session:${sessionKey}`);
-  });
-
-  it("persists abort cutoff metadata on /stop when command and target session match", async () => {
-    const sessionKey = "telegram:123";
-    const sessionId = "session-123";
-    const { storePath, cfg } = await createAbortConfig({
-      sessionIdsByKey: { [sessionKey]: sessionId },
-    });
-
-    const result = await runStopCommand({
-      cfg,
-      sessionKey,
-      from: "telegram:123",
-      to: "telegram:123",
-      messageSid: "55",
-      timestamp: 1234567890000,
-    });
-
-    expect(result.handled).toBe(true);
-    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
-    const entry = store[sessionKey] as {
-      abortedLastRun?: boolean;
-      abortCutoffMessageSid?: string;
-      abortCutoffTimestamp?: number;
-    };
-    expect(entry.abortedLastRun).toBe(true);
-    expect(entry.abortCutoffMessageSid).toBe("55");
-    expect(entry.abortCutoffTimestamp).toBe(1234567890000);
-  });
-
-  it("does not persist cutoff metadata when native /stop targets a different session", async () => {
-    const slashSessionKey = "telegram:slash:123";
-    const targetSessionKey = "agent:main:telegram:group:123";
-    const targetSessionId = "session-target";
-    const { storePath, cfg } = await createAbortConfig({
-      sessionIdsByKey: { [targetSessionKey]: targetSessionId },
-    });
-
-    const result = await runStopCommand({
-      cfg,
-      sessionKey: slashSessionKey,
-      from: "telegram:123",
-      to: "telegram:123",
-      targetSessionKey,
-      messageSid: "999",
-      timestamp: 1234567890000,
-    });
-
-    expect(result.handled).toBe(true);
-    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
-    const entry = store[targetSessionKey] as {
-      abortedLastRun?: boolean;
-      abortCutoffMessageSid?: string;
-      abortCutoffTimestamp?: number;
-    };
-    expect(entry.abortedLastRun).toBe(true);
-    expect(entry.abortCutoffMessageSid).toBeUndefined();
-    expect(entry.abortCutoffTimestamp).toBeUndefined();
   });
 
   it("fast-abort stops active subagent runs for requester session", async () => {
