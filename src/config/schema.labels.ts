@@ -221,8 +221,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.humanDelay.minMs": "Human Delay Min (ms)",
   "agents.defaults.humanDelay.maxMs": "Human Delay Max (ms)",
   "agents.defaults.cliBackends": "CLI Backends",
-<<<<<<< HEAD
-=======
   "agents.defaults.compaction": "Compaction",
   "agents.defaults.compaction.mode": "Compaction Mode",
   "agents.defaults.compaction.reserveTokens": "Compaction Reserve Tokens",
@@ -243,7 +241,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Sandbox Docker Allow Container Namespace Join",
   commands: "Commands",
->>>>>>> 8a006a3260 (feat(heartbeat): add directPolicy and restore default direct delivery)
   "commands.native": "Native Commands",
   "commands.nativeSkills": "Native Skill Commands",
   "commands.text": "Text Commands",

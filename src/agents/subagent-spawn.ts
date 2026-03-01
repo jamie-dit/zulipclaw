@@ -455,8 +455,6 @@ export async function spawnSubagentDirect(
     expectsCompletionMessage: params.expectsCompletionMessage === true,
   });
 
-<<<<<<< HEAD
-=======
   if (hookRunner?.hasHooks("subagent_spawned")) {
     try {
       await hookRunner.runSubagentSpawned(
@@ -500,7 +498,6 @@ export async function spawnSubagentDirect(
     status: "accepted",
     childSessionKey,
     runId: childRunId,
->>>>>>> 452a8c9db9 (fix: use canonical cron session detection for spawn note)
     mode: spawnMode,
     note,
     modelApplied: resolvedModel ? modelApplied : undefined,

@@ -231,8 +231,6 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.truncated).toBe(true);
   });
 
-<<<<<<< HEAD:src/agents/tools/web-tools.fetch.e2e.test.ts
-=======
   it("caps response bytes and does not hang on endless streams", async () => {
     const chunk = new TextEncoder().encode("<html><body><div>hi</div></body></html>");
     const stream = new ReadableStream<Uint8Array>({
@@ -277,7 +275,6 @@ describe("web_fetch extraction fallbacks", () => {
     expect(requestInit?.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
   });
 
->>>>>>> 46003e85bf (fix: unify web tool proxy path (#27430) (thanks @kevinWangSheng)):src/agents/tools/web-tools.fetch.test.ts
   // NOTE: Test for wrapping url/finalUrl/warning fields requires DNS mocking.
   // The sanitization of these fields is verified by external-content.test.ts tests.
 

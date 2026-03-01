@@ -227,10 +227,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 - `session` only affects the run context; delivery is controlled by `target` and `to`.
 - To deliver to a specific channel/recipient, set `target` + `to`. With
   `target: "last"`, delivery uses the last external channel for that session.
-<<<<<<< HEAD
-=======
 - Heartbeat deliveries allow direct/DM targets by default. Set `directPolicy: "block"` to suppress direct-target sends while still running the heartbeat turn.
->>>>>>> 8a006a3260 (feat(heartbeat): add directPolicy and restore default direct delivery)
 - If the main queue is busy, the heartbeat is skipped and retried later.
 - If `target` resolves to no external destination, the run still happens but no
   outbound message is sent.

@@ -5,11 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   CircularIncludeError,
   ConfigIncludeError,
-<<<<<<< HEAD
-=======
   MAX_INCLUDE_FILE_BYTES,
   deepMerge,
->>>>>>> 9925ac6a2d (fix(config): harden include file loading path checks)
   type IncludeResolver,
   resolveConfigIncludes,
 } from "./includes.js";

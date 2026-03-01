@@ -217,8 +217,6 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.threadId).toBe(42);
     expect(resolved.to).toBe("63448508");
   });
-<<<<<<< HEAD
-=======
 
   it("allows heartbeat delivery to Slack DMs and avoids inherited threadId by default", () => {
     const cfg: OpenClawConfig = {};
@@ -606,5 +604,4 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
     expect(resolved.channel).toBe("telegram");
     expect(resolved.to).toBe("+15550000000");
   });
->>>>>>> 8a006a3260 (feat(heartbeat): add directPolicy and restore default direct delivery)
 });

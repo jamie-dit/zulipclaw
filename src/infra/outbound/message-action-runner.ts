@@ -13,12 +13,9 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-<<<<<<< HEAD
-=======
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
->>>>>>> 1e7ec8bfd2 (fix(routing): preserve explicit cron account and bound message defaults)
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,

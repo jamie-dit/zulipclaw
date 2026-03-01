@@ -294,8 +294,6 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-<<<<<<< HEAD:src/cron/isolated-agent.skips-delivery-without-whatsapp-recipient-besteffortdeliver-true.e2e.test.ts
-=======
   it("fails when announce delivery reports false and best-effort is disabled", async () => {
     await withTempCronHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
@@ -348,7 +346,6 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
->>>>>>> b37dc42240 (fix(cron): suppress fallback summary after attempted announce delivery):src/cron/isolated-agent.skips-delivery-without-whatsapp-recipient-besteffortdeliver-true.test.ts
   it("ignores structured direct delivery failures when best-effort is enabled", async () => {
     await expectBestEffortTelegramNotDelivered({
       text: "hello from cron",

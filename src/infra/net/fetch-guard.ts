@@ -33,8 +33,6 @@ export type GuardedFetchResult = {
 };
 
 const DEFAULT_MAX_REDIRECTS = 3;
-<<<<<<< HEAD
-=======
 const ENV_PROXY_KEYS = [
   "HTTP_PROXY",
   "HTTPS_PROXY",
@@ -49,7 +47,6 @@ const CROSS_ORIGIN_REDIRECT_SENSITIVE_HEADERS = [
   "cookie",
   "cookie2",
 ];
->>>>>>> 46003e85bf (fix: unify web tool proxy path (#27430) (thanks @kevinWangSheng))
 
 function hasEnvProxyConfigured(): boolean {
   for (const key of ENV_PROXY_KEYS) {
