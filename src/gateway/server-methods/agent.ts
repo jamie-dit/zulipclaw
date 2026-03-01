@@ -10,6 +10,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { validateSessionId } from "../../config/sessions/paths.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import {
   resolveAgentDeliveryPlan,
@@ -172,6 +173,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       sessionId?: string;
       sessionKey?: string;
       thinking?: string;
+      reasoning?: string;
       deliver?: boolean;
       attachments?: Array<{
         type?: string;
@@ -307,7 +309,22 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    let resolvedSessionId = request.sessionId?.trim() || undefined;
+    let resolvedSessionId: string | undefined;
+    if (typeof request.sessionId === "string" && request.sessionId.trim().length > 0) {
+      try {
+        resolvedSessionId = validateSessionId(request.sessionId);
+      } catch {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid agent params: malformed sessionId "${request.sessionId}"`,
+          ),
+        );
+        return;
+      }
+    }
     let sessionEntry: SessionEntry | undefined;
     let bestEffortDeliver = false;
     let cfgForAgent: ReturnType<typeof loadConfig> | undefined;
@@ -536,6 +553,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         sessionId: resolvedSessionId,
         sessionKey: resolvedSessionKey,
         thinking: request.thinking,
+        reasoning: request.reasoning,
         deliver,
         deliveryTargetMode,
         channel: resolvedChannel,

@@ -349,7 +349,7 @@ export async function resolveReplyDirectives(params: {
     directives.reasoningLevel ??
     (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
     (agentCfg?.reasoningDefault as ReasoningLevel | undefined) ??
-    "off";
+    (resolvedThinkLevel === "high" ? "stream" : "off");
   const resolvedElevatedLevel = elevatedAllowed
     ? (directives.elevatedLevel ??
       (sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
