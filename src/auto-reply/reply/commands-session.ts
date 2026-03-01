@@ -13,7 +13,6 @@ import {
   formatAbortReplyText,
   isAbortTrigger,
   resolveAbortCutoffFromContext,
-  resolveSessionEntryForKey,
   setAbortMemory,
   stopSubagentsForRequester,
 } from "./abort.js";
