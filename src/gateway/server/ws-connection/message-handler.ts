@@ -614,7 +614,16 @@ export function attachGatewayWsMessageHandler(params: {
           return;
         }
 
-        const skipPairing = allowControlUiBypass && sharedAuthOk;
+        const trustedProxyAuthOk =
+          isControlUi &&
+          resolvedAuth.mode === "trusted-proxy" &&
+          authOk &&
+          authMethod === "trusted-proxy";
+        const skipPairing = shouldSkipControlUiPairing(
+          controlUiAuthPolicy,
+          sharedAuthOk,
+          trustedProxyAuthOk,
+        );
         if (device && devicePublicKey && !skipPairing) {
           const requirePairing = async (reason: string, _paired?: { deviceId: string }) => {
             const pairing = await requestDevicePairing({

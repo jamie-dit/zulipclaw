@@ -22,12 +22,15 @@ export type CronDelivery = {
   mode: CronDeliveryMode;
   channel?: CronMessageChannel;
   to?: string;
+  accountId?: string;
   bestEffort?: boolean;
 };
 
 export type CronDeliveryPatch = Partial<CronDelivery>;
 
 export type CronRunStatus = "ok" | "error" | "skipped";
+
+export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
 
 export type CronUsageSummary = {
   input_tokens?: number;
@@ -46,6 +49,8 @@ export type CronRunTelemetry = {
 export type CronRunOutcome = {
   status: CronRunStatus;
   error?: string;
+  /** Optional classifier for execution errors to guide fallback behavior. */
+  errorKind?: "delivery-target";
   summary?: string;
   sessionId?: string;
   sessionKey?: string;

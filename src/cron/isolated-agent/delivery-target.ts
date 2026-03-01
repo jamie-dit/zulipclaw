@@ -22,8 +22,10 @@ export async function resolveDeliveryTarget(
     channel?: "last" | ChannelId;
     to?: string;
     sessionKey?: string;
+    accountId?: string;
   },
 ): Promise<{
+  ok: boolean;
   channel: Exclude<OutboundChannel, "none">;
   to?: string;
   accountId?: string;
@@ -92,6 +94,11 @@ export async function resolveDeliveryTarget(
     }
   }
 
+  // Explicit delivery account should override inferred session/binding account.
+  if (jobPayload.accountId) {
+    accountId = jobPayload.accountId;
+  }
+
   // Carry threadId when it was explicitly set (from :topic: parsing or config)
   // or when delivering to the same recipient as the session's last conversation.
   // Session-derived threadIds are dropped when the target differs to prevent
@@ -104,6 +111,7 @@ export async function resolveDeliveryTarget(
 
   if (!toCandidate) {
     return {
+      ok: false,
       channel,
       to: undefined,
       accountId,
@@ -120,6 +128,7 @@ export async function resolveDeliveryTarget(
     mode,
   });
   return {
+    ok: docked.ok,
     channel,
     to: docked.ok ? docked.to : undefined,
     accountId,

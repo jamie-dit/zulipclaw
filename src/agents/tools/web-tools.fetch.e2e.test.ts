@@ -1,3 +1,4 @@
+import { EnvHttpProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
@@ -142,6 +143,7 @@ describe("web_fetch extraction fallbacks", () => {
 
   afterEach(() => {
     global.fetch = priorFetch;
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -227,6 +229,50 @@ describe("web_fetch extraction fallbacks", () => {
 
     expect(details.text?.length).toBeLessThanOrEqual(100);
     expect(details.truncated).toBe(true);
+  });
+
+  it("caps response bytes and does not hang on endless streams", async () => {
+    const chunk = new TextEncoder().encode("<html><body><div>hi</div></body></html>");
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(chunk);
+      },
+    });
+    const response = new Response(stream, {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    });
+    const fetchSpy = vi.fn().mockResolvedValue(response);
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const tool = createFetchTool({
+      maxResponseBytes: 128,
+      firecrawl: { enabled: false },
+    });
+    const result = await tool?.execute?.("call", { url: "https://example.com/stream" });
+    const details = result?.details as { warning?: string } | undefined;
+    expect(details?.warning).toContain("Response body truncated");
+  });
+
+  it("uses proxy-aware dispatcher when HTTP_PROXY is configured", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    const mockFetch = installMockFetch((input: RequestInfo | URL) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: makeHeaders({ "content-type": "text/plain" }),
+        text: async () => "proxy body",
+        url: requestUrl(input),
+      } as Response),
+    );
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+
+    await tool?.execute?.("call", { url: "https://example.com/proxy" });
+
+    const requestInit = mockFetch.mock.calls[0]?.[1] as
+      | (RequestInit & { dispatcher?: unknown })
+      | undefined;
+    expect(requestInit?.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
   });
 
   // NOTE: Test for wrapping url/finalUrl/warning fields requires DNS mocking.
