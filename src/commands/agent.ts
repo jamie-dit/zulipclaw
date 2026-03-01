@@ -30,9 +30,11 @@ import { ensureAgentWorkspace } from "../agents/workspace.js";
 import {
   formatThinkingLevels,
   formatXHighModelHint,
+  normalizeReasoningLevel,
   normalizeThinkLevel,
   normalizeVerboseLevel,
   supportsXHighThinking,
+  type ReasoningLevel,
   type ThinkLevel,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
@@ -45,6 +47,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
+import { validateSessionId } from "../config/sessions/paths.js";
 import {
   clearAgentRunContext,
   emitAgentEvent,
@@ -97,6 +100,7 @@ function runAgentAttempt(params: {
   body: string;
   isFallbackRetry: boolean;
   resolvedThinkLevel: ThinkLevel;
+  resolvedReasoningLevel: ReasoningLevel | undefined;
   timeoutMs: number;
   runId: string;
   opts: AgentCommandOpts;
@@ -169,6 +173,7 @@ function runAgentAttempt(params: {
     authProfileIdSource: authProfileId ? params.sessionEntry?.authProfileOverrideSource : undefined,
     thinkLevel: params.resolvedThinkLevel,
     verboseLevel: params.resolvedVerboseLevel,
+    reasoningLevel: params.resolvedReasoningLevel,
     timeoutMs: params.timeoutMs,
     runId: params.runId,
     lane: params.opts.lane,
@@ -190,7 +195,8 @@ export async function agentCommand(
   if (!body) {
     throw new Error("Message (--message) is required");
   }
-  if (!opts.to && !opts.sessionId && !opts.sessionKey && !opts.agentId) {
+  const safeSessionId = opts.sessionId ? validateSessionId(opts.sessionId) : undefined;
+  if (!opts.to && !safeSessionId && !opts.sessionKey && !opts.agentId) {
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
 
@@ -238,6 +244,11 @@ export async function agentCommand(
     throw new Error(`Invalid one-shot thinking level. Use one of: ${thinkingLevelsHint}.`);
   }
 
+  const reasoningOverride = normalizeReasoningLevel(opts.reasoning);
+  if (opts.reasoning && !reasoningOverride) {
+    throw new Error(`Invalid reasoning level. Use one of: off, on, or stream.`);
+  }
+
   const verboseOverride = normalizeVerboseLevel(opts.verbose);
   if (opts.verbose && !verboseOverride) {
     throw new Error('Invalid verbose level. Use "on", "full", or "off".');
@@ -265,7 +276,7 @@ export async function agentCommand(
   const sessionResolution = resolveSession({
     cfg,
     to: opts.to,
-    sessionId: opts.sessionId,
+    sessionId: safeSessionId,
     sessionKey: opts.sessionKey,
     agentId: agentIdOverride,
   });
@@ -304,6 +315,10 @@ export async function agentCommand(
       (agentCfg?.thinkingDefault as ThinkLevel | undefined);
     const resolvedVerboseLevel =
       verboseOverride ?? persistedVerbose ?? (agentCfg?.verboseDefault as VerboseLevel | undefined);
+    const resolvedReasoningLevel =
+      reasoningOverride ??
+      (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
+      (agentCfg?.reasoningDefault as ReasoningLevel | undefined);
 
     if (sessionKey) {
       registerAgentRunContext(runId, {
@@ -351,6 +366,9 @@ export async function agentCommand(
       const next: SessionEntry = { ...entry, sessionId, updatedAt: Date.now() };
       if (thinkOverride) {
         next.thinkingLevel = thinkOverride;
+      }
+      if (reasoningOverride) {
+        next.reasoningLevel = reasoningOverride;
       }
       applyVerboseOverride(next, verboseOverride);
       await persistSessionEntry({
@@ -555,6 +573,7 @@ export async function agentCommand(
             body,
             isFallbackRetry,
             resolvedThinkLevel,
+            resolvedReasoningLevel,
             timeoutMs,
             runId,
             opts,

@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
-import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
+import {
+  formatThinkingLevels,
+  normalizeReasoningLevel,
+  normalizeThinkLevel,
+} from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -23,6 +27,7 @@ export type SpawnSubagentParams = {
   agentId?: string;
   model?: string;
   thinking?: string;
+  reasoning?: string;
   runTimeoutSeconds?: number;
   maxIterations?: number;
   cleanup?: "delete" | "keep";
@@ -298,6 +303,7 @@ export async function spawnSubagentDirect(
     readStringParam(cfg.agents?.defaults?.subagents ?? {}, "thinking");
 
   let thinkingOverride: string | undefined;
+  let reasoningOverride: string | undefined;
   const thinkingCandidateRaw = thinkingOverrideRaw || resolvedThinkingDefaultRaw;
   if (thinkingCandidateRaw) {
     const normalized = normalizeThinkLevel(thinkingCandidateRaw);
@@ -310,6 +316,17 @@ export async function spawnSubagentDirect(
       };
     }
     thinkingOverride = normalized;
+    reasoningOverride = normalized === "high" ? "stream" : undefined;
+  }
+  if (params.reasoning) {
+    const normalizedReasoning = normalizeReasoningLevel(params.reasoning);
+    if (!normalizedReasoning) {
+      return {
+        status: "error",
+        error: `Invalid reasoning level "${params.reasoning}". Use one of: off, on, or stream.`,
+      };
+    }
+    reasoningOverride = normalizedReasoning;
   }
   try {
     await callGateway({
@@ -406,6 +423,7 @@ export async function spawnSubagentDirect(
         lane: AGENT_LANE_SUBAGENT,
         extraSystemPrompt: childSystemPrompt,
         thinking: thinkingOverride,
+        reasoning: reasoningOverride,
         timeout: runTimeoutSeconds,
         label: label || undefined,
         spawnedBy: spawnedByKey,

@@ -327,9 +327,13 @@ export async function runAgentTurnWithFallback(params: {
               await params.opts?.onAssistantMessageStart?.();
             },
             onReasoningStream:
-              params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
+              params.followupRun.run.reasoningLevel === "stream" ||
+              params.typingSignals.shouldStartOnReasoning ||
+              params.opts?.onReasoningStream
                 ? async (payload) => {
-                    await params.typingSignals.signalReasoningDelta();
+                    if (params.typingSignals.shouldStartOnReasoning) {
+                      await params.typingSignals.signalReasoningDelta();
+                    }
                     await params.opts?.onReasoningStream?.({
                       text: payload.text,
                       mediaUrls: payload.mediaUrls,
