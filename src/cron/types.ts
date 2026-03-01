@@ -30,6 +30,8 @@ export type CronDeliveryPatch = Partial<CronDelivery>;
 
 export type CronRunStatus = "ok" | "error" | "skipped";
 
+export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
+
 export type CronUsageSummary = {
   input_tokens?: number;
   output_tokens?: number;
