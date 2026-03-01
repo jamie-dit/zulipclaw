@@ -68,6 +68,7 @@ import {
   pickSummaryFromPayloads,
   resolveHeartbeatAckMaxChars,
 } from "./helpers.js";
+import { dispatchCronDelivery } from "./delivery-dispatch.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
 import {
@@ -587,6 +588,46 @@ export async function runCronIsolatedAgentTurn(params: {
     (deliveryPayload?.mediaUrls?.length ?? 0) > 0 ||
     Object.keys(deliveryPayload?.channelData ?? {}).length > 0;
   const deliveryBestEffort = resolveCronDeliveryBestEffort(params.job);
+  const hasErrorPayload = payloads.some((payload) => payload?.isError === true);
+  const lastErrorPayloadText = [...payloads]
+    .toReversed()
+    .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
+    ?.text?.trim();
+  const embeddedRunError = hasErrorPayload
+    ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
+    : undefined;
+  const resolveRunOutcome = (runOutcomeParams?: {
+    delivered?: boolean;
+    deliveryAttempted?: boolean;
+  }) =>
+    withRunSession({
+      status: hasErrorPayload ? "error" : "ok",
+      ...(hasErrorPayload
+        ? { error: embeddedRunError ?? "cron isolated run returned an error payload" }
+        : {}),
+      summary,
+      outputText,
+      delivered: runOutcomeParams?.delivered,
+      deliveryAttempted: runOutcomeParams?.deliveryAttempted,
+      ...telemetry,
+    });
+  // ZulipClaw: abortSignal not yet supported in runCronIsolatedAgentTurn
+  const abortSignal: AbortSignal | undefined = undefined;
+  const isAborted = () => false;
+  const abortReason = () => "cron: job execution timed out";
+  // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
+  const ackMaxChars = resolveHeartbeatAckMaxChars(agentCfg);
+  const skipHeartbeatDelivery = deliveryRequested && isHeartbeatOnlyResponse(payloads, ackMaxChars);
+  const skipMessagingToolDelivery =
+    deliveryRequested &&
+    runResult.didSendViaMessagingTool === true &&
+    (runResult.messagingToolSentTargets ?? []).some((target) =>
+      matchesMessagingToolDeliveryTarget(target, {
+        channel: resolvedDelivery.channel,
+        to: resolvedDelivery.to,
+        accountId: resolvedDelivery.accountId,
+      }),
+    );
   const deliveryResult = await dispatchCronDelivery({
     cfg: params.cfg,
     cfgWithAgentDefaults,
