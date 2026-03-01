@@ -127,7 +127,7 @@ describe("subscribeEmbeddedPiSession", () => {
       const streamTexts = onReasoningStream.mock.calls
         .map((call) => call[0]?.text)
         .filter((value): value is string => typeof value === "string");
-      expect(streamTexts.at(-1)).toBe("Reasoning:\n_Because it helps_");
+      expect(streamTexts.at(-1)).toBe("Reasoning:\n> Because it helps");
 
       expect(assistantMessage.content).toEqual([
         { type: "thinking", thinking: "Because it helps" },
@@ -200,6 +200,88 @@ describe("subscribeEmbeddedPiSession", () => {
       expect(combined).toBe("Final answer");
     },
   );
+
+  it("streams Anthropic content_block thinking events via onReasoningStream", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onReasoningStream = vi.fn();
+    const onReasoningEnd = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run",
+      onReasoningStream,
+      onReasoningEnd,
+      reasoningMode: "stream",
+    });
+
+    handler?.({
+      type: "message_start",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Because" }],
+      },
+    });
+
+    handler?.({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Because" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_start",
+      },
+    });
+
+    handler?.({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Because it helps" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        delta: " because it helps",
+      },
+    });
+
+    handler?.({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Because it helps" },
+          { type: "text", text: "Final answer" },
+        ],
+      },
+      assistantMessageEvent: {
+        type: "thinking_end",
+      },
+    });
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "Because it helps" },
+        { type: "text", text: "Final answer" },
+      ],
+    } as AssistantMessage;
+
+    handler?.({ type: "message_end", message: assistantMessage });
+
+    const streamTexts = onReasoningStream.mock.calls
+      .map((call) => call[0]?.text)
+      .filter((value): value is string => typeof value === "string");
+    expect(streamTexts.at(-1)).toContain("Because it helps");
+    expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+  });
 
   it("emits delta chunks in agent events for streaming assistant text", () => {
     const { emit, onAgentEvent } = createAgentEventHarness();

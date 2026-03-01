@@ -82,13 +82,30 @@ export function handleMessageUpdate(
       ? (assistantEvent as Record<string, unknown>)
       : undefined;
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
+  const isTextEvent =
+    evtType === "text_delta" || evtType === "text_start" || evtType === "text_end";
+  const isThinkingEvent =
+    evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end";
 
-  if (evtType !== "text_delta" && evtType !== "text_start" && evtType !== "text_end") {
+  if (!isTextEvent && !isThinkingEvent) {
     return;
   }
 
   const delta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
   const content = typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
+
+  if (isThinkingEvent) {
+    if (ctx.state.streamReasoning) {
+      const reasoningText = extractAssistantThinking(msg);
+      if (reasoningText) {
+        ctx.emitReasoningStream(reasoningText);
+      }
+    }
+    if (evtType === "thinking_end") {
+      void ctx.params.onReasoningEnd?.();
+    }
+    return;
+  }
 
   appendRawStream({
     ts: Date.now(),
