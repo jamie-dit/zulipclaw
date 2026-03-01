@@ -25,6 +25,7 @@ export async function resolveDeliveryTarget(
     accountId?: string;
   },
 ): Promise<{
+  ok: boolean;
   channel: Exclude<OutboundChannel, "none">;
   to?: string;
   accountId?: string;
@@ -110,6 +111,7 @@ export async function resolveDeliveryTarget(
 
   if (!toCandidate) {
     return {
+      ok: false,
       channel,
       to: undefined,
       accountId,
@@ -126,6 +128,7 @@ export async function resolveDeliveryTarget(
     mode,
   });
   return {
+    ok: docked.ok,
     channel,
     to: docked.ok ? docked.to : undefined,
     accountId,
