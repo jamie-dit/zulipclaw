@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 export const POSIX_OPENCLAW_TMP_DIR = "/tmp/openclaw";
+const TMP_DIR_ACCESS_MODE = fs.constants.W_OK | fs.constants.X_OK;
 
 type ResolvePreferredOpenClawTmpDirOptions = {
   accessSync?: (path: string, mode?: number) => void;
@@ -83,10 +84,28 @@ export function resolvePreferredOpenClawTmpDir(
     return path.join(base, suffix);
   };
 
-  try {
-    const preferred = lstatSync(POSIX_OPENCLAW_TMP_DIR);
-    if (!preferred.isDirectory() || preferred.isSymbolicLink()) {
-      return fallback();
+  const isTrustedTmpDir = (st: {
+    isDirectory(): boolean;
+    isSymbolicLink(): boolean;
+    mode?: number;
+    uid?: number;
+  }): boolean => {
+    return st.isDirectory() && !st.isSymbolicLink() && isSecureDirForUser(st);
+  };
+
+  const resolveDirState = (candidatePath: string): "available" | "missing" | "invalid" => {
+    try {
+      const candidate = lstatSync(candidatePath);
+      if (!isTrustedTmpDir(candidate)) {
+        return "invalid";
+      }
+      accessSync(candidatePath, TMP_DIR_ACCESS_MODE);
+      return "available";
+    } catch (err) {
+      if (isNodeErrorWithCode(err, "ENOENT")) {
+        return "missing";
+      }
+      return "invalid";
     }
   };
 
@@ -146,7 +165,7 @@ export function resolvePreferredOpenClawTmpDir(
   }
 
   try {
-    accessSync("/tmp", fs.constants.W_OK | fs.constants.X_OK);
+    accessSync("/tmp", TMP_DIR_ACCESS_MODE);
     // Create with a safe default; subsequent callers expect it exists.
     mkdirSync(POSIX_OPENCLAW_TMP_DIR, { recursive: true, mode: 0o700 });
     chmodSync(POSIX_OPENCLAW_TMP_DIR, 0o700);
@@ -158,6 +177,6 @@ export function resolvePreferredOpenClawTmpDir(
     }
     return POSIX_OPENCLAW_TMP_DIR;
   } catch {
-    return fallback();
+    return ensureTrustedFallbackDir();
   }
 }
