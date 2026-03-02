@@ -1120,22 +1120,6 @@ function renderRelayMessageToolLines(
   return toolCallLines;
 }
 
-function formatThoughtTime(ts: number): string {
-  return formatRelayUpdatedTime(ts);
-}
-
-function renderThoughtHistoryQuoteLines(history: ThoughtEntry[]): string {
-  const lines: string[] = [];
-  for (const thoughtEntry of history) {
-    const prefix = `[${formatThoughtTime(thoughtEntry.ts)}]`;
-    const safeThought = sanitizeForCodeFence(thoughtEntry.text);
-    for (const thoughtLine of safeThought.split("\n")) {
-      lines.push(`> ${prefix} ${thoughtLine}`);
-    }
-  }
-  return lines.join("\n");
-}
-
 export function renderRelayMessage(
   state: RelayState,
   originTopic?: string,
@@ -1158,16 +1142,11 @@ export function renderRelayMessage(
   const header = `${emoji} **\`${state.label}\`**${sandboxSuffix} · ${modelShort}${profileSuffix} · ${state.toolCount} ${callWord}${contextSuffix} · updated ${updatedTime}${watchdogEmoji}${originSuffix}${respawnSuffix}`;
   const summaryLine = renderToolSummaryLine(state.toolEntries, state.toolCount);
   const toolCallLines = renderRelayMessageToolLines(state, opts);
-  const thoughtHistory = normalizeThoughtHistory(state);
-  const thoughtLines =
-    thoughtHistory.length > 0
-      ? renderThoughtHistoryQuoteLines(thoughtHistory)
-      : "> _(no thoughts yet)_";
 
   const headerWithSummary = summaryLine ? `${header}\n${summaryLine}` : header;
 
   const sections = [
-    `${headerWithSummary}\n\n\`\`\`spoiler Tool calls\n${toolCallLines.join("\n")}\n\`\`\`\n\n\`\`\`spoiler Thoughts\n${thoughtLines}\n\`\`\``,
+    `${headerWithSummary}\n\n\`\`\`spoiler Tool calls\n${toolCallLines.join("\n")}\n\`\`\``,
   ];
 
   // Append sub-agent completion output when available (populated at lifecycle end).
