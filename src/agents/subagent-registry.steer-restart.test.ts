@@ -2,7 +2,11 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const noop = () => {};
 let lifecycleHandler:
-  | ((evt: { stream?: string; runId: string; data?: { phase?: string } }) => void)
+  | ((evt: {
+      stream?: string;
+      runId: string;
+      data?: { phase?: string; aborted?: boolean; error?: string };
+    }) => void)
   | undefined;
 
 vi.mock("../gateway/call.js", () => ({
@@ -105,6 +109,56 @@ describe("subagent registry steer restarts", () => {
     expect(announce.childRunId).toBe("run-new");
   });
 
+  it("classifies lifecycle timeout completions as run_timeout", async () => {
+    mod.registerSubagentRun({
+      runId: "run-timeout-class",
+      childSessionKey: "agent:main:subagent:timeout-class",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "timeout class",
+      cleanup: "keep",
+    });
+
+    lifecycleHandler?.({
+      stream: "lifecycle",
+      runId: "run-timeout-class",
+      data: { phase: "end", aborted: true },
+    });
+
+    await flushAnnounce();
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+    const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as {
+      outcome?: { failureClass?: string; status?: string };
+    };
+    expect(announce.outcome?.status).toBe("timeout");
+    expect(announce.outcome?.failureClass).toBe("run_timeout");
+  });
+
+  it("classifies lifecycle abort errors as aborted_by_cancel", async () => {
+    mod.registerSubagentRun({
+      runId: "run-abort-class",
+      childSessionKey: "agent:main:subagent:abort-class",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "abort class",
+      cleanup: "keep",
+    });
+
+    lifecycleHandler?.({
+      stream: "lifecycle",
+      runId: "run-abort-class",
+      data: { phase: "error", error: "AbortError: Request was aborted" },
+    });
+
+    await flushAnnounce();
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+    const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as {
+      outcome?: { failureClass?: string; status?: string };
+    };
+    expect(announce.outcome?.status).toBe("error");
+    expect(announce.outcome?.failureClass).toBe("aborted_by_cancel");
+  });
+
   it("clears announce retry state when replacing after steer restart", () => {
     mod.registerSubagentRun({
       runId: "run-retry-reset-old",
@@ -186,7 +240,14 @@ describe("subagent registry steer restarts", () => {
     expect(mod.isSubagentSessionRunActive(childSessionKey)).toBe(false);
 
     const run = mod.listSubagentRunsForRequester("agent:main:main")[0];
-    expect(run?.outcome).toEqual({ status: "error", error: "manual kill" });
+    expect(run?.outcome).toEqual({
+      status: "error",
+      error: "manual kill",
+      failureClass: "error",
+      iterationLimitReached: false,
+      iterationsUsed: undefined,
+      maxIterations: undefined,
+    });
     expect(run?.cleanupHandled).toBe(true);
     expect(typeof run?.cleanupCompletedAt).toBe("number");
   });

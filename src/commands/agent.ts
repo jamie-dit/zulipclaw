@@ -80,11 +80,30 @@ async function persistSessionEntry(params: PersistSessionEntryParams): Promise<v
   });
 }
 
-function resolveFallbackRetryPrompt(params: { body: string; isFallbackRetry: boolean }): string {
+const FALLBACK_CONTINUATION_PROMPT =
+  "Continue where you left off. The previous model attempt failed or timed out.";
+const FALLBACK_CONTINUATION_PROMPT_COMPACT =
+  "Continue the same unfinished task from the latest session context.";
+const MAX_FALLBACK_CONTINUATION_RETRIES = 1;
+
+export function resolveFallbackRetryPrompt(params: {
+  body: string;
+  isFallbackRetry: boolean;
+  fallbackRetryCount?: number;
+  maxContinuationRetries?: number;
+}): string {
   if (!params.isFallbackRetry) {
     return params.body;
   }
-  return "Continue where you left off. The previous model attempt failed or timed out.";
+  const retryCount = Math.max(1, Math.floor(params.fallbackRetryCount ?? 1));
+  const maxContinuationRetries = Math.max(
+    0,
+    Math.floor(params.maxContinuationRetries ?? MAX_FALLBACK_CONTINUATION_RETRIES),
+  );
+  if (retryCount <= maxContinuationRetries) {
+    return FALLBACK_CONTINUATION_PROMPT;
+  }
+  return FALLBACK_CONTINUATION_PROMPT_COMPACT;
 }
 
 function runAgentAttempt(params: {
@@ -99,6 +118,7 @@ function runAgentAttempt(params: {
   workspaceDir: string;
   body: string;
   isFallbackRetry: boolean;
+  fallbackRetryCount?: number;
   resolvedThinkLevel: ThinkLevel;
   resolvedReasoningLevel: ReasoningLevel | undefined;
   timeoutMs: number;
@@ -116,6 +136,7 @@ function runAgentAttempt(params: {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
+    fallbackRetryCount: params.fallbackRetryCount,
   });
   if (isCliProvider(params.providerOverride, params.cfg)) {
     const cliSessionId = getCliSessionId(params.sessionEntry, params.providerOverride);
@@ -558,7 +579,9 @@ export async function agentCommand(
         agentDir,
         fallbacksOverride: effectiveFallbacksOverride,
         run: (providerOverride, modelOverride) => {
-          const isFallbackRetry = fallbackAttemptIndex > 0;
+          const attemptIndex = fallbackAttemptIndex;
+          const isFallbackRetry = attemptIndex > 0;
+          const fallbackRetryCount = isFallbackRetry ? attemptIndex : undefined;
           fallbackAttemptIndex += 1;
           return runAgentAttempt({
             providerOverride,
@@ -572,6 +595,7 @@ export async function agentCommand(
             workspaceDir,
             body,
             isFallbackRetry,
+            fallbackRetryCount,
             resolvedThinkLevel,
             resolvedReasoningLevel,
             timeoutMs,

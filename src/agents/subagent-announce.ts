@@ -31,6 +31,11 @@ import {
 } from "./pi-embedded.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import {
+  resolveFailureMetadataLabel,
+  resolveSubagentOutcomeStatusLabel,
+  type SubagentRunOutcome,
+} from "./subagent-outcome.js";
 import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
 
 type ToolResultMessage = {
@@ -110,6 +115,7 @@ export function buildCompletionDeliveryMessage(params: {
     iterationsUsed: string;
     duration: string;
     tokens: string;
+    failure?: string;
   };
 }): string {
   const findingsText = params.findings.trim();
@@ -119,10 +125,11 @@ export function buildCompletionDeliveryMessage(params: {
   const metadataLines = params.metadata
     ? [
         `- Status: ${params.metadata.status}`,
+        params.metadata.failure ? `- Failure: ${params.metadata.failure}` : undefined,
         `- Iterations: ${params.metadata.iterationsUsed}`,
         `- Duration: ${params.metadata.duration}`,
         `- Tokens: ${params.metadata.tokens}`,
-      ]
+      ].filter((line): line is string => typeof line === "string")
     : [];
   const sections = [header];
   if (metadataLines.length > 0) {
@@ -848,14 +855,6 @@ export function buildSubagentSystemPrompt(params: {
   return lines.join("\n");
 }
 
-export type SubagentRunOutcome = {
-  status: "ok" | "error" | "timeout" | "unknown";
-  error?: string;
-  iterationLimitReached?: boolean;
-  iterationsUsed?: number;
-  maxIterations?: number;
-};
-
 export type SubagentAnnounceType = "subagent task" | "cron job";
 
 function resolveCompletionMetadataStatus(
@@ -1040,17 +1039,8 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     const completionMetadataStatus = resolveCompletionMetadataStatus(outcome);
-    // Build status label
-    const statusLabel =
-      completionMetadataStatus === "iteration_limit"
-        ? "reached the iteration limit"
-        : outcome.status === "ok"
-          ? "completed successfully"
-          : outcome.status === "timeout"
-            ? "timed out"
-            : outcome.status === "error"
-              ? `failed: ${outcome.error || "unknown error"}`
-              : "finished with unknown status";
+    const statusLabel = resolveSubagentOutcomeStatusLabel(outcome);
+    const failureMetadataLabel = resolveFailureMetadataLabel(outcome);
 
     // Build instructional message for main agent
     const announceType = params.announceType ?? "subagent task";
@@ -1150,6 +1140,7 @@ export async function runSubagentAnnounceFlow(params: {
       subagentName,
       metadata: {
         status: completionMetadataStatus,
+        failure: failureMetadataLabel,
         iterationsUsed,
         duration: stats.duration,
         tokens: stats.tokens,
@@ -1163,12 +1154,15 @@ export async function runSubagentAnnounceFlow(params: {
       "",
       "## Completion Metadata",
       `- Status: ${completionMetadataStatus}`,
+      failureMetadataLabel ? `- Failure class: ${failureMetadataLabel}` : undefined,
       `- Iterations used: ${iterationsUsed}`,
       `- Duration: ${stats.duration}`,
       `- Tokens: ${stats.tokens}`,
       "",
       stats.statsLine,
-    ].join("\n");
+    ]
+      .filter((line): line is string => typeof line === "string")
+      .join("\n");
     triggerMessage = [internalSummaryMessage, "", replyInstruction].join("\n");
 
     const announceId = buildAnnounceIdFromChildRun({
