@@ -183,18 +183,8 @@ describe("subagent-relay", () => {
       expect(msg).toContain("45k/200k ctx");
     });
 
-    it("renders Thoughts history below Tool calls with local timestamps and newest last", () => {
+    it("does not render Thoughts spoiler even when thought history is present", () => {
       const longThoughtLine = `${"A".repeat(180)} tail-marker`;
-      const thoughtTsA = Date.UTC(2026, 2, 2, 14, 31, 0);
-      const thoughtTsB = Date.UTC(2026, 2, 2, 14, 32, 0);
-      const expectedA = new Intl.DateTimeFormat("en-US", {
-        hour: "numeric",
-        minute: "2-digit",
-      }).format(new Date(thoughtTsA));
-      const expectedB = new Intl.DateTimeFormat("en-US", {
-        hour: "numeric",
-        minute: "2-digit",
-      }).format(new Date(thoughtTsB));
 
       const msg = renderRelayMessage({
         runId: "test-run",
@@ -209,31 +199,22 @@ describe("subagent-relay", () => {
         thoughtHistory: [
           {
             text: "Analyzing the file structure to determine the safest patch path.",
-            ts: thoughtTsA,
+            ts: Date.UTC(2026, 2, 2, 14, 31, 0),
           },
-          { text: longThoughtLine, ts: thoughtTsB },
+          { text: longThoughtLine, ts: Date.UTC(2026, 2, 2, 14, 32, 0) },
         ],
         lastUpdatedAt: 5_000,
         deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
       });
 
-      const toolCallsIdx = msg.indexOf("```spoiler Tool calls");
-      const thoughtsIdx = msg.indexOf("```spoiler Thoughts");
-      const firstThoughtIdx = msg.indexOf(
-        `> [${expectedA}] Analyzing the file structure to determine the safest patch path.`,
-      );
-      const secondThoughtIdx = msg.indexOf(`> [${expectedB}] ${longThoughtLine}`);
-
-      expect(toolCallsIdx).toBeGreaterThanOrEqual(0);
-      expect(thoughtsIdx).toBeGreaterThan(toolCallsIdx);
-      expect(firstThoughtIdx).toBeGreaterThan(thoughtsIdx);
-      expect(secondThoughtIdx).toBeGreaterThan(firstThoughtIdx);
-      expect(msg).toContain("tail-marker");
+      expect(msg).toContain("```spoiler Tool calls");
+      expect(msg).not.toContain("```spoiler Thoughts");
+      expect(msg).not.toContain("tail-marker");
       expect(msg).not.toContain("_💭");
     });
 
-    it("falls back to an empty Thoughts placeholder when no thought is captured", () => {
-      const msg = renderRelayMessage({
+    it("does not render Thoughts spoiler for empty or legacy thought values", () => {
+      const noThoughtMsg = renderRelayMessage({
         runId: "test-run",
         label: "worker",
         model: "anthropic/claude-opus-4-6",
@@ -246,18 +227,7 @@ describe("subagent-relay", () => {
         deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
       });
 
-      expect(msg).toContain("```spoiler Thoughts");
-      expect(msg).toContain("> _(no thoughts yet)_");
-    });
-
-    it("renders legacy currentThought fallback with a local timestamp prefix", () => {
-      const lastUpdatedAt = Date.UTC(2026, 2, 2, 15, 10, 0);
-      const expected = new Intl.DateTimeFormat("en-US", {
-        hour: "numeric",
-        minute: "2-digit",
-      }).format(new Date(lastUpdatedAt));
-
-      const msg = renderRelayMessage({
+      const legacyThoughtMsg = renderRelayMessage({
         runId: "test-run",
         label: "legacy-thought",
         model: "anthropic/claude-opus-4-6",
@@ -267,11 +237,14 @@ describe("subagent-relay", () => {
         toolCount: 0,
         status: "running",
         currentThought: "legacy captured thought",
-        lastUpdatedAt,
+        lastUpdatedAt: Date.UTC(2026, 2, 2, 15, 10, 0),
         deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
       });
 
-      expect(msg).toContain(`> [${expected}] legacy captured thought`);
+      expect(noThoughtMsg).not.toContain("```spoiler Thoughts");
+      expect(noThoughtMsg).not.toContain("> _(no thoughts yet)_");
+      expect(legacyThoughtMsg).not.toContain("```spoiler Thoughts");
+      expect(legacyThoughtMsg).not.toContain("legacy captured thought");
     });
 
     it("includes estimated context usage when only thoughtHistory is present", () => {
