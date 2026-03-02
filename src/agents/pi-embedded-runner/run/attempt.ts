@@ -6,6 +6,7 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -643,6 +644,87 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = streamSimple;
       }
 
+      const emitThinkingStreamEvent = (assistantMessageEvent: unknown) => {
+        if (!assistantMessageEvent || typeof assistantMessageEvent !== "object") {
+          return;
+        }
+        const event = assistantMessageEvent as Record<string, unknown>;
+        const eventType = typeof event.type === "string" ? event.type : "";
+        if (
+          eventType !== "thinking_start" &&
+          eventType !== "thinking_delta" &&
+          eventType !== "thinking_end"
+        ) {
+          return;
+        }
+
+        const partial = event.partial as Record<string, unknown> | undefined;
+        const content = Array.isArray(partial?.content) ? partial.content : undefined;
+        const contentIndex =
+          typeof event.contentIndex === "number" && Number.isInteger(event.contentIndex)
+            ? event.contentIndex
+            : -1;
+
+        let text = "";
+        if (content) {
+          const blocks = content as unknown[];
+          const firstIndex = contentIndex >= 0 ? contentIndex : undefined;
+          const candidates = firstIndex === undefined ? blocks : [blocks[firstIndex], ...blocks];
+          for (const block of candidates) {
+            if (!block || typeof block !== "object") {
+              continue;
+            }
+            if ((block as Record<string, unknown>).type !== "thinking") {
+              continue;
+            }
+            const blockThinking = (block as Record<string, unknown>).thinking;
+            if (typeof blockThinking === "string") {
+              text = blockThinking;
+              break;
+            }
+          }
+        }
+
+        const delta =
+          eventType === "thinking_delta" && typeof event.delta === "string" ? event.delta : "";
+        if (!text && !delta) {
+          return;
+        }
+
+        emitAgentEvent({
+          runId: params.runId,
+          stream: "thinking",
+          data: {
+            text,
+            delta,
+          },
+        });
+        void params.onAgentEvent?.({
+          stream: "thinking",
+          data: {
+            text,
+            delta,
+          },
+        });
+      };
+
+      const emitThinkingFromStreamFn = (
+        streamFn: (...args: Parameters<typeof streamSimple>) => unknown,
+      ) => {
+        return async (...args: Parameters<typeof streamSimple>) => {
+          const stream = await streamFn(...args);
+          const eventStream = stream as { push?: (event: unknown) => unknown };
+          const originalPush = eventStream.push;
+          if (typeof originalPush === "function") {
+            eventStream.push = (assistantMessageEvent: unknown) => {
+              emitThinkingStreamEvent(assistantMessageEvent);
+              return originalPush.call(stream, assistantMessageEvent);
+            };
+          }
+          return stream;
+        };
+      };
+
       applyExtraParamsToAgent(
         activeSession.agent,
         params.config,
@@ -663,6 +745,10 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
         );
+      }
+
+      if (params.reasoningLevel === "stream") {
+        activeSession.agent.streamFn = emitThinkingFromStreamFn(activeSession.agent.streamFn);
       }
 
       try {
