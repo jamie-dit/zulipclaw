@@ -709,7 +709,9 @@ export async function runEmbeddedAttempt(
       };
 
       const emitThinkingFromStreamFn = (
-        streamFn: (...args: Parameters<typeof streamSimple>) => unknown,
+        streamFn: (
+          ...args: Parameters<typeof streamSimple>
+        ) => ReturnType<typeof streamSimple> | Promise<ReturnType<typeof streamSimple>>,
       ) => {
         return async (...args: Parameters<typeof streamSimple>) => {
           const stream = await streamFn(...args);
