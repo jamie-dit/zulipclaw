@@ -113,6 +113,8 @@ export type RelayState = {
   completionText?: string;
   /** Latest streamed thinking snippet while waiting for the next tool call. */
   thinkingSnippet?: string;
+  /** Current full thought text (persisted across tool calls, shown in Thoughts spoiler). */
+  currentThought?: string;
   /** Current estimated context usage (prompt tokens). */
   contextUsedTokens?: number;
   /** Model context window limit for this run. */
@@ -400,11 +402,35 @@ function truncate(value: string, max = 80) {
   return `${value.slice(0, Math.max(1, max - 1))}…`;
 }
 
-function extractThinkingSnippet(raw: string, maxChars = 150): string | undefined {
+function extractThinkingText(raw: string): string | undefined {
   const withoutPrefix = raw.replace(/^\s*Reasoning:\s*/i, "");
-  const withoutQuote = withoutPrefix
+  const normalizedLines = withoutPrefix
     .split("\n")
-    .map((line) => line.replace(/^\s*>\s?/, "").trim())
+    .map((line) => line.replace(/^\s*>\s?/, "").trimEnd());
+
+  while (normalizedLines[0] === "") {
+    normalizedLines.shift();
+  }
+  while (normalizedLines[normalizedLines.length - 1] === "") {
+    normalizedLines.pop();
+  }
+
+  if (normalizedLines.length === 0) {
+    return undefined;
+  }
+
+  return normalizedLines.join("\n");
+}
+
+function extractThinkingSnippet(raw: string, maxChars = 150): string | undefined {
+  const fullText = extractThinkingText(raw);
+  if (!fullText) {
+    return undefined;
+  }
+
+  const withoutQuote = fullText
+    .split("\n")
+    .map((line) => line.trim())
     .filter(Boolean)
     .join(" ")
     .replace(/\s+/g, " ")
@@ -413,6 +439,24 @@ function extractThinkingSnippet(raw: string, maxChars = 150): string | undefined
     return undefined;
   }
   return truncate(withoutQuote, maxChars);
+}
+
+function extractThinkingTextFromEventData(data: Record<string, unknown>): string | undefined {
+  const candidates = [data.delta, data.text, data.content]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .slice(0, 3);
+
+  for (const candidate of candidates) {
+    if (!/^\s*Reasoning:/i.test(candidate)) {
+      continue;
+    }
+    const fullText = extractThinkingText(candidate);
+    if (fullText) {
+      return fullText;
+    }
+  }
+
+  return undefined;
 }
 
 function extractThinkingSnippetFromEventData(data: Record<string, unknown>): string | undefined {
@@ -454,6 +498,7 @@ function estimateRelayContextTokens(state: RelayState): number | undefined {
     chars += entry.resultText?.length ?? 0;
   }
   chars += state.thinkingSnippet?.length ?? 0;
+  chars += state.currentThought?.length ?? 0;
   chars += state.completionText?.length ?? 0;
   if (chars <= 0) {
     return undefined;
@@ -1044,6 +1089,14 @@ function renderRelayMessageToolLines(
   return toolCallLines;
 }
 
+function renderThoughtQuoteLines(thought: string): string {
+  const safeThought = sanitizeForCodeFence(thought);
+  return safeThought
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+}
+
 export function renderRelayMessage(
   state: RelayState,
   originTopic?: string,
@@ -1066,16 +1119,14 @@ export function renderRelayMessage(
   const header = `${emoji} **\`${state.label}\`**${sandboxSuffix} · ${modelShort}${profileSuffix} · ${state.toolCount} ${callWord}${contextSuffix} · updated ${updatedTime}${watchdogEmoji}${originSuffix}${respawnSuffix}`;
   const summaryLine = renderToolSummaryLine(state.toolEntries, state.toolCount);
   const toolCallLines = renderRelayMessageToolLines(state, opts);
+  const thoughtText = state.currentThought?.trim();
+  const thoughtLines = thoughtText ? renderThoughtQuoteLines(thoughtText) : "> _(no thoughts yet)_";
 
   const headerWithSummary = summaryLine ? `${header}\n${summaryLine}` : header;
 
   const sections = [
-    `${headerWithSummary}\n\n\`\`\`spoiler Tool calls\n${toolCallLines.join("\n")}\n\`\`\``,
+    `${headerWithSummary}\n\n\`\`\`spoiler Tool calls\n${toolCallLines.join("\n")}\n\`\`\`\n\n\`\`\`spoiler Thoughts\n${thoughtLines}\n\`\`\``,
   ];
-
-  if (state.thinkingSnippet && state.status === "running") {
-    sections.push(`_💭 ${state.thinkingSnippet}_`);
-  }
 
   // Append sub-agent completion output when available (populated at lifecycle end).
   const completionText = state.completionText?.trim();
@@ -1939,7 +1990,8 @@ function handleToolEvent(evt: AgentEventPayload) {
       state.pendingToolCallIds.set(toolCallId, entryIndex);
     }
 
-    // Thinking preview should only appear between tool calls.
+    // Inline thinking preview only appears between tool calls, but the full
+    // thought (currentThought) persists until replaced by a new thought.
     state.thinkingSnippet = undefined;
 
     state.toolCount += 1;
@@ -2011,13 +2063,18 @@ function handleThinkingEvent(evt: AgentEventPayload) {
   if (!state) {
     return;
   }
+  const fullThought = extractThinkingText(text);
+  if (!fullThought) {
+    return;
+  }
   const snippet = extractThinkingSnippet(text);
   if (!snippet) {
     return;
   }
-  if (state.thinkingSnippet === snippet) {
+  if (state.thinkingSnippet === snippet && state.currentThought === fullThought) {
     return;
   }
+  state.currentThought = fullThought;
   state.thinkingSnippet = snippet;
   scheduleRelayFlush(evt.runId);
 }
@@ -2030,6 +2087,10 @@ function handleAssistantEvent(evt: AgentEventPayload) {
   if (!data) {
     return;
   }
+  const fullThought = extractThinkingTextFromEventData(data);
+  if (!fullThought) {
+    return;
+  }
   const snippet = extractThinkingSnippetFromEventData(data);
   if (!snippet) {
     return;
@@ -2038,9 +2099,10 @@ function handleAssistantEvent(evt: AgentEventPayload) {
   if (!state) {
     return;
   }
-  if (state.thinkingSnippet === snippet) {
+  if (state.thinkingSnippet === snippet && state.currentThought === fullThought) {
     return;
   }
+  state.currentThought = fullThought;
   state.thinkingSnippet = snippet;
   scheduleRelayFlush(evt.runId);
 }
