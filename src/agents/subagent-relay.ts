@@ -84,6 +84,11 @@ export type ToolEntry = {
   childRunId?: string;
 };
 
+type ThoughtEntry = {
+  text: string;
+  ts: number;
+};
+
 export type RelayState = {
   runId: string;
   runKind?: RelayRunKind;
@@ -113,8 +118,10 @@ export type RelayState = {
   completionText?: string;
   /** Latest streamed thinking snippet while waiting for the next tool call. */
   thinkingSnippet?: string;
-  /** Current full thought text (persisted across tool calls, shown in Thoughts spoiler). */
+  /** Current full thought text (compat fallback, newest entry in thoughtHistory). */
   currentThought?: string;
+  /** Rolling history of recent thoughts for Thoughts spoiler rendering. */
+  thoughtHistory?: ThoughtEntry[];
   /** Current estimated context usage (prompt tokens). */
   contextUsedTokens?: number;
   /** Model context window limit for this run. */
@@ -491,6 +498,25 @@ function formatContextTokenCompact(value: number): string {
   return `${value}`;
 }
 
+function normalizeThoughtHistory(state: RelayState): ThoughtEntry[] {
+  if (Array.isArray(state.thoughtHistory) && state.thoughtHistory.length > 0) {
+    return state.thoughtHistory.filter(
+      (entry) =>
+        entry &&
+        typeof entry.text === "string" &&
+        entry.text.trim().length > 0 &&
+        typeof entry.ts === "number" &&
+        Number.isFinite(entry.ts),
+    );
+  }
+
+  const legacyThought = state.currentThought?.trim();
+  if (!legacyThought) {
+    return [];
+  }
+  return [{ text: legacyThought, ts: state.lastUpdatedAt || Date.now() }];
+}
+
 function estimateRelayContextTokens(state: RelayState): number | undefined {
   let chars = 0;
   for (const entry of state.toolEntries) {
@@ -498,7 +524,10 @@ function estimateRelayContextTokens(state: RelayState): number | undefined {
     chars += entry.resultText?.length ?? 0;
   }
   chars += state.thinkingSnippet?.length ?? 0;
-  chars += state.currentThought?.length ?? 0;
+  for (const thoughtEntry of normalizeThoughtHistory(state)) {
+    chars += thoughtEntry.text.length;
+    chars += 12; // [h:mm AM] timestamp prefix overhead.
+  }
   chars += state.completionText?.length ?? 0;
   if (chars <= 0) {
     return undefined;
@@ -774,6 +803,8 @@ const RELAY_COMPLETION_TEXT_MAX_CHARS = 2000;
 const RELAY_TOOL_RESULT_MAX_CHARS = 1000;
 /** Maximum characters of edit/write previews captured from tool args. */
 const RELAY_TOOL_PREVIEW_MAX_CHARS = 500;
+/** Number of recent thought entries to keep in relay state/history rendering. */
+const RELAY_THOUGHT_HISTORY_MAX_ENTRIES = 5;
 
 const RELAY_SUMMARY_ORDER = [
   "read",
@@ -1089,12 +1120,20 @@ function renderRelayMessageToolLines(
   return toolCallLines;
 }
 
-function renderThoughtQuoteLines(thought: string): string {
-  const safeThought = sanitizeForCodeFence(thought);
-  return safeThought
-    .split("\n")
-    .map((line) => `> ${line}`)
-    .join("\n");
+function formatThoughtTime(ts: number): string {
+  return formatRelayUpdatedTime(ts);
+}
+
+function renderThoughtHistoryQuoteLines(history: ThoughtEntry[]): string {
+  const lines: string[] = [];
+  for (const thoughtEntry of history) {
+    const prefix = `[${formatThoughtTime(thoughtEntry.ts)}]`;
+    const safeThought = sanitizeForCodeFence(thoughtEntry.text);
+    for (const thoughtLine of safeThought.split("\n")) {
+      lines.push(`> ${prefix} ${thoughtLine}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 export function renderRelayMessage(
@@ -1119,8 +1158,11 @@ export function renderRelayMessage(
   const header = `${emoji} **\`${state.label}\`**${sandboxSuffix} · ${modelShort}${profileSuffix} · ${state.toolCount} ${callWord}${contextSuffix} · updated ${updatedTime}${watchdogEmoji}${originSuffix}${respawnSuffix}`;
   const summaryLine = renderToolSummaryLine(state.toolEntries, state.toolCount);
   const toolCallLines = renderRelayMessageToolLines(state, opts);
-  const thoughtText = state.currentThought?.trim();
-  const thoughtLines = thoughtText ? renderThoughtQuoteLines(thoughtText) : "> _(no thoughts yet)_";
+  const thoughtHistory = normalizeThoughtHistory(state);
+  const thoughtLines =
+    thoughtHistory.length > 0
+      ? renderThoughtHistoryQuoteLines(thoughtHistory)
+      : "> _(no thoughts yet)_";
 
   const headerWithSummary = summaryLine ? `${header}\n${summaryLine}` : header;
 
@@ -1990,8 +2032,8 @@ function handleToolEvent(evt: AgentEventPayload) {
       state.pendingToolCallIds.set(toolCallId, entryIndex);
     }
 
-    // Inline thinking preview only appears between tool calls, but the full
-    // thought (currentThought) persists until replaced by a new thought.
+    // Inline thinking preview only appears between tool calls. Captured thought
+    // history persists across tool calls and is replaced only when new thoughts arrive.
     state.thinkingSnippet = undefined;
 
     state.toolCount += 1;
@@ -2051,6 +2093,30 @@ function handleToolEvent(evt: AgentEventPayload) {
   scheduleRelayFlush(evt.runId);
 }
 
+function appendThoughtHistory(state: RelayState, thought: string, ts: number | undefined): boolean {
+  const normalizedThought = thought.trim();
+  if (!normalizedThought) {
+    return false;
+  }
+
+  const safeTs = typeof ts === "number" && Number.isFinite(ts) ? ts : Date.now();
+  const history = normalizeThoughtHistory(state);
+  const lastEntry = history[history.length - 1];
+  if (lastEntry && lastEntry.text === normalizedThought) {
+    state.thoughtHistory = history;
+    state.currentThought = normalizedThought;
+    return false;
+  }
+
+  history.push({ text: normalizedThought, ts: safeTs });
+  if (history.length > RELAY_THOUGHT_HISTORY_MAX_ENTRIES) {
+    history.splice(0, history.length - RELAY_THOUGHT_HISTORY_MAX_ENTRIES);
+  }
+  state.thoughtHistory = history;
+  state.currentThought = normalizedThought;
+  return true;
+}
+
 function handleThinkingEvent(evt: AgentEventPayload) {
   if (!isRelayEnabled()) {
     return;
@@ -2071,10 +2137,13 @@ function handleThinkingEvent(evt: AgentEventPayload) {
   if (!snippet) {
     return;
   }
-  if (state.thinkingSnippet === snippet && state.currentThought === fullThought) {
+
+  const snippetChanged = state.thinkingSnippet !== snippet;
+  const thoughtChanged = appendThoughtHistory(state, fullThought, evt.ts);
+  if (!snippetChanged && !thoughtChanged) {
     return;
   }
-  state.currentThought = fullThought;
+
   state.thinkingSnippet = snippet;
   scheduleRelayFlush(evt.runId);
 }
@@ -2099,10 +2168,13 @@ function handleAssistantEvent(evt: AgentEventPayload) {
   if (!state) {
     return;
   }
-  if (state.thinkingSnippet === snippet && state.currentThought === fullThought) {
+
+  const snippetChanged = state.thinkingSnippet !== snippet;
+  const thoughtChanged = appendThoughtHistory(state, fullThought, evt.ts);
+  if (!snippetChanged && !thoughtChanged) {
     return;
   }
-  state.currentThought = fullThought;
+
   state.thinkingSnippet = snippet;
   scheduleRelayFlush(evt.runId);
 }
