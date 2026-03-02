@@ -183,12 +183,19 @@ describe("subagent-relay", () => {
       expect(msg).toContain("45k/200k ctx");
     });
 
-    it("renders a Thoughts spoiler below Tool calls using quoted full thought text", () => {
+    it("renders Thoughts history below Tool calls with local timestamps and newest last", () => {
       const longThoughtLine = `${"A".repeat(180)} tail-marker`;
-      const fullThought = [
-        "Analyzing the file structure to determine the safest patch path.",
-        longThoughtLine,
-      ].join("\n");
+      const thoughtTsA = Date.UTC(2026, 2, 2, 14, 31, 0);
+      const thoughtTsB = Date.UTC(2026, 2, 2, 14, 32, 0);
+      const expectedA = new Intl.DateTimeFormat("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(new Date(thoughtTsA));
+      const expectedB = new Intl.DateTimeFormat("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(new Date(thoughtTsB));
+
       const msg = renderRelayMessage({
         runId: "test-run",
         label: "thinking-test",
@@ -199,17 +206,28 @@ describe("subagent-relay", () => {
         toolCount: 1,
         status: "running",
         thinkingSnippet: "Analyzing the file structure to determine the safest patch path...",
-        currentThought: fullThought,
+        thoughtHistory: [
+          {
+            text: "Analyzing the file structure to determine the safest patch path.",
+            ts: thoughtTsA,
+          },
+          { text: longThoughtLine, ts: thoughtTsB },
+        ],
         lastUpdatedAt: 5_000,
         deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
       });
 
       const toolCallsIdx = msg.indexOf("```spoiler Tool calls");
       const thoughtsIdx = msg.indexOf("```spoiler Thoughts");
+      const firstThoughtIdx = msg.indexOf(
+        `> [${expectedA}] Analyzing the file structure to determine the safest patch path.`,
+      );
+      const secondThoughtIdx = msg.indexOf(`> [${expectedB}] ${longThoughtLine}`);
+
       expect(toolCallsIdx).toBeGreaterThanOrEqual(0);
       expect(thoughtsIdx).toBeGreaterThan(toolCallsIdx);
-      expect(msg).toContain("> Analyzing the file structure to determine the safest patch path.");
-      expect(msg).toContain(`> ${longThoughtLine}`);
+      expect(firstThoughtIdx).toBeGreaterThan(thoughtsIdx);
+      expect(secondThoughtIdx).toBeGreaterThan(firstThoughtIdx);
       expect(msg).toContain("tail-marker");
       expect(msg).not.toContain("_💭");
     });
@@ -230,6 +248,49 @@ describe("subagent-relay", () => {
 
       expect(msg).toContain("```spoiler Thoughts");
       expect(msg).toContain("> _(no thoughts yet)_");
+    });
+
+    it("renders legacy currentThought fallback with a local timestamp prefix", () => {
+      const lastUpdatedAt = Date.UTC(2026, 2, 2, 15, 10, 0);
+      const expected = new Intl.DateTimeFormat("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(new Date(lastUpdatedAt));
+
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "legacy-thought",
+        model: "anthropic/claude-opus-4-6",
+        toolEntries: [],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 0,
+        status: "running",
+        currentThought: "legacy captured thought",
+        lastUpdatedAt,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+
+      expect(msg).toContain(`> [${expected}] legacy captured thought`);
+    });
+
+    it("includes estimated context usage when only thoughtHistory is present", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "ctx-thought-history",
+        model: "anthropic/claude-opus-4-6",
+        toolEntries: [],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 0,
+        status: "running",
+        thoughtHistory: [{ text: "checking implementation details", ts: Date.now() }],
+        contextWindowTokens: 200_000,
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+
+      expect(msg).toContain("/200k ctx");
     });
 
     it("renders one-level nested child tool lines under sessions_spawn entries", () => {
