@@ -183,7 +183,12 @@ describe("subagent-relay", () => {
       expect(msg).toContain("45k/200k ctx");
     });
 
-    it("renders a live thinking snippet line outside the tool spoiler", () => {
+    it("renders a Thoughts spoiler below Tool calls using quoted full thought text", () => {
+      const longThoughtLine = `${"A".repeat(180)} tail-marker`;
+      const fullThought = [
+        "Analyzing the file structure to determine the safest patch path.",
+        longThoughtLine,
+      ].join("\n");
       const msg = renderRelayMessage({
         runId: "test-run",
         label: "thinking-test",
@@ -194,13 +199,37 @@ describe("subagent-relay", () => {
         toolCount: 1,
         status: "running",
         thinkingSnippet: "Analyzing the file structure to determine the safest patch path...",
+        currentThought: fullThought,
         lastUpdatedAt: 5_000,
         deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
       });
 
-      expect(msg).toContain(
-        "_💭 Analyzing the file structure to determine the safest patch path..._",
-      );
+      const toolCallsIdx = msg.indexOf("```spoiler Tool calls");
+      const thoughtsIdx = msg.indexOf("```spoiler Thoughts");
+      expect(toolCallsIdx).toBeGreaterThanOrEqual(0);
+      expect(thoughtsIdx).toBeGreaterThan(toolCallsIdx);
+      expect(msg).toContain("> Analyzing the file structure to determine the safest patch path.");
+      expect(msg).toContain(`> ${longThoughtLine}`);
+      expect(msg).toContain("tail-marker");
+      expect(msg).not.toContain("_💭");
+    });
+
+    it("falls back to an empty Thoughts placeholder when no thought is captured", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "worker",
+        model: "anthropic/claude-opus-4-6",
+        toolEntries: [],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 0,
+        status: "running",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+
+      expect(msg).toContain("```spoiler Thoughts");
+      expect(msg).toContain("> _(no thoughts yet)_");
     });
 
     it("renders one-level nested child tool lines under sessions_spawn entries", () => {
@@ -804,7 +833,7 @@ describe("subagent-relay", () => {
         lastUpdatedAt: 5_000,
         deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
       });
-      expect(msg).not.toContain("(");
+      expect(msg).not.toContain("claude-opus-4-6 (");
     });
   });
 
