@@ -11,7 +11,8 @@ import { defaultRuntime } from "../runtime.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
-import { runSubagentAnnounceFlow, type SubagentRunOutcome } from "./subagent-announce.js";
+import { runSubagentAnnounceFlow } from "./subagent-announce.js";
+import { classifySubagentFailure, type SubagentRunOutcome } from "./subagent-outcome.js";
 import {
   loadSubagentRegistryFromDisk,
   saveSubagentRegistryToDisk,
@@ -245,9 +246,14 @@ function normalizeRunOutcome(params: {
   maxIterations?: number;
   iterationLimitReached?: boolean;
 }): SubagentRunOutcome {
+  const failureClass = classifySubagentFailure({
+    status: params.status,
+    error: params.error,
+  });
   return {
     status: params.status,
     error: params.error,
+    failureClass,
     iterationsUsed: normalizeIterationCount(params.iterationsUsed),
     maxIterations: normalizeMaxIterations(params.maxIterations),
     iterationLimitReached: params.iterationLimitReached === true,
@@ -1163,7 +1169,7 @@ export function markSubagentRunTerminated(params: {
       continue;
     }
     entry.endedAt = now;
-    entry.outcome = { status: "error", error: reason };
+    entry.outcome = normalizeRunOutcome({ status: "error", error: reason });
     entry.cleanupHandled = true;
     entry.cleanupCompletedAt = now;
     entry.suppressAnnounceReason = "killed";
