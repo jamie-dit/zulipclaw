@@ -749,7 +749,7 @@ export async function runEmbeddedAttempt(
         );
       }
 
-      if (params.reasoningLevel === "stream") {
+      if ((params.reasoningLevel ?? "off") !== "off") {
         activeSession.agent.streamFn = emitThinkingFromStreamFn(activeSession.agent.streamFn);
       }
 
