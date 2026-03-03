@@ -250,14 +250,14 @@ describe("abort detection", () => {
     expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith(`session:${childKey}`);
   });
 
-  it("fast-abort falls back to legacy main-keyed runs by matching delivery context", async () => {
+  it("fast-abort falls back to legacy main-keyed runs using Zulip session key identity", async () => {
     subagentRegistryMocks.listSubagentRunsForRequester.mockReset();
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-abort-"));
     const storePath = path.join(root, "sessions.json");
     const cfg = { session: { store: storePath } } as OpenClawConfig;
     const sessionKey = "agent:main:zulip:channel:marcel-zulipclaw:topic:general%20chat";
     const childKey = "agent:main:subagent:legacy-child";
-    const childSessionId = "session-legacy-child";
+    const childSessionId = "session-child";
     await fs.writeFile(
       storePath,
       JSON.stringify(
@@ -265,14 +265,6 @@ describe("abort detection", () => {
           [sessionKey]: {
             sessionId: "session-parent",
             updatedAt: Date.now(),
-            deliveryContext: {
-              channel: "zulip",
-              to: "stream:marcel-zulipclaw#general chat",
-              accountId: "default",
-            },
-            lastChannel: "zulip",
-            lastTo: "stream:marcel-zulipclaw#general chat",
-            lastAccountId: "default",
           },
           [childKey]: {
             sessionId: childSessionId,
@@ -288,7 +280,7 @@ describe("abort detection", () => {
       .mockReturnValueOnce([])
       .mockReturnValueOnce([
         {
-          runId: "run-legacy-main",
+          runId: "run-main-legacy",
           childSessionKey: childKey,
           requesterSessionKey: "main",
           requesterDisplayKey: "main",
@@ -297,7 +289,7 @@ describe("abort detection", () => {
             to: "stream:marcel-zulipclaw#general chat",
             accountId: "default",
           },
-          task: "legacy restart-recovery run",
+          task: "legacy run",
           cleanup: "keep",
           createdAt: Date.now(),
         },
