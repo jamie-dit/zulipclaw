@@ -250,6 +250,71 @@ describe("abort detection", () => {
     expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith(`session:${childKey}`);
   });
 
+  it("fast-abort falls back to legacy main-keyed runs by matching delivery context", async () => {
+    subagentRegistryMocks.listSubagentRunsForRequester.mockReset();
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-abort-"));
+    const storePath = path.join(root, "sessions.json");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const sessionKey = "agent:main:zulip:channel:marcel-zulipclaw:topic:general%20chat";
+    const childKey = "agent:main:subagent:legacy-child";
+    const childSessionId = "session-legacy-child";
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: {
+            sessionId: "session-parent",
+            updatedAt: Date.now(),
+            deliveryContext: {
+              channel: "zulip",
+              to: "stream:marcel-zulipclaw#general chat",
+              accountId: "default",
+            },
+            lastChannel: "zulip",
+            lastTo: "stream:marcel-zulipclaw#general chat",
+            lastAccountId: "default",
+          },
+          [childKey]: {
+            sessionId: childSessionId,
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    subagentRegistryMocks.listSubagentRunsForRequester
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([
+        {
+          runId: "run-legacy-main",
+          childSessionKey: childKey,
+          requesterSessionKey: "main",
+          requesterDisplayKey: "main",
+          requesterOrigin: {
+            channel: "zulip",
+            to: "stream:marcel-zulipclaw#general chat",
+            accountId: "default",
+          },
+          task: "legacy restart-recovery run",
+          cleanup: "keep",
+          createdAt: Date.now(),
+        },
+      ]);
+
+    const result = await runStopCommand({
+      cfg,
+      sessionKey,
+      from: "zulip:user",
+      to: "zulip:user",
+    });
+
+    expect(result.stoppedSubagents).toBe(1);
+    expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith(`session:${childKey}`);
+    expect(subagentRegistryMocks.listSubagentRunsForRequester).toHaveBeenCalledWith("main");
+  });
+
   it("cascade stop kills depth-2 children when stopping depth-1 agent", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-abort-"));
     const storePath = path.join(root, "sessions.json");

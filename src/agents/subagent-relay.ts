@@ -1764,12 +1764,14 @@ async function attemptWatchdogRespawn(
       {
         task: resumptionTask,
         label: newLabel,
+        reuseChildSessionKey: run.childSessionKey,
         model: run.model,
         cleanup: run.cleanup,
         runTimeoutSeconds: run.runTimeoutSeconds,
         expectsCompletionMessage: run.expectsCompletionMessage,
       },
       {
+        agentSessionKey: run.requesterSessionKey,
         agentChannel: run.requesterOrigin?.channel,
         agentAccountId: run.requesterOrigin?.accountId,
         agentTo: run.requesterOrigin?.to,

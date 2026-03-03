@@ -163,6 +163,11 @@ describe("restart recovery requester notification", () => {
     expect(dispatchCall.params.message).toContain("notify-task");
     expect(dispatchCall.params.message).toContain("notify-task-resumed");
     expect(dispatchCall.params.message).toContain("gateway restart");
+
+    // Recovery spawn must preserve requester session key linkage.
+    const spawnCtx = hoisted.spawnMock.mock.calls[0][1];
+    expect(spawnCtx.agentSessionKey).toBe("agent:main:main");
+    expect(spawnCtx.agentTo).toBe("stream:marcel#my-work-topic");
   });
 
   it("sends Zulip infra summary AND requester notification (both)", async () => {

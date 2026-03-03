@@ -236,8 +236,10 @@ describe("subagent-restart-recovery", () => {
       expect(spawnParams.task).toContain("I created PR #42");
       expect(spawnParams.label).toBe("my-task-resumed");
       expect(spawnParams.model).toBe("anthropic/claude-opus-4-6");
+      expect(spawnParams.reuseChildSessionKey).toBe("agent:main:subagent:child-1");
 
       const spawnCtx = hoisted.spawnMock.mock.calls[0][1];
+      expect(spawnCtx.agentSessionKey).toBe("agent:main:main");
       expect(spawnCtx.agentChannel).toBe("zulip");
       expect(spawnCtx.agentTo).toBe("stream:marcel#infra");
 
@@ -274,10 +276,58 @@ describe("subagent-restart-recovery", () => {
 
       expect(outcomes).toHaveLength(1);
       expect(outcomes[0].action).toBe("respawned");
-      expect(outcomes[0].detail).toContain("from scratch");
+      expect(outcomes[0].detail).toContain("no text history recoverable");
 
       const spawnParams = hoisted.spawnMock.mock.calls[0][0];
       expect(spawnParams.task).toContain("Start the task from scratch");
+    });
+
+    it("falls back to a fresh child session when reused session is missing", async () => {
+      const run = makeRun({
+        runId: "fallback-1",
+        label: "fallback-task",
+        requesterOrigin: {
+          channel: "zulip",
+          to: "stream:marcel#infra",
+          accountId: "default",
+        },
+      });
+      const registry = new Map<string, SubagentRunRecord>();
+      registry.set("fallback-1", run);
+      hoisted.loadRegistryMock.mockReturnValue(registry);
+
+      hoisted.loadSessionEntryMock.mockReturnValue({ entry: { sessionId: "uuid-fallback" } });
+      hoisted.isEmbeddedPiRunActiveMock.mockReturnValue(false);
+      hoisted.callGatewayMock.mockImplementation((opts: Record<string, unknown>) => {
+        if ((opts as { method: string }).method === "chat.history") {
+          return { messages: [] };
+        }
+        return { ok: true };
+      });
+      hoisted.spawnMock
+        .mockResolvedValueOnce({
+          status: "error",
+          error: "session not found",
+        })
+        .mockResolvedValueOnce({
+          status: "accepted",
+          childSessionKey: "agent:main:subagent:new-child",
+          runId: "new-run-fallback",
+        });
+
+      const { runSubagentRestartRecovery } = await import("./subagent-restart-recovery.js");
+      const outcomes = await runSubagentRestartRecovery();
+
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0].action).toBe("respawned");
+      expect(outcomes[0].detail).toContain("new session");
+      expect(hoisted.spawnMock).toHaveBeenCalledTimes(2);
+      expect(hoisted.spawnMock.mock.calls[0][0].reuseChildSessionKey).toBe(
+        "agent:main:subagent:child-1",
+      );
+      expect(hoisted.spawnMock.mock.calls[1][0].reuseChildSessionKey).toBeUndefined();
+      expect(hoisted.spawnMock.mock.calls[0][1].agentSessionKey).toBe("agent:main:main");
+      expect(hoisted.spawnMock.mock.calls[1][1].agentSessionKey).toBe("agent:main:main");
     });
 
     it("skips tasks that are too short", async () => {
@@ -594,6 +644,64 @@ describe("subagent-restart-recovery", () => {
       expect(sendParams.message).toContain("✅");
       expect(sendParams.message).toContain("notified-task");
       expect(sendParams.message).toContain("still active");
+    });
+  });
+
+  describe("readSessionProgressSummary", () => {
+    it("reports tool activity when assistant messages contain no text", async () => {
+      hoisted.callGatewayMock.mockResolvedValue({
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", name: "exec" }],
+          },
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", toolName: "sessions_spawn" }],
+          },
+        ],
+      });
+
+      const { readSessionProgressSummary } = await import("./subagent-restart-recovery.js");
+      const summary = await readSessionProgressSummary("agent:main:subagent:tool-only");
+
+      expect(summary.hasHistory).toBe(true);
+      expect(summary.progressSummary).toContain("Recent tool activity");
+      expect(summary.progressSummary).toContain("exec");
+      expect(summary.progressSummary).toContain("sessions_spawn");
+    });
+  });
+
+  describe("buildResumptionTask", () => {
+    it("flattens nested resumed task wrappers to a single level", async () => {
+      const nestedTask = [
+        "## Resumed Task (auto-recovery after gateway restart)",
+        "",
+        "### Previous Progress",
+        "placeholder",
+        "",
+        "### Original Task",
+        "",
+        "## Resumed Task (auto-recovery after gateway restart)",
+        "",
+        "### Previous Progress",
+        "placeholder",
+        "",
+        "### Original Task",
+        "",
+        "actual root task",
+      ].join("\n");
+      const run = makeRun({ task: nestedTask, label: "nested-task" });
+
+      const { buildResumptionTask } = await import("./subagent-restart-recovery.js");
+      const rebuilt = buildResumptionTask(run, "progress");
+
+      expect(rebuilt).toContain("## Resumed Task (auto-recovery after gateway restart)");
+      expect(rebuilt).toContain("### Original Task");
+      expect(rebuilt).toContain("actual root task");
+      expect(rebuilt.match(/## Resumed Task \(auto-recovery after gateway restart\)/g)).toHaveLength(
+        1,
+      );
     });
   });
 
