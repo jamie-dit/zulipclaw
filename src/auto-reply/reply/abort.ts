@@ -218,6 +218,54 @@ function normalizeMatchValue(value: unknown): string | undefined {
   return text || undefined;
 }
 
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function normalizeZulipTarget(value: string | undefined): string | undefined {
+  const raw = normalizeMatchValue(value);
+  if (!raw) {
+    return undefined;
+  }
+  const withoutPrefix = raw.replace(/^zulip:/i, "").trim();
+  if (/^stream:/i.test(withoutPrefix)) {
+    const body = withoutPrefix.replace(/^stream:/i, "").trim();
+    const topicIdx = body.indexOf("#");
+    if (topicIdx > 0 && topicIdx < body.length - 1) {
+      const stream = body.slice(0, topicIdx).trim();
+      const topic = safeDecodeURIComponent(body.slice(topicIdx + 1).trim());
+      return `stream:${stream}#${topic}`;
+    }
+    const markerIdx = body.toLowerCase().indexOf(":topic:");
+    if (markerIdx > 0 && markerIdx < body.length - 7) {
+      const stream = body.slice(0, markerIdx).trim();
+      const topic = safeDecodeURIComponent(body.slice(markerIdx + 7).trim());
+      return `stream:${stream}#${topic}`;
+    }
+    return `stream:${body}`;
+  }
+  const markerIdx = withoutPrefix.toLowerCase().indexOf(":topic:");
+  if (markerIdx > 0 && markerIdx < withoutPrefix.length - 7) {
+    const stream = withoutPrefix.slice(0, markerIdx).trim();
+    const topic = safeDecodeURIComponent(withoutPrefix.slice(markerIdx + 7).trim());
+    if (stream && topic) {
+      return `stream:${stream}#${topic}`;
+    }
+  }
+  const hashIdx = withoutPrefix.indexOf("#");
+  if (hashIdx > 0 && hashIdx < withoutPrefix.length - 1) {
+    const stream = withoutPrefix.slice(0, hashIdx).trim();
+    const topic = safeDecodeURIComponent(withoutPrefix.slice(hashIdx + 1).trim());
+    if (stream && topic) {
+      return `stream:${stream}#${topic}`;
+    }
+  }
+  return withoutPrefix;
+}
 type RequesterDeliveryIdentity = {
   channel: string;
   to: string;
@@ -232,16 +280,23 @@ function resolveRequesterDeliveryIdentity(params: {
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed?.agentId });
   const store = loadSessionStore(storePath);
   const entry = store[params.requesterSessionKey];
-  if (!entry) {
+
+  const channel = normalizeMatchValue(entry?.deliveryContext?.channel ?? entry?.lastChannel);
+  const to = normalizeMatchValue(entry?.deliveryContext?.to ?? entry?.lastTo);
+  const accountId = normalizeMatchValue(entry?.deliveryContext?.accountId ?? entry?.lastAccountId);
+  if (channel && to) {
+    return { channel, to, accountId };
+  }
+
+  const rest = parsed?.rest ?? "";
+  if (!rest.toLowerCase().startsWith("zulip:channel:")) {
     return undefined;
   }
-  const channel = normalizeMatchValue(entry.deliveryContext?.channel ?? entry.lastChannel);
-  const to = normalizeMatchValue(entry.deliveryContext?.to ?? entry.lastTo);
-  const accountId = normalizeMatchValue(entry.deliveryContext?.accountId ?? entry.lastAccountId);
-  if (!channel || !to) {
+  const derived = normalizeZulipTarget(rest.slice("zulip:channel:".length).trim());
+  if (!derived) {
     return undefined;
   }
-  return { channel, to, accountId };
+  return { channel: "zulip", to: derived, accountId };
 }
 
 function runMatchesDeliveryIdentity(
@@ -251,8 +306,14 @@ function runMatchesDeliveryIdentity(
   const channel = normalizeMatchValue(
     run.requesterOrigin?.channel ?? run.requesterDeliveryContext?.channel,
   );
-  const to = normalizeMatchValue(run.requesterOrigin?.to ?? run.requesterDeliveryContext?.to);
-  if (channel !== identity.channel || to !== identity.to) {
+  const toRaw = normalizeMatchValue(run.requesterOrigin?.to ?? run.requesterDeliveryContext?.to);
+  if (channel !== identity.channel) {
+    return false;
+  }
+  const normalizedIdentityTo =
+    identity.channel === "zulip" ? normalizeZulipTarget(identity.to) : identity.to;
+  const normalizedRunTo = channel === "zulip" ? normalizeZulipTarget(toRaw) : toRaw;
+  if (!normalizedIdentityTo || normalizedRunTo !== normalizedIdentityTo) {
     return false;
   }
   const runAccountId = normalizeMatchValue(
@@ -275,20 +336,16 @@ function findLegacyRunsByDeliveryContext(params: {
   if (!identity) {
     return [];
   }
-
   const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
-  const candidates = [...new Set([alias, mainKey, "main", "global"].map((v) => v.trim()))]
-    .filter(Boolean)
-    .filter((key) => key !== params.requesterSessionKey);
+  const candidateKeys = [...new Set([alias, mainKey, "main", "global"])]
+    .map((v) => v.trim())
+    .filter((v) => Boolean(v) && v !== params.requesterSessionKey);
   const out: SubagentRunRecord[] = [];
   const seen = new Set<string>();
-  for (const key of candidates) {
+  for (const key of candidateKeys) {
     const runs = listSubagentRunsForRequester(key);
     for (const run of runs) {
-      if (seen.has(run.runId)) {
-        continue;
-      }
-      if (!runMatchesDeliveryIdentity(run, identity)) {
+      if (seen.has(run.runId) || !runMatchesDeliveryIdentity(run, identity)) {
         continue;
       }
       seen.add(run.runId);
@@ -307,8 +364,6 @@ export function stopSubagentsForRequester(params: {
     return { stopped: 0 };
   }
   let runs = listSubagentRunsForRequester(requesterKey);
-  // Compatibility: older restart-recovery runs may be incorrectly keyed to "main".
-  // When direct key lookup finds nothing, try matching by persisted delivery context.
   if (runs.length === 0) {
     runs = findLegacyRunsByDeliveryContext({
       cfg: params.cfg,
