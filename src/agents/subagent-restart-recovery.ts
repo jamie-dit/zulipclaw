@@ -37,6 +37,23 @@ export type RecoveryOutcome = {
   detail: string;
 };
 
+function normalizeToolName(value: unknown): string | undefined {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text || undefined;
+}
+
+function summarizeToolActivity(toolNames: string[]): string {
+  const counts = new Map<string, number>();
+  for (const name of toolNames) {
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  const parts = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([name, count]) => `${name}${count > 1 ? ` x${count}` : ""}`);
+  return parts.join(", ");
+}
+
 /**
  * Read the last few assistant messages from a session to summarise progress.
  * Returns an empty array when the session is gone or history is unreadable.
@@ -69,19 +86,30 @@ export async function readSessionProgressSummary(
     }
 
     const summaryParts: string[] = [];
+    const toolNames: string[] = [];
     for (const msg of assistantMessages) {
       const content = msg.content;
       let text = "";
       if (typeof content === "string") {
         text = content;
       } else if (Array.isArray(content)) {
-        text = content
-          .filter((block: unknown) => {
-            const b = block as Record<string, unknown>;
-            return typeof b?.text === "string";
-          })
-          .map((block: unknown) => (block as { text: string }).text)
-          .join("\n");
+        const textParts: string[] = [];
+        for (const block of content) {
+          if (!block || typeof block !== "object") {
+            continue;
+          }
+          const b = block as Record<string, unknown>;
+          if (typeof b.text === "string") {
+            textParts.push(b.text);
+          }
+          if (b.type === "toolCall") {
+            const toolName = normalizeToolName(b.name ?? b.toolName ?? b.tool);
+            if (toolName) {
+              toolNames.push(toolName);
+            }
+          }
+        }
+        text = textParts.join("\n");
       }
       if (text.trim()) {
         // Truncate individual messages to keep the summary reasonable.
@@ -95,6 +123,8 @@ export async function readSessionProgressSummary(
       progressSummary:
         summaryParts.length > 0
           ? summaryParts.join("\n---\n")
+          : toolNames.length > 0
+            ? `Session had no assistant text. Recent tool activity: ${summarizeToolActivity(toolNames)}.`
           : "Session existed but assistant messages had no text content.",
     };
   } catch {
@@ -234,8 +264,26 @@ export function taskLooksResumable(task: string): boolean {
   return true;
 }
 
+const RESUMED_TASK_HEADER = "## Resumed Task (auto-recovery after gateway restart)";
+const ORIGINAL_TASK_MARKER = "\n### Original Task\n";
+
+function unwrapNestedResumedTask(task: string): string {
+  let current = task.trim();
+  for (let i = 0; i < 8; i += 1) {
+    if (!current.startsWith(RESUMED_TASK_HEADER)) {
+      break;
+    }
+    const markerIndex = current.indexOf(ORIGINAL_TASK_MARKER);
+    if (markerIndex < 0) {
+      break;
+    }
+    current = current.slice(markerIndex + ORIGINAL_TASK_MARKER.length).trim();
+  }
+  return current || task.trim();
+}
+
 export function buildResumptionTask(original: SubagentRunRecord, progressSummary: string): string {
-  const originalTask = original.task;
+  const originalTask = unwrapNestedResumedTask(original.task);
   const label = original.label || original.runId;
 
   const sections = [
@@ -269,6 +317,55 @@ export function buildResumptionTask(original: SubagentRunRecord, progressSummary
   sections.push("### Original Task", "", originalTask);
 
   return sections.join("\n");
+}
+
+function shouldFallbackToFreshSession(error?: string): boolean {
+  const text = (error || "").toLowerCase();
+  if (!text.includes("session")) {
+    return false;
+  }
+  return (
+    text.includes("not found") ||
+    text.includes("missing") ||
+    text.includes("invalid") ||
+    text.includes("unknown")
+  );
+}
+
+async function spawnRecoveredSubagentRun(params: {
+  run: SubagentRunRecord;
+  label: string;
+  task: string;
+}): Promise<{ result: Awaited<ReturnType<typeof spawnSubagentDirect>>; reusedSession: boolean }> {
+  const baseParams = {
+    task: params.task,
+    label: `${params.label}-resumed`,
+    model: params.run.model,
+    cleanup: params.run.cleanup,
+    runTimeoutSeconds: params.run.runTimeoutSeconds,
+    expectsCompletionMessage: params.run.expectsCompletionMessage,
+  } as const;
+  const spawnCtx = {
+    agentSessionKey: params.run.requesterSessionKey,
+    agentChannel: params.run.requesterOrigin?.channel,
+    agentAccountId: params.run.requesterOrigin?.accountId,
+    agentTo: params.run.requesterOrigin?.to,
+    agentThreadId: params.run.requesterOrigin?.threadId,
+  } as const;
+
+  const reusedResult = await spawnSubagentDirect(
+    {
+      ...baseParams,
+      reuseChildSessionKey: params.run.childSessionKey,
+    },
+    spawnCtx,
+  );
+  if (reusedResult.status === "accepted" || !shouldFallbackToFreshSession(reusedResult.error)) {
+    return { result: reusedResult, reusedSession: true };
+  }
+
+  const freshResult = await spawnSubagentDirect(baseParams, spawnCtx);
+  return { result: freshResult, reusedSession: false };
 }
 
 function buildZulipSummaryMessage(outcomes: RecoveryOutcome[]): string {
@@ -464,28 +561,21 @@ export async function runSubagentRestartRecovery(): Promise<RecoveryOutcome[]> {
       const resumptionTask = buildResumptionTask(run, progressSummary);
 
       // Re-spawn using the original requester context.
-      const result = await spawnSubagentDirect(
-        {
-          task: resumptionTask,
-          label: `${label}-resumed`,
-          model: run.model,
-          cleanup: run.cleanup,
-          runTimeoutSeconds: run.runTimeoutSeconds,
-          expectsCompletionMessage: run.expectsCompletionMessage,
-        },
-        {
-          agentChannel: run.requesterOrigin?.channel,
-          agentAccountId: run.requesterOrigin?.accountId,
-          agentTo: run.requesterOrigin?.to,
-          agentThreadId: run.requesterOrigin?.threadId,
-        },
-      );
+      const { result, reusedSession } = await spawnRecoveredSubagentRun({
+        run,
+        label,
+        task: resumptionTask,
+      });
 
       if (result.status === "accepted") {
         const newLabel = `${label}-resumed`;
         const progressNote = hasHistory
-          ? "re-spawned, continuing from previous progress"
-          : "re-spawned from scratch (no history recoverable)";
+          ? reusedSession
+            ? "re-spawned in-place, continuing from previous progress"
+            : "re-spawned in new session, continuing from previous progress"
+          : reusedSession
+            ? "re-spawned in-place (no text history recoverable)"
+            : "re-spawned from scratch (no history recoverable)";
         outcomes.push({
           runId: run.runId,
           label,

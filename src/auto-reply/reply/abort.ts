@@ -1,6 +1,7 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { cancelAllSessionRuns } from "../../agents/pi-embedded-runner/session-run-registry.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
+import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import {
   listSubagentRunsForRequester,
   markSubagentRunTerminated,
@@ -212,6 +213,91 @@ function normalizeRequesterSessionKey(
   return resolveInternalSessionKey({ key: cleaned, alias, mainKey });
 }
 
+function normalizeMatchValue(value: unknown): string | undefined {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text || undefined;
+}
+
+type RequesterDeliveryIdentity = {
+  channel: string;
+  to: string;
+  accountId?: string;
+};
+
+function resolveRequesterDeliveryIdentity(params: {
+  cfg: OpenClawConfig;
+  requesterSessionKey: string;
+}): RequesterDeliveryIdentity | undefined {
+  const parsed = parseAgentSessionKey(params.requesterSessionKey);
+  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed?.agentId });
+  const store = loadSessionStore(storePath);
+  const entry = store[params.requesterSessionKey];
+  if (!entry) {
+    return undefined;
+  }
+  const channel = normalizeMatchValue(entry.deliveryContext?.channel ?? entry.lastChannel);
+  const to = normalizeMatchValue(entry.deliveryContext?.to ?? entry.lastTo);
+  const accountId = normalizeMatchValue(entry.deliveryContext?.accountId ?? entry.lastAccountId);
+  if (!channel || !to) {
+    return undefined;
+  }
+  return { channel, to, accountId };
+}
+
+function runMatchesDeliveryIdentity(
+  run: SubagentRunRecord,
+  identity: RequesterDeliveryIdentity,
+): boolean {
+  const channel = normalizeMatchValue(
+    run.requesterOrigin?.channel ?? run.requesterDeliveryContext?.channel,
+  );
+  const to = normalizeMatchValue(run.requesterOrigin?.to ?? run.requesterDeliveryContext?.to);
+  if (channel !== identity.channel || to !== identity.to) {
+    return false;
+  }
+  const runAccountId = normalizeMatchValue(
+    run.requesterOrigin?.accountId ?? run.requesterDeliveryContext?.accountId,
+  );
+  if (identity.accountId && runAccountId && runAccountId !== identity.accountId) {
+    return false;
+  }
+  return true;
+}
+
+function findLegacyRunsByDeliveryContext(params: {
+  cfg: OpenClawConfig;
+  requesterSessionKey: string;
+}): SubagentRunRecord[] {
+  const identity = resolveRequesterDeliveryIdentity({
+    cfg: params.cfg,
+    requesterSessionKey: params.requesterSessionKey,
+  });
+  if (!identity) {
+    return [];
+  }
+
+  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
+  const candidates = [...new Set([alias, mainKey, "main", "global"].map((v) => v.trim()))]
+    .filter(Boolean)
+    .filter((key) => key !== params.requesterSessionKey);
+  const out: SubagentRunRecord[] = [];
+  const seen = new Set<string>();
+  for (const key of candidates) {
+    const runs = listSubagentRunsForRequester(key);
+    for (const run of runs) {
+      if (seen.has(run.runId)) {
+        continue;
+      }
+      if (!runMatchesDeliveryIdentity(run, identity)) {
+        continue;
+      }
+      seen.add(run.runId);
+      out.push(run);
+    }
+  }
+  return out;
+}
+
 export function stopSubagentsForRequester(params: {
   cfg: OpenClawConfig;
   requesterSessionKey?: string;
@@ -220,9 +306,17 @@ export function stopSubagentsForRequester(params: {
   if (!requesterKey) {
     return { stopped: 0 };
   }
-  const runs = listSubagentRunsForRequester(requesterKey);
+  let runs = listSubagentRunsForRequester(requesterKey);
+  // Compatibility: older restart-recovery runs may be incorrectly keyed to "main".
+  // When direct key lookup finds nothing, try matching by persisted delivery context.
   if (runs.length === 0) {
-    return { stopped: 0 };
+    runs = findLegacyRunsByDeliveryContext({
+      cfg: params.cfg,
+      requesterSessionKey: requesterKey,
+    });
+    if (runs.length === 0) {
+      return { stopped: 0 };
+    }
   }
 
   const storeCache = new Map<string, Record<string, SessionEntry>>();

@@ -25,6 +25,8 @@ export type SpawnSubagentParams = {
   task: string;
   label?: string;
   agentId?: string;
+  /** Reuse an existing child session instead of creating a new one. */
+  reuseChildSessionKey?: string;
   model?: string;
   thinking?: string;
   reasoning?: string;
@@ -201,6 +203,7 @@ export async function spawnSubagentDirect(
 ): Promise<SpawnSubagentResult> {
   const task = params.task;
   const label = params.label?.trim() || "";
+  const reuseChildSessionKey = params.reuseChildSessionKey?.trim() || undefined;
   const requestedAgentId = params.agentId;
   const modelOverride = params.model;
   const thinkingOverrideRaw = params.thinking;
@@ -258,13 +261,16 @@ export async function spawnSubagentDirect(
     };
   }
 
-  const maxChildren = cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ?? 5;
-  const activeChildren = countActiveRunsForSession(requesterInternalKey);
-  if (activeChildren >= maxChildren) {
-    return {
-      status: "forbidden",
-      error: `sessions_spawn has reached max active children for this session (${activeChildren}/${maxChildren})`,
-    };
+  // Reusing an existing child session is a continuation, not a new child.
+  if (!reuseChildSessionKey) {
+    const maxChildren = cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ?? 5;
+    const activeChildren = countActiveRunsForSession(requesterInternalKey);
+    if (activeChildren >= maxChildren) {
+      return {
+        status: "forbidden",
+        error: `sessions_spawn has reached max active children for this session (${activeChildren}/${maxChildren})`,
+      };
+    }
   }
 
   const requesterAgentId = normalizeAgentId(
@@ -288,7 +294,8 @@ export async function spawnSubagentDirect(
       };
     }
   }
-  const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
+  const childSessionKey =
+    reuseChildSessionKey ?? `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
   const childDepth = callerDepth + 1;
   const spawnedByKey = requesterInternalKey;
   const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
