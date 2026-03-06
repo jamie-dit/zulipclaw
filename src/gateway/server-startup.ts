@@ -18,6 +18,7 @@ import {
 } from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { startSubagentWatchdog } from "../infra/subagent-watchdog.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
@@ -26,7 +27,6 @@ import {
   shouldWakeFromRestartSentinel,
 } from "./server-restart-sentinel.js";
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
-import { startSubagentWatchdog } from "../infra/subagent-watchdog.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
 
@@ -183,10 +183,13 @@ export async function startGatewaySidecars(params: {
   }
 
   // Start native sub-agent watchdog (monitors runs without spawning LLM sessions).
-  try {
-    startSubagentWatchdog();
-  } catch (err) {
-    params.log.warn(`subagent watchdog failed to start: ${String(err)}`);
+  const watchdogEnabled = params.cfg.agents?.defaults?.subagents?.watchdog?.enabled !== false;
+  if (watchdogEnabled) {
+    try {
+      startSubagentWatchdog();
+    } catch (err) {
+      params.log.warn(`subagent watchdog failed to start: ${String(err)}`);
+    }
   }
 
   return { browserControl, pluginServices };
