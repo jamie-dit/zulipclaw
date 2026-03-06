@@ -119,6 +119,18 @@ const OLLAMA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const OLLAMA_CLOUD_BASE_URL = "https://ollama.com";
+const OLLAMA_CLOUD_DEFAULT_CONTEXT_WINDOW = 128000;
+const OLLAMA_CLOUD_DEFAULT_MAX_TOKENS = 8192;
+// Ollama Cloud pricing: Free = $0, Pro = $20/mo, Max = $100/mo.
+// Per-token costs are not published; use zeros for now.
+const OLLAMA_CLOUD_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const VLLM_BASE_URL = "http://127.0.0.1:8000/v1";
 const VLLM_DEFAULT_CONTEXT_WINDOW = 128000;
 const VLLM_DEFAULT_MAX_TOKENS = 8192;
@@ -224,6 +236,58 @@ async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionCo
     });
   } catch (error) {
     console.warn(`Failed to discover Ollama models: ${String(error)}`);
+    return [];
+  }
+}
+
+async function discoverOllamaCloudModels(apiKey?: string): Promise<ModelDefinitionConfig[]> {
+  // Skip discovery in test environments
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return [];
+  }
+  try {
+    // Resolve env var name to actual value (apiKey may be "OLLAMA_CLOUD_API_KEY").
+    const resolvedSecret =
+      apiKey?.trim()
+        ? /^[A-Z][A-Z0-9_]*$/.test(apiKey.trim())
+          ? (process.env[apiKey.trim()] ?? "").trim()
+          : apiKey.trim()
+        : "";
+    const headers: Record<string, string> = {};
+    if (resolvedSecret) {
+      headers.Authorization = `Bearer ${resolvedSecret}`;
+    }
+    const response = await fetch(`${OLLAMA_CLOUD_BASE_URL}/api/tags`, {
+      headers,
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok) {
+      console.warn(`Failed to discover Ollama Cloud models: ${response.status}`);
+      return [];
+    }
+    const data = (await response.json()) as OllamaTagsResponse;
+    if (!data.models || data.models.length === 0) {
+      console.warn("No Ollama Cloud models found");
+      return [];
+    }
+    return data.models.map((model) => {
+      const modelId = model.name;
+      const isReasoning =
+        modelId.toLowerCase().includes("r1") ||
+        modelId.toLowerCase().includes("reasoning") ||
+        modelId.toLowerCase().includes("thinking");
+      return {
+        id: modelId,
+        name: modelId,
+        reasoning: isReasoning,
+        input: ["text"],
+        cost: OLLAMA_CLOUD_DEFAULT_COST,
+        contextWindow: OLLAMA_CLOUD_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: OLLAMA_CLOUD_DEFAULT_MAX_TOKENS,
+      };
+    });
+  } catch (error) {
+    console.warn(`Failed to discover Ollama Cloud models: ${String(error)}`);
     return [];
   }
 }
@@ -555,6 +619,15 @@ async function buildOllamaProvider(configuredBaseUrl?: string): Promise<Provider
   };
 }
 
+async function buildOllamaCloudProvider(apiKey?: string): Promise<ProviderConfig> {
+  const models = await discoverOllamaCloudModels(apiKey);
+  return {
+    baseUrl: OLLAMA_CLOUD_BASE_URL,
+    api: "ollama",
+    models,
+  };
+}
+
 async function buildHuggingfaceProvider(apiKey?: string): Promise<ProviderConfig> {
   // Resolve env var name to value for discovery (GET /v1/models requires Bearer token).
   const resolvedSecret =
@@ -768,6 +841,17 @@ export async function resolveImplicitProviders(params: {
   if (ollamaKey) {
     const ollamaBaseUrl = params.explicitProviders?.ollama?.baseUrl;
     providers.ollama = { ...(await buildOllamaProvider(ollamaBaseUrl)), apiKey: ollamaKey };
+  }
+
+  // Ollama Cloud provider - hosted Ollama API at https://ollama.com (opt-in via env/profile).
+  const ollamaCloudKey =
+    resolveEnvApiKeyVarName("ollama-cloud") ??
+    resolveApiKeyFromProfiles({ provider: "ollama-cloud", store: authStore });
+  if (ollamaCloudKey) {
+    providers["ollama-cloud"] = {
+      ...(await buildOllamaCloudProvider(ollamaCloudKey)),
+      apiKey: ollamaCloudKey,
+    };
   }
 
   // vLLM provider - OpenAI-compatible local server (opt-in via env/profile).
