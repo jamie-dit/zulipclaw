@@ -1079,7 +1079,7 @@ function findRunIdsByChildSessionKey(childSessionKey: string): string[] {
   return runIds;
 }
 
-function getRunsSnapshotForRead(): Map<string, SubagentRunRecord> {
+export function getRunsSnapshotForRead(): Map<string, SubagentRunRecord> {
   const merged = new Map<string, SubagentRunRecord>();
   const shouldReadDisk = !(process.env.VITEST || process.env.NODE_ENV === "test");
   if (shouldReadDisk) {

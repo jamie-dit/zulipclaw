@@ -145,6 +145,19 @@ export type PromptSectionsConfig = {
   sections?: PromptSectionEntry[];
 };
 
+export type SubagentWatchdogConfig = {
+  /** Enable or disable the native sub-agent watchdog (default: true). */
+  enabled?: boolean;
+  /** Check interval in minutes (default: 1). */
+  checkIntervalMinutes?: number;
+  /** Silent threshold in minutes - warn if no progress (default: 10). */
+  silentThresholdMinutes?: number;
+  /** Stuck threshold in minutes - mark as stuck (default: 30). */
+  stuckThresholdMinutes?: number;
+  /** Send Zulip status pings for stuck/silent runs (default: true). */
+  enableStatusPings?: boolean;
+};
+
 export type AgentDefaultsConfig = {
   /** Primary model and fallbacks (provider/model). */
   model?: AgentModelListConfig;
@@ -285,6 +298,8 @@ export type AgentDefaultsConfig = {
      * Default: true.
      */
     watchdogRespawn?: boolean;
+    /** Native gateway watchdog for monitoring active sub-agent runs (no LLM sessions). */
+    watchdog?: SubagentWatchdogConfig;
     /** Relay sub-agent run updates back to parent channel/topic. */
     relay?: {
       /** Enable sub-agent relay message updates. Default: true. */
