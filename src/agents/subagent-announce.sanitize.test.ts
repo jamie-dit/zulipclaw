@@ -101,7 +101,7 @@ describe("buildCompletionDeliveryMessage", () => {
       subagentName: "audit-task",
     });
     expect(result).toContain("Sub-agent `audit-task`");
-    expect(result).toContain("```spoiler Sub-agent output");
+    expect(result).toContain("```spoiler Sub-agent audit-task output");
     expect(result).toContain("Found 3 issues");
   });
 
@@ -135,7 +135,7 @@ describe("buildCompletionDeliveryMessage", () => {
     });
     expect(result).toContain("Sub-agent `audit-task`");
     expect(result).toContain("- Status: timeout");
-    expect(result).not.toContain("```spoiler Sub-agent output");
+    expect(result).not.toContain("```spoiler Sub-agent audit-task output");
   });
 
   it("sanitizes backticks in subagentName", () => {
@@ -157,24 +157,21 @@ describe("buildCompletionDeliveryMessage", () => {
     const spoilerStart = result.indexOf("```spoiler");
     const spoilerEnd = result.lastIndexOf("```");
     const findingsSection = result.substring(
-      spoilerStart + "```spoiler Sub-agent output\n".length,
+      spoilerStart + "```spoiler Sub-agent code-task output\n".length,
       spoilerEnd,
     );
     expect(findingsSection).not.toMatch(/`{3,}/);
   });
 
-  it("shows visible preview for long findings before the spoiler", () => {
+  it("does not show truncated preview for long findings, only spoiler", () => {
     const longFindings = "A".repeat(800);
     const result = buildCompletionDeliveryMessage({
       findings: longFindings,
       subagentName: "research-task",
     });
-    // Preview is truncated (may be up to 600 chars since there are no newline breakpoints)
-    expect(result).toContain("_(truncated - see full output below)_");
-    // Should also contain the full output in the spoiler
-    expect(result).toContain("```spoiler Sub-agent output");
-    // Full output in spoiler should have all 800 A's (after sanitization)
-    const spoilerStart = result.indexOf("```spoiler Sub-agent output\n");
+    expect(result).not.toContain("_(truncated");
+    expect(result).toContain("```spoiler Sub-agent research-task output");
+    const spoilerStart = result.indexOf("```spoiler Sub-agent research-task output\n");
     expect(spoilerStart).toBeGreaterThan(-1);
   });
 
@@ -184,7 +181,7 @@ describe("buildCompletionDeliveryMessage", () => {
       subagentName: "quick-task",
     });
     expect(result).not.toContain("_(truncated");
-    expect(result).toContain("```spoiler Sub-agent output");
+    expect(result).toContain("```spoiler Sub-agent quick-task output");
     expect(result).toContain("Short result text.");
   });
 });
