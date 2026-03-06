@@ -64,21 +64,36 @@ function cloneFirstTemplateModel(params: {
   return undefined;
 }
 
-const CODEX_GPT53_ELIGIBLE_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
+const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
+const OPENAI_CODEX_GPT_54_CONTEXT_WINDOW = 1_050_000;
+const OPENAI_CODEX_GPT_54_MAX_TOKENS = 128_000;
 
-function resolveOpenAICodexGpt53FallbackModel(
+const CODEX_FORWARD_COMPAT_ELIGIBLE_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
+
+function resolveOpenAICodexForwardCompatModel(
   provider: string,
   modelId: string,
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
   const normalizedProvider = normalizeProviderId(provider);
   const trimmedModelId = modelId.trim();
-  if (!CODEX_GPT53_ELIGIBLE_PROVIDERS.has(normalizedProvider)) {
+  const lower = trimmedModelId.toLowerCase();
+  if (!CODEX_FORWARD_COMPAT_ELIGIBLE_PROVIDERS.has(normalizedProvider)) {
     return undefined;
   }
-  if (trimmedModelId.toLowerCase() !== OPENAI_CODEX_GPT_53_MODEL_ID) {
+
+  const isGpt53 = lower === OPENAI_CODEX_GPT_53_MODEL_ID;
+  const isGpt54 = lower === OPENAI_CODEX_GPT_54_MODEL_ID;
+  if (!isGpt53 && !isGpt54) {
     return undefined;
   }
+
+  const metadataPatch = isGpt54
+    ? {
+        contextWindow: OPENAI_CODEX_GPT_54_CONTEXT_WINDOW,
+        maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
+      }
+    : undefined;
 
   for (const templateId of OPENAI_CODEX_TEMPLATE_MODEL_IDS) {
     const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
@@ -89,6 +104,7 @@ function resolveOpenAICodexGpt53FallbackModel(
       ...template,
       id: trimmedModelId,
       name: trimmedModelId,
+      ...metadataPatch,
     } as Model<Api>);
   }
 
@@ -101,8 +117,8 @@ function resolveOpenAICodexGpt53FallbackModel(
     reasoning: true,
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_TOKENS,
-    maxTokens: DEFAULT_CONTEXT_TOKENS,
+    contextWindow: metadataPatch?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+    maxTokens: metadataPatch?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
   } as Model<Api>);
 }
 
@@ -284,7 +300,7 @@ export function resolveForwardCompatModel(
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
   return (
-    resolveOpenAICodexGpt53FallbackModel(provider, modelId, modelRegistry) ??
+    resolveOpenAICodexForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??

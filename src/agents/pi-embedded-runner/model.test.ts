@@ -191,6 +191,27 @@ describe("resolveModel", () => {
     });
   });
 
+  it("builds an openai-codex fallback for gpt-5.4 with official context metadata", () => {
+    mockDiscoveredModel({
+      provider: "openai-codex",
+      modelId: "gpt-5.2-codex",
+      templateModel: OPENAI_CODEX_TEMPLATE_MODEL,
+    });
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    });
+  });
+
   it("upgrades discovered anthropic claude-opus-4-6 context to 1M", () => {
     mockDiscoveredModel({
       provider: "anthropic",

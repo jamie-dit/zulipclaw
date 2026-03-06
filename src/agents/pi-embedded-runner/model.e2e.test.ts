@@ -55,6 +55,23 @@ describe("pi embedded model e2e smoke", () => {
     });
   });
 
+  it("builds an openai-codex forward-compat fallback for gpt-5.4 with official metadata", () => {
+    mockDiscoveredModel({
+      provider: "openai-codex",
+      modelId: "gpt-5.2-codex",
+      templateModel: OPENAI_CODEX_TEMPLATE_MODEL,
+    });
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    });
+  });
+
   it("keeps unknown-model errors for non-forward-compat IDs", () => {
     const result = resolveModel("openai-codex", "gpt-4.1-mini", "/tmp/agent");
     expect(result.model).toBeUndefined();

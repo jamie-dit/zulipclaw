@@ -11,6 +11,7 @@ describe("applyModelDefaults", () => {
           models: {
             "anthropic/claude-opus-4-6": {},
             "openai/gpt-5.2": {},
+            "openai-codex/gpt-5.4": {},
           },
         },
       },
@@ -19,6 +20,23 @@ describe("applyModelDefaults", () => {
 
     expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.alias).toBe("opus");
     expect(next.agents?.defaults?.models?.["openai/gpt-5.2"]?.alias).toBe("gpt");
+    expect(next.agents?.defaults?.models?.["openai-codex/gpt-5.4"]?.alias).toBe("gpt54");
+  });
+
+  it("does not add gpt54 alias for opencode models", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "opencode/gpt-5.4": {},
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.agents?.defaults?.models?.["opencode/gpt-5.4"]?.alias).toBeUndefined();
   });
 
   it("does not override existing aliases", () => {

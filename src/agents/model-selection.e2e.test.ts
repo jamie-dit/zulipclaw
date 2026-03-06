@@ -90,6 +90,28 @@ describe("model-selection", () => {
   });
 
   describe("buildModelAliasIndex", () => {
+    it("builds codex alias gpt54 to canonical openai-codex model ref", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": { alias: "gpt54" },
+            },
+          },
+        },
+      };
+
+      const index = buildModelAliasIndex({
+        cfg: cfg as OpenClawConfig,
+        defaultProvider: "anthropic",
+      });
+
+      expect(index.byAlias.get("gpt54")?.ref).toEqual({
+        provider: "openai-codex",
+        model: "gpt-5.4",
+      });
+    });
+
     it("should build alias index from config", () => {
       const cfg: Partial<OpenClawConfig> = {
         agents: {
