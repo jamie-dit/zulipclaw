@@ -29,6 +29,7 @@ import {
   buildTogetherModelDefinition,
 } from "./together-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
+import { discoverLiteLLMModels, LITELLM_BASE_URL } from "./litellm-models.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -593,6 +594,20 @@ async function buildVllmProvider(params?: {
     models,
   };
 }
+
+async function buildLitellmProvider(params?: {
+  baseUrl?: string;
+  apiKey?: string;
+}): Promise<ProviderConfig> {
+  const baseUrl = (params?.baseUrl?.trim() || LITELLM_BASE_URL).replace(/\/+$/, "");
+  const models = await discoverLiteLLMModels(baseUrl, params?.apiKey);
+  return {
+    baseUrl,
+    api: "openai-completions",
+    models: models.length > 0 ? models : [],
+  };
+}
+
 export function buildQianfanProvider(): ProviderConfig {
   return {
     baseUrl: QIANFAN_BASE_URL,
