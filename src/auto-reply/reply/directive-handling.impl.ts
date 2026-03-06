@@ -98,6 +98,7 @@ export async function handleDirectiveOnly(
     cfg: params.cfg,
     agentDir,
     activeAgentId,
+    sessionEntry,
     provider,
     model,
     defaultProvider,

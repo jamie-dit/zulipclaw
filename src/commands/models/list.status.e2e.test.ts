@@ -173,6 +173,13 @@ async function withAgentScopeOverrides<T>(
 
 describe("modelsStatusCommand auth overview", () => {
   it("includes masked auth sources in JSON output", async () => {
+    mocks.store.usageStats = {
+      "openai-codex:default": {
+        cooldownUntil: Date.now() + 5 * 60_000,
+        errorCount: 6,
+        failureCounts: { rate_limit: 6 },
+      },
+    };
     await modelsStatusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String((runtime.log as Mock).mock.calls[0]?.[0]));
 
@@ -182,6 +189,15 @@ describe("modelsStatusCommand auth overview", () => {
     expect(payload.auth.shellEnvFallback.enabled).toBe(true);
     expect(payload.auth.shellEnvFallback.appliedKeys).toContain("OPENAI_API_KEY");
     expect(payload.auth.missingProvidersInUse).toEqual([]);
+    expect(payload.auth.unusableProfiles).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          profileId: "openai-codex:default",
+          provider: "openai-codex",
+          kind: "cooldown",
+        }),
+      ]),
+    );
     expect(payload.auth.oauth.warnAfterMs).toBeGreaterThan(0);
     expect(payload.auth.oauth.profiles.length).toBeGreaterThan(0);
 
@@ -205,6 +221,27 @@ describe("modelsStatusCommand auth overview", () => {
     expect(
       (payload.auth.providersWithOAuth as string[]).some((e) => e.startsWith("openai-codex")),
     ).toBe(true);
+  });
+
+  it("shows unusable auth profiles in text output", async () => {
+    mocks.store.usageStats = {
+      "openai-codex:default": {
+        cooldownUntil: Date.now() + 5 * 60_000,
+        errorCount: 6,
+        failureCounts: { rate_limit: 6 },
+      },
+    };
+    const localRuntime = createRuntime();
+
+    await modelsStatusCommand({}, localRuntime as never);
+
+    const output = (localRuntime.log as Mock).mock.calls
+      .map((call: unknown[]) => String(call[0]))
+      .join("\n");
+    expect(output).toContain("Unusable auth profiles");
+    expect(output).toContain("openai-codex:default");
+    expect(output).toContain("cooldown");
+    expect(output).toContain("rate_limit");
   });
 
   it("uses agent overrides and reports sources", async () => {

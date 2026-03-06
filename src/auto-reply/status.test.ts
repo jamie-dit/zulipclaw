@@ -211,7 +211,9 @@ describe("buildStatusMessage", () => {
       modelAuth: "api-key",
     });
 
-    expect(normalizeTestText(text)).toContain("Model: openai/gpt-4.1-mini");
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: openai/gpt-4.1-mini");
+    expect(normalized).toContain("Actual last run: anthropic/claude-haiku-4-5");
   });
 
   it("keeps provider prefix from configured model", () => {

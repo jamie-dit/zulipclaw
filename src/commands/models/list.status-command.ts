@@ -312,6 +312,20 @@ export async function modelsStatusCommand(
     }
     return out.toSorted((a, b) => a.remainingMs - b.remainingMs);
   })();
+  const formatTopFailure = (profileId: string) => {
+    const failureCounts = store.usageStats?.[profileId]?.failureCounts;
+    const top = Object.entries(failureCounts ?? {})
+      .filter(
+        (entry): entry is [string, number] =>
+          typeof entry[1] === "number" && Number.isFinite(entry[1]) && entry[1] > 0,
+      )
+      .toSorted((a, b) => Number(b[1]) - Number(a[1]))[0];
+    if (!top) {
+      return undefined;
+    }
+    const [reason, count] = top;
+    return count > 1 ? `${reason} x${count}` : reason;
+  };
 
   const checkStatus = (() => {
     const hasExpiredOrMissing =
@@ -626,6 +640,24 @@ export async function modelsStatusCommand(
               : " expires unknown";
         runtime.log(`  - ${label} ${status}${expiry}`);
       }
+    }
+  }
+
+  runtime.log("");
+  runtime.log(colorize(rich, theme.heading, "Unusable auth profiles"));
+  if (unusableProfiles.length === 0) {
+    runtime.log(colorize(rich, theme.muted, "- none"));
+  } else {
+    for (const profile of unusableProfiles) {
+      const topFailure = formatTopFailure(profile.profileId);
+      const bits = [
+        `${profile.kind} ${formatRemainingShort(profile.remainingMs)}`,
+        profile.reason ? `reason ${profile.reason}` : null,
+        topFailure ? `failures ${topFailure}` : null,
+      ].filter((part): part is string => Boolean(part));
+      runtime.log(
+        `- ${colorize(rich, theme.accent, profile.profileId)}${profile.provider ? colorize(rich, theme.muted, ` (${profile.provider})`) : ""} ${colorize(rich, theme.warn, bits.join(" · "))}`,
+      );
     }
   }
 

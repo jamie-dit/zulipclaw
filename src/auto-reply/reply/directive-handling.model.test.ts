@@ -9,6 +9,25 @@ import {
   resolveModelSelectionFromDirective,
 } from "./directive-handling.model.js";
 
+const authMocks = vi.hoisted(() => ({
+  store: {
+    profiles: {
+      "openai-codex:default": {
+        type: "oauth",
+        provider: "openai-codex",
+        token: "oauth-token-value",
+        expires: Date.now() + 60_000,
+      },
+    },
+    usageStats: {
+      "openai-codex:default": {
+        cooldownUntil: Date.now() + 5 * 60_000,
+        failureCounts: { rate_limit: 6 },
+      },
+    },
+  },
+}));
+
 // Mock dependencies for directive handling persistence.
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: vi.fn(() => ({})),
@@ -26,6 +45,26 @@ vi.mock("../../config/sessions.js", () => ({
 
 vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
+}));
+
+vi.mock("../../agents/auth-profiles.js", () => ({
+  isProfileInCooldown: vi.fn((store: typeof authMocks.store, profileId: string) => {
+    const until = store.usageStats?.[profileId]?.cooldownUntil;
+    return typeof until === "number" && until > Date.now();
+  }),
+  resolveAuthProfileDisplayLabel: vi.fn(({ profileId }: { profileId: string }) => profileId),
+  resolveAuthStorePathForDisplay: vi.fn(() => "/tmp/agent/auth-profiles.json"),
+}));
+
+vi.mock("../../agents/model-auth.js", () => ({
+  ensureAuthProfileStore: vi.fn(() => authMocks.store),
+  getCustomProviderApiKey: vi.fn(() => undefined),
+  resolveAuthProfileOrder: vi.fn(({ provider }: { provider: string }) =>
+    Object.keys(authMocks.store.profiles).filter(
+      (profileId) => authMocks.store.profiles[profileId]?.provider === provider,
+    ),
+  ),
+  resolveEnvApiKey: vi.fn(() => null),
 }));
 
 function baseAliasIndex(): ModelAliasIndex {
@@ -85,6 +124,47 @@ describe("/model chat UX", () => {
       isDefault: true,
     });
     expect(resolved.errorText).toBeUndefined();
+  });
+
+  it("shows actual last-run drift and cooldown reason in /model status", async () => {
+    const directives = parseInlineDirectives("/model status");
+
+    const reply = await maybeHandleModelDirectiveInfo({
+      directives,
+      cfg: {
+        commands: { text: true },
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": { alias: "gpt54" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agentDir: "/tmp/agent",
+      activeAgentId: "main",
+      sessionEntry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        modelProvider: "synthetic",
+        model: "Kimi-K2.5-NVFP4",
+      },
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: {
+        byAlias: new Map([["gpt54", "openai-codex/gpt-5.4"]]),
+        byKey: new Map([["openai-codex/gpt-5.4", ["gpt54"]]]),
+      },
+      allowedModelCatalog: [{ provider: "openai-codex", id: "gpt-5.4" }],
+      resetModelOverride: false,
+    });
+
+    expect(reply?.text).toContain("Current: openai-codex/gpt-5.4");
+    expect(reply?.text).toContain("Actual last run: synthetic/Kimi-K2.5-NVFP4");
+    expect(reply?.text).toContain("cooldown");
+    expect(reply?.text).toContain("failure rate_limit x6");
   });
 });
 
