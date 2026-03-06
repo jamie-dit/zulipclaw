@@ -81,6 +81,19 @@ type StatusArgs = {
   now?: number;
 };
 
+function resolveActualModelLabel(params: {
+  sessionEntry?: SessionEntry;
+  provider: string;
+  model: string;
+}): string | undefined {
+  const actualModel = params.sessionEntry?.model?.trim();
+  if (!actualModel) {
+    return undefined;
+  }
+  const actualProvider = params.sessionEntry?.modelProvider?.trim() || params.provider;
+  return `${actualProvider}/${actualModel}`;
+}
+
 function resolveRuntimeLabel(
   args: Pick<StatusArgs, "config" | "agent" | "sessionKey" | "sessionScope">,
 ): string {
@@ -467,6 +480,15 @@ export function buildStatusMessage(args: StatusArgs): string {
   const modelLabel = model ? `${provider}/${model}` : "unknown";
   const authLabel = authLabelValue ? ` · 🔑 ${authLabelValue}` : "";
   const modelLine = `🧠 Model: ${modelLabel}${authLabel}`;
+  const actualModelLabel = resolveActualModelLabel({
+    sessionEntry: entry,
+    provider,
+    model,
+  });
+  const actualModelLine =
+    actualModelLabel && actualModelLabel !== modelLabel
+      ? `↪️ Actual last run: ${actualModelLabel}`
+      : null;
   const commit = resolveCommitHash();
   const versionLine = `🦞 OpenClaw ${VERSION}${commit ? ` (${commit})` : ""}`;
   const usagePair = formatUsagePair(inputTokens, outputTokens);
@@ -480,6 +502,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     versionLine,
     args.timeLine,
     modelLine,
+    actualModelLine,
     usageCostLine,
     `📚 ${contextLine}`,
     mediaLine,

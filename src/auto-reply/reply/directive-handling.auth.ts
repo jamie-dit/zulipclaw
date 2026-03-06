@@ -26,6 +26,62 @@ const maskApiKey = (value: string): string => {
   return `${trimmed.slice(0, 8)}...${trimmed.slice(-8)}`;
 };
 
+const formatTopFailure = (failureCounts?: Partial<Record<string, number>>): string | undefined => {
+  const entries = Object.entries(failureCounts ?? {})
+    .filter(
+      (entry): entry is [string, number] =>
+        typeof entry[1] === "number" && Number.isFinite(entry[1]) && entry[1] > 0,
+    )
+    .toSorted((a, b) => Number(b[1]) - Number(a[1]));
+  const top = entries[0];
+  if (!top) {
+    return undefined;
+  }
+  const [reason, count] = top;
+  return count > 1 ? `${reason} x${count}` : reason;
+};
+
+const collectProfileStatusFlags = (params: {
+  profileId: string;
+  store: ReturnType<typeof ensureAuthProfileStore>;
+  nextProfileId?: string;
+  lastGood?: string;
+  now: number;
+  formatUntil: (timestampMs: number) => string;
+}): string[] => {
+  const flags: string[] = [];
+  if (params.profileId === params.nextProfileId) {
+    flags.push("next");
+  }
+  if (params.lastGood && params.profileId === params.lastGood) {
+    flags.push("lastGood");
+  }
+
+  const stats = params.store.usageStats?.[params.profileId];
+  const disabledUntil = stats?.disabledUntil;
+  if (
+    typeof disabledUntil === "number" &&
+    Number.isFinite(disabledUntil) &&
+    disabledUntil > params.now
+  ) {
+    const disabledReason = stats?.disabledReason ? ` ${stats.disabledReason}` : "";
+    flags.push(`disabled${disabledReason} ${params.formatUntil(disabledUntil)}`.trim());
+  } else if (isProfileInCooldown(params.store, params.profileId)) {
+    const until = stats?.cooldownUntil;
+    if (typeof until === "number" && Number.isFinite(until) && until > params.now) {
+      flags.push(`cooldown ${params.formatUntil(until)}`);
+    } else {
+      flags.push("cooldown");
+    }
+  }
+
+  const topFailure = formatTopFailure(stats?.failureCounts);
+  if (topFailure) {
+    flags.push(`failure ${topFailure}`);
+  }
+  return flags;
+};
+
 export const resolveAuthLabel = async (
   provider: string,
   cfg: OpenClawConfig,
@@ -116,21 +172,14 @@ export const resolveAuthLabel = async (
     const labels = order.map((profileId) => {
       const profile = store.profiles[profileId];
       const configProfile = cfg.auth?.profiles?.[profileId];
-      const flags: string[] = [];
-      if (profileId === nextProfileId) {
-        flags.push("next");
-      }
-      if (lastGood && profileId === lastGood) {
-        flags.push("lastGood");
-      }
-      if (isProfileInCooldown(store, profileId)) {
-        const until = store.usageStats?.[profileId]?.cooldownUntil;
-        if (typeof until === "number" && Number.isFinite(until) && until > now) {
-          flags.push(`cooldown ${formatUntil(until)}`);
-        } else {
-          flags.push("cooldown");
-        }
-      }
+      const flags = collectProfileStatusFlags({
+        profileId,
+        store,
+        nextProfileId,
+        lastGood,
+        now,
+        formatUntil,
+      });
       if (
         !profile ||
         (configProfile?.provider && configProfile.provider !== profile.provider) ||

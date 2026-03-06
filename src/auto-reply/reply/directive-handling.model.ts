@@ -7,6 +7,7 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { shortenHomePath } from "../../utils.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveModelsCommandReply } from "./commands-models.js";
@@ -170,6 +171,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
   cfg: OpenClawConfig;
   agentDir: string;
   activeAgentId: string;
+  sessionEntry?: SessionEntry;
   provider: string;
   model: string;
   defaultProvider: string;
@@ -250,13 +252,17 @@ export async function maybeHandleModelDirectiveInfo(params: {
   }
 
   const current = `${params.provider}/${params.model}`;
+  const actualModel = params.sessionEntry?.model?.trim();
+  const actualProvider = params.sessionEntry?.modelProvider?.trim() || params.provider;
+  const actualLabel = actualModel ? `${actualProvider}/${actualModel}` : undefined;
   const defaultLabel = `${params.defaultProvider}/${params.defaultModel}`;
   const lines = [
     `Current: ${current}`,
+    actualLabel && actualLabel !== current ? `Actual last run: ${actualLabel}` : null,
     `Default: ${defaultLabel}`,
     `Agent: ${params.activeAgentId}`,
     `Auth file: ${formatPath(resolveAuthStorePathForDisplay(params.agentDir))}`,
-  ];
+  ].filter((line): line is string => Boolean(line));
   if (params.resetModelOverride) {
     lines.push(`(previous selection reset to default)`);
   }
