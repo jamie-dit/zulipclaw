@@ -26,6 +26,14 @@ import {
   VENICE_DEFAULT_MODEL_REF,
   VENICE_MODEL_CATALOG,
 } from "../agents/venice-models.js";
+import {
+  buildLiteLLMModelDefinition,
+  discoverLiteLLMModels,
+  fetchLiteLLMCatalog,
+  LITELLM_BASE_URL as LITELLM_PUBLIC_BASE_URL,
+  LITELLM_DEFAULT_MODEL_ID as LITELLM_PUBLIC_DEFAULT_MODEL_ID,
+  LITELLM_DEFAULT_MODEL_REF as LITELLM_PUBLIC_DEFAULT_MODEL_REF,
+} from "../agents/litellm-models.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelApi } from "../config/types.models.js";
 import {
@@ -48,6 +56,14 @@ export {
   LITELLM_BASE_URL,
   LITELLM_DEFAULT_MODEL_ID,
 } from "./onboard-auth.config-litellm.js";
+export {
+  buildLiteLLMModelDefinition,
+  discoverLiteLLMModels,
+  fetchLiteLLMCatalog,
+  LITELLM_PUBLIC_BASE_URL,
+  LITELLM_PUBLIC_DEFAULT_MODEL_ID,
+  LITELLM_PUBLIC_DEFAULT_MODEL_REF,
+};
 import {
   applyAgentDefaultModelPrimary,
   applyOnboardAuthAgentModelsAndProviders,

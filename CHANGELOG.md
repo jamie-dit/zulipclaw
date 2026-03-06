@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Zulip/Reactions latency: send the initial queued reaction before a message waits on the per-stream handler backlog, add trace milestones for `event_seen`/`handler_wait_start`/dispatch lifecycle timing, and preserve single queued reactions for recovery replay so delayed first acknowledgements are easier to diagnose and no longer blocked behind saturated Zulip turns.
 - Models/MiniMax auth header defaults: set `authHeader: true` for both onboarding-generated MiniMax API providers and implicit built-in MiniMax (`minimax`, `minimax-portal`) provider templates so first requests no longer fail with MiniMax `401 authentication_error` due to missing `Authorization` header. Landed from contributor PRs #27622 by @riccoyuanft and #27631 by @kevinWangSheng. (#27600, #15303)
 - Pi image-token usage: stop re-injecting history image blocks each turn, process image references from the current prompt only, and prune already-answered user-image blocks in stored history to prevent runaway token growth. (#27602)
 - BlueBubbles/SSRF: auto-allowlist the configured `serverUrl` hostname for attachment fetches so localhost/private-IP BlueBubbles setups are no longer false-blocked by default SSRF checks. Landed from contributor PR #27648 by @lailoo. (#27599) Thanks @taylorhou for reporting.

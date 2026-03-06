@@ -474,7 +474,7 @@ describe("monitorZulipProvider recovery checkpoints", () => {
     expect(firstDispatchCall?.replyOptions?.runId).toBe("zulip-main:default:7001");
 
     monitor.stop();
-    await (monitor as { done: Promise<void> }).done;
+    await (monitor as unknown as { done: Promise<void> }).done;
   });
 
   it("writes then clears the replayed in-flight checkpoint on success", async () => {
@@ -535,6 +535,60 @@ describe("monitorZulipProvider recovery checkpoints", () => {
         content: ZULIP_RECOVERY_NOTICE,
       }),
     );
+
+    monitor.stop();
+    await (monitor as { done: Promise<void> }).done;
+  });
+
+  it("does not double-send the queued reaction when replaying a recovery checkpoint", async () => {
+    const checkpoint = makeCheckpoint();
+    const { dispatchReplyFromConfig } = createHarness({
+      checkpoints: [checkpoint],
+      reactions: {
+        enabled: true,
+        onStart: "eyes",
+        onSuccess: "check",
+        onFailure: "warning",
+        clearOnFinish: true,
+        workflow: {
+          enabled: false,
+          stages: {
+            queued: "eyes",
+            processing: "eyes",
+            toolRunning: "eyes",
+            retrying: "eyes",
+            success: "check",
+            partialSuccess: "warning",
+            failure: "warning",
+          },
+        },
+        genericCallback: {
+          enabled: false,
+          includeRemoveOps: false,
+        },
+      },
+    });
+
+    const monitor = await monitorZulipProvider({
+      config: {} as never,
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    });
+
+    await waitForCondition(() => dispatchReplyFromConfig.mock.calls.length > 0);
+    await waitForCondition(() =>
+      mocks.addZulipReaction.mock.calls.some(
+        ([params]) => params?.messageId === checkpoint.messageId && params?.emojiName === "eyes",
+      ),
+    );
+
+    const queuedReactions = mocks.addZulipReaction.mock.calls.filter(
+      ([params]) => params?.messageId === checkpoint.messageId && params?.emojiName === "eyes",
+    );
+    expect(queuedReactions).toHaveLength(1);
 
     monitor.stop();
     await (monitor as { done: Promise<void> }).done;
