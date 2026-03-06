@@ -16,6 +16,7 @@ export {
   getApiErrorPayloadFingerprint,
   isAuthAssistantError,
   isAuthErrorMessage,
+  isMissingScopeResponsesWrite,
   isBillingAssistantError,
   parseApiErrorInfo,
   sanitizeUserFacingText,

@@ -39,6 +39,7 @@ import {
   isLikelyContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
+  isMissingScopeResponsesWrite,
   parseImageSizeError,
   parseImageDimensionError,
   isRateLimitAssistantError,
@@ -507,6 +508,8 @@ export async function runEmbeddedPiAgent(
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
+      let responsesScopeFallbackRetried = false;
+      let scopeFallbackModel: typeof model | undefined;
       try {
         while (true) {
           if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
@@ -539,6 +542,8 @@ export async function runEmbeddedPiAgent(
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
+          const modelForAttempt = scopeFallbackModel ?? model;
+
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
 
@@ -569,7 +574,7 @@ export async function runEmbeddedPiAgent(
             disableTools: params.disableTools,
             provider,
             modelId,
-            model,
+            model: modelForAttempt,
             authStorage,
             modelRegistry,
             agentId: workspaceResolution.agentId,
@@ -864,6 +869,21 @@ export async function runEmbeddedPiAgent(
                   error: { kind: "image_size", message: errorText },
                 },
               };
+            }
+            if (
+              !responsesScopeFallbackRetried &&
+              modelForAttempt.api === "openai-responses" &&
+              isMissingScopeResponsesWrite(errorText)
+            ) {
+              responsesScopeFallbackRetried = true;
+              scopeFallbackModel = {
+                ...model,
+                api: "openai-completions",
+              };
+              log.warn(
+                "Retrying with Chat Completions API due to missing api.responses.write scope",
+              );
+              continue;
             }
             const promptFailoverReason = classifyFailoverReason(errorText);
             if (promptFailoverReason && promptFailoverReason !== "timeout" && lastProfileId) {

@@ -11,6 +11,7 @@ import {
   isImageDimensionErrorMessage,
   isLikelyContextOverflowError,
   isTimeoutErrorMessage,
+  isMissingScopeResponsesWrite,
   isTransientHttpError,
   parseImageDimensionError,
   parseImageSizeError,
@@ -356,5 +357,24 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("You have hit your ChatGPT usage limit (plus plan)")).toBe(
       "rate_limit",
     );
+  });
+});
+
+describe("isMissingScopeResponsesWrite", () => {
+  it("matches missing scopes errors that mention responses.write scope", () => {
+    expect(
+      isMissingScopeResponsesWrite(
+        "HTTP 401 Unauthorized: Missing scopes: api.responses.write for this token",
+      ),
+    ).toBe(true);
+    expect(isMissingScopeResponsesWrite("missing scopes: responses.write, model.request")).toBe(
+      true,
+    );
+  });
+
+  it("does not match when either missing scopes or responses.write is absent", () => {
+    expect(isMissingScopeResponsesWrite("Missing scopes: model.request")).toBe(false);
+    expect(isMissingScopeResponsesWrite("api.responses.write is required")).toBe(false);
+    expect(isMissingScopeResponsesWrite("Unauthorized")).toBe(false);
   });
 });
