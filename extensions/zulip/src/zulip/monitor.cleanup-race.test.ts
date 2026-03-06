@@ -530,13 +530,44 @@ describe("monitorZulipProvider cleanup race", () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise<void>((resolve, reject) => {
+      const startedAt = Date.now();
+      const tick = () => {
+        if (dispatchReplyFromConfig.mock.calls.length > 0) {
+          resolve();
+          return;
+        }
+        if (Date.now() - startedAt > 1_000) {
+          reject(new Error("relay dispatch start timeout"));
+          return;
+        }
+        setTimeout(tick, 10);
+      };
+      tick();
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      const startedAt = Date.now();
+      const tick = () => {
+        const contents = mocks.sendZulipStreamMessage.mock.calls.map((call) => call[0]?.content);
+        if (contents.some((value) => String(value).includes("final response"))) {
+          resolve();
+          return;
+        }
+        if (Date.now() - startedAt > 5_000) {
+          reject(new Error("final relay delivery timeout"));
+          return;
+        }
+        setTimeout(tick, 10);
+      };
+      tick();
+    });
     monitor.stop();
-    await (monitor as { done: Promise<void> }).done;
+    await (monitor as unknown as { done: Promise<void> }).done;
 
     const contents = mocks.sendZulipStreamMessage.mock.calls.map((call) => call[0]?.content);
-    expect(contents).toContain("final response");
-    expect(contents).not.toContain("[tool] read file");
+    expect(contents.some((value) => String(value).includes("final response"))).toBe(true);
+    expect(contents.some((value) => String(value).includes("[tool] read file"))).toBe(false);
     expect(mocks.registerMainRelayRun).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "zulip-main:default:777" }),
     );

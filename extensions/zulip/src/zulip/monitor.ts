@@ -136,10 +136,69 @@ type ZulipMeResponse = {
   full_name?: string;
 };
 
+type ZulipMessageSource = "poll" | "catchup" | "freshness" | "recovery";
+
+type ZulipTraceContext = {
+  source: ZulipMessageSource;
+  activeHandlers: number;
+  waiterDepth: number;
+};
+
+type PreparedZulipMessage = {
+  msg: ZulipEventMessage;
+  source: ZulipMessageSource;
+  stream: string;
+  topic: string;
+  content: string;
+  isRecovery: boolean;
+  queuedReactionStarted: boolean;
+  reactionController: ReactionTransitionController | null;
+  trace: ZulipTraceContext;
+};
+
 export const DEFAULT_DISPATCH_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
 export const KEEPALIVE_INITIAL_DELAY_MS = 25_000;
 export const KEEPALIVE_REPEAT_INTERVAL_MS = 60_000;
 export const ZULIP_RECOVERY_NOTICE = "🔄 Gateway restarted - resuming the previous task now...";
+
+function buildZulipTraceLog(params: {
+  accountId: string;
+  milestone: string;
+  messageId?: number;
+  stream?: string;
+  topic?: string;
+  sessionKey?: string;
+  source?: ZulipMessageSource;
+  activeHandlers?: number;
+  waiterDepth?: number;
+  extra?: Record<string, boolean | number | string | undefined>;
+}): string {
+  const fields: string[] = [`[zulip-trace][${params.accountId}]`, `milestone=${params.milestone}`];
+
+  const pushField = (key: string, value: boolean | number | string | undefined) => {
+    if (value === undefined) {
+      return;
+    }
+    if (typeof value === "string") {
+      fields.push(`${key}=${JSON.stringify(value)}`);
+      return;
+    }
+    fields.push(`${key}=${String(value)}`);
+  };
+
+  pushField("source", params.source);
+  pushField("messageId", params.messageId);
+  pushField("stream", params.stream);
+  pushField("topic", params.topic);
+  pushField("sessionKey", params.sessionKey);
+  pushField("activeHandlers", params.activeHandlers);
+  pushField("waiterDepth", params.waiterDepth);
+  for (const [key, value] of Object.entries(params.extra ?? {})) {
+    pushField(key, value);
+  }
+
+  return fields.join(" ");
+}
 
 function buildMainRelayRunId(accountId: string, messageId: number): string {
   return `zulip-main:${accountId}:${messageId}`;
@@ -1021,27 +1080,118 @@ export async function monitorZulipProvider(
     // Stream ID -> stream name mapping for resolving cross-stream move events.
     const streamIdToName = await fetchZulipSubscriptions(auth, abortSignal);
 
-    const handleMessage = async (
-      msg: ZulipEventMessage,
-      messageOptions?: { recoveryCheckpoint?: ZulipInFlightCheckpoint },
-    ) => {
-      if (typeof msg.id !== "number") {
-        return;
-      }
-      if (dedupe.check(String(msg.id))) {
-        return;
-      }
-      const ignore = shouldIgnoreMessage({ message: msg, botUserId, streams: account.streams });
-      if (ignore.ignore) {
-        return;
+    const logTrace = (params: {
+      milestone: string;
+      messageId?: number;
+      stream?: string;
+      topic?: string;
+      sessionKey?: string;
+      source?: ZulipMessageSource;
+      activeHandlers?: number;
+      waiterDepth?: number;
+      extra?: Record<string, boolean | number | string | undefined>;
+    }) => {
+      logger.debug?.(
+        buildZulipTraceLog({
+          accountId: account.accountId,
+          ...params,
+        }),
+      );
+    };
+
+    const sendQueuedReaction = async (params: {
+      msg: ZulipEventMessage;
+      stream: string;
+      topic: string;
+      source: ZulipMessageSource;
+      trace: ZulipTraceContext;
+    }): Promise<{
+      queuedReactionStarted: boolean;
+      reactionController: ReactionTransitionController | null;
+    }> => {
+      const reactions = account.reactions;
+      if (!reactions.enabled) {
+        return { queuedReactionStarted: false, reactionController: null };
       }
 
-      const isRecovery = Boolean(messageOptions?.recoveryCheckpoint);
+      logTrace({
+        milestone: "queued_reaction_start",
+        source: params.source,
+        messageId: params.msg.id,
+        stream: params.stream,
+        topic: params.topic,
+        activeHandlers: params.trace.activeHandlers,
+        waiterDepth: params.trace.waiterDepth,
+      });
+
+      if (reactions.workflow.enabled) {
+        const reactionController = createReactionTransitionController({
+          auth,
+          messageId: params.msg.id,
+          reactions,
+          log: (message) => logger.debug?.(message),
+        });
+        await reactionController.transition("queued", { abortSignal });
+        logTrace({
+          milestone: "queued_reaction_done",
+          source: params.source,
+          messageId: params.msg.id,
+          stream: params.stream,
+          topic: params.topic,
+          activeHandlers: params.trace.activeHandlers,
+          waiterDepth: params.trace.waiterDepth,
+          extra: { reactionMode: "workflow" },
+        });
+        return { queuedReactionStarted: true, reactionController };
+      }
+
+      await bestEffortReaction({
+        auth,
+        messageId: params.msg.id,
+        op: "add",
+        emojiName: reactions.onStart,
+        log: (message) => logger.debug?.(message),
+        abortSignal,
+      });
+      logTrace({
+        milestone: "queued_reaction_done",
+        source: params.source,
+        messageId: params.msg.id,
+        stream: params.stream,
+        topic: params.topic,
+        activeHandlers: params.trace.activeHandlers,
+        waiterDepth: params.trace.waiterDepth,
+        extra: { reactionMode: "classic" },
+      });
+      return { queuedReactionStarted: true, reactionController: null };
+    };
+
+    const prepareMessageForHandling = async (params: {
+      msg: ZulipEventMessage;
+      source: ZulipMessageSource;
+      activeHandlers: number;
+      waiterDepth: number;
+      recoveryCheckpoint?: ZulipInFlightCheckpoint;
+    }): Promise<PreparedZulipMessage | undefined> => {
+      const { msg } = params;
+      if (typeof msg.id !== "number") {
+        return undefined;
+      }
+      if (dedupe.check(String(msg.id))) {
+        return undefined;
+      }
+
+      const ignore = shouldIgnoreMessage({ message: msg, botUserId, streams: account.streams });
+      if (ignore.ignore) {
+        return undefined;
+      }
+
+      const isRecovery = Boolean(params.recoveryCheckpoint);
       const stream = normalizeStreamName(msg.display_recipient);
       const topic = normalizeTopic(msg.subject) || account.defaultTopic;
       const content = msg.content ?? "";
       if (!stream) {
-        return;
+        return undefined;
       }
       if (
         !isRecovery &&
@@ -1050,20 +1200,65 @@ export async function monitorZulipProvider(
         logger.debug?.(
           `[zulip:${account.accountId}] skip already-processed message ${msg.id} (${stream}) from durable watermark`,
         );
-        return;
+        return undefined;
       }
+      if (!content.trim() && !content.includes("/user_uploads/")) {
+        return undefined;
+      }
+
+      const trace: ZulipTraceContext = {
+        source: params.source,
+        activeHandlers: params.activeHandlers,
+        waiterDepth: params.waiterDepth,
+      };
+      logTrace({
+        milestone: "event_seen",
+        source: params.source,
+        messageId: msg.id,
+        stream,
+        topic,
+        activeHandlers: params.activeHandlers,
+        waiterDepth: params.waiterDepth,
+      });
+
       if (isRecovery) {
         logger.warn(
           `[zulip:${account.accountId}] replaying recovery checkpoint for message ${msg.id} (${stream}#${topic})`,
         );
       }
-      // Defer the definitive empty-content check until after upload processing —
-      // image-only messages have content (upload URLs) that gets stripped later,
-      // but should still be processed as media. Quick pre-check: bail only if
-      // content is truly blank AND contains no upload references at all.
-      if (!content.trim() && !content.includes("/user_uploads/")) {
-        return;
-      }
+
+      const queuedReaction = isRecovery
+        ? { queuedReactionStarted: false, reactionController: null }
+        : await sendQueuedReaction({
+            msg,
+            stream,
+            topic,
+            source: params.source,
+            trace,
+          });
+
+      return {
+        msg,
+        source: params.source,
+        stream,
+        topic,
+        content,
+        isRecovery,
+        queuedReactionStarted: queuedReaction.queuedReactionStarted,
+        reactionController: queuedReaction.reactionController,
+        trace,
+      };
+    };
+
+    const handleMessage = async (
+      prepared: PreparedZulipMessage,
+      messageOptions?: { recoveryCheckpoint?: ZulipInFlightCheckpoint },
+    ) => {
+      const msg = prepared.msg;
+      const stream = prepared.stream;
+      const topic = prepared.topic;
+      const content = prepared.content;
+      const isRecovery = prepared.isRecovery;
 
       core.channel.activity.record({
         channel: "zulip",
@@ -1113,26 +1308,23 @@ export async function monitorZulipProvider(
       }
 
       const reactions = account.reactions;
-      const reactionController =
-        reactions.enabled && reactions.workflow.enabled
-          ? createReactionTransitionController({
-              auth,
-              messageId: msg.id,
-              reactions,
-              log: (m) => logger.debug?.(m),
-            })
-          : null;
-
-      if (reactionController) {
-        await reactionController.transition("queued", { abortSignal });
-      } else if (reactions.enabled) {
-        await bestEffortReaction({
+      let reactionController = prepared.reactionController;
+      if (!prepared.queuedReactionStarted) {
+        const queuedReaction = await sendQueuedReaction({
+          msg,
+          stream,
+          topic,
+          source: prepared.source,
+          trace: prepared.trace,
+        });
+        reactionController = queuedReaction.reactionController ?? reactionController;
+      }
+      if (!reactionController && reactions.enabled && reactions.workflow.enabled) {
+        reactionController = createReactionTransitionController({
           auth,
           messageId: msg.id,
-          op: "add",
-          emojiName: reactions.onStart,
+          reactions,
           log: (m) => logger.debug?.(m),
-          abortSignal,
         });
       }
 
@@ -1201,6 +1393,16 @@ export async function monitorZulipProvider(
       });
       const baseSessionKey = route.sessionKey;
       const sessionKey = `${baseSessionKey}:topic:${canonicalTopicKey}`;
+      logTrace({
+        milestone: "handler_start",
+        source: prepared.source,
+        messageId: msg.id,
+        stream,
+        topic,
+        sessionKey,
+        activeHandlers: prepared.trace.activeHandlers,
+        waiterDepth: prepared.trace.waiterDepth,
+      });
 
       const to = `stream:${stream}#${topic}`;
       const from = `zulip:channel:${stream}`;
@@ -1321,6 +1523,7 @@ export async function monitorZulipProvider(
       const isMainRelayActive = () => mainRelayRegistered && isRelayRunRegistered(mainRelayRunId);
 
       let successfulDeliveries = 0;
+      let firstOutboundLogged = false;
       const toolProgress = new ToolProgressAccumulator({
         auth,
         stream,
@@ -1343,6 +1546,20 @@ export async function monitorZulipProvider(
                 // Main relay renders structured tool calls via AgentEvent stream.
                 return;
               }
+              if (!firstOutboundLogged) {
+                firstOutboundLogged = true;
+                logTrace({
+                  milestone: "first_outbound",
+                  source: prepared.source,
+                  messageId: msg.id,
+                  stream,
+                  topic,
+                  sessionKey,
+                  activeHandlers: prepared.trace.activeHandlers,
+                  waiterDepth: prepared.trace.waiterDepth,
+                  extra: { kind: kind ?? "tool" },
+                });
+              }
               toolProgress.addLine(payload.text.trim());
               // Count as a successful delivery since the accumulator handles send/edit.
               successfulDeliveries += 1;
@@ -1360,6 +1577,21 @@ export async function monitorZulipProvider(
             // so the batched tool message appears above the block/final reply.
             if (kind !== "tool" && toolProgress.hasContent) {
               await toolProgress.finalize();
+            }
+
+            if (!firstOutboundLogged) {
+              firstOutboundLogged = true;
+              logTrace({
+                milestone: "first_outbound",
+                source: prepared.source,
+                messageId: msg.id,
+                stream,
+                topic,
+                sessionKey,
+                activeHandlers: prepared.trace.activeHandlers,
+                waiterDepth: prepared.trace.waiterDepth,
+                extra: { kind: kind ?? "reply" },
+              });
             }
 
             // Use deliverySignal (not abortSignal) so in-flight replies survive
@@ -1432,6 +1664,17 @@ export async function monitorZulipProvider(
             if (reactionController) {
               await reactionController.transition("processing", { abortSignal });
             }
+            logTrace({
+              milestone: "dispatch_start",
+              source: prepared.source,
+              messageId: msg.id,
+              stream,
+              topic,
+              sessionKey,
+              activeHandlers: prepared.trace.activeHandlers,
+              waiterDepth: prepared.trace.waiterDepth,
+              extra: { attempt: attempt + 1 },
+            });
             await core.channel.reply.dispatchReplyFromConfig({
               ctx: ctxPayload,
               cfg,
@@ -1459,6 +1702,17 @@ export async function monitorZulipProvider(
             });
             ok = true;
             lastDispatchError = undefined;
+            logTrace({
+              milestone: "dispatch_done",
+              source: prepared.source,
+              messageId: msg.id,
+              stream,
+              topic,
+              sessionKey,
+              activeHandlers: prepared.trace.activeHandlers,
+              waiterDepth: prepared.trace.waiterDepth,
+              extra: { ok: true, attempt: attempt + 1 },
+            });
             break;
           } catch (err) {
             ok = false;
@@ -1478,6 +1732,17 @@ export async function monitorZulipProvider(
             }
             opts.statusSink?.({ lastError: err instanceof Error ? err.message : String(err) });
             runtime.error?.(`zulip dispatch failed: ${String(err)}`);
+            logTrace({
+              milestone: "dispatch_done",
+              source: prepared.source,
+              messageId: msg.id,
+              stream,
+              topic,
+              sessionKey,
+              activeHandlers: prepared.trace.activeHandlers,
+              waiterDepth: prepared.trace.waiterDepth,
+              extra: { ok: false, attempt: attempt + 1 },
+            });
           }
         }
       } finally {
@@ -1595,6 +1860,17 @@ export async function monitorZulipProvider(
           } catch (err) {
             runtime.error?.(`[zulip] failed to update in-flight checkpoint: ${String(err)}`);
           }
+          logTrace({
+            milestone: "cleanup_done",
+            source: prepared.source,
+            messageId: msg.id,
+            stream,
+            topic,
+            sessionKey,
+            activeHandlers: prepared.trace.activeHandlers,
+            waiterDepth: prepared.trace.waiterDepth,
+            extra: { ok, successfulDeliveries },
+          });
         }
       }
     };
@@ -1943,7 +2219,17 @@ export async function monitorZulipProvider(
         };
 
         try {
-          await handleMessage(syntheticMessage, { recoveryCheckpoint: checkpoint });
+          const prepared = await prepareMessageForHandling({
+            msg: syntheticMessage,
+            source: "recovery",
+            activeHandlers: 0,
+            waiterDepth: 0,
+            recoveryCheckpoint: checkpoint,
+          });
+          if (!prepared) {
+            continue;
+          }
+          await handleMessage(prepared, { recoveryCheckpoint: checkpoint });
         } catch (err) {
           runtime.error?.(
             `[zulip:${account.accountId}] recovery replay failed for ${checkpoint.checkpointId}: ${String(err)}`,
@@ -1970,13 +2256,34 @@ export async function monitorZulipProvider(
       let activeHandlers = 0;
       const handlerWaiters: Array<() => void> = [];
 
-      const throttledHandleMessage = async (msg: ZulipEventMessage) => {
+      const throttledHandleMessage = async (msg: ZulipEventMessage, source: ZulipMessageSource) => {
+        const prepared = await prepareMessageForHandling({
+          msg,
+          source,
+          activeHandlers,
+          waiterDepth: handlerWaiters.length,
+        });
+        if (!prepared) {
+          return;
+        }
+
         if (activeHandlers >= MAX_CONCURRENT_HANDLERS) {
+          logTrace({
+            milestone: "handler_wait_start",
+            source,
+            messageId: msg.id,
+            stream: prepared.stream,
+            topic: prepared.topic,
+            activeHandlers,
+            waiterDepth: handlerWaiters.length + 1,
+          });
           await new Promise<void>((resolve) => handlerWaiters.push(resolve));
         }
         activeHandlers++;
         try {
-          await handleMessage(msg);
+          prepared.trace.activeHandlers = activeHandlers;
+          prepared.trace.waiterDepth = handlerWaiters.length;
+          await handleMessage(prepared);
         } finally {
           activeHandlers--;
           const next = handlerWaiters.shift();
@@ -2012,7 +2319,7 @@ export async function monitorZulipProvider(
               if (typeof msg.id === "number" && msg.id > lastSeenMsgId) {
                 caught++;
                 lastSeenMsgId = msg.id;
-                throttledHandleMessage(msg).catch((err) => {
+                throttledHandleMessage(msg, "freshness").catch((err) => {
                   runtime.error?.(`zulip: freshness catchup failed: ${String(err)}`);
                 });
               }
@@ -2063,7 +2370,7 @@ export async function monitorZulipProvider(
                       lastSeenMsgId = msg.id;
                     }
                     // dedupe.check skips already-processed messages
-                    throttledHandleMessage(msg).catch((err) => {
+                    throttledHandleMessage(msg, "catchup").catch((err) => {
                       runtime.error?.(`zulip: catchup message failed: ${String(err)}`);
                     });
                   }
@@ -2220,7 +2527,7 @@ export async function monitorZulipProvider(
           stage = "handle";
           for (const msg of messages) {
             // Use throttled handler with backpressure (max concurrent limit)
-            throttledHandleMessage(msg).catch((err) => {
+            throttledHandleMessage(msg, "poll").catch((err) => {
               runtime.error?.(`zulip: message processing failed: ${String(err)}`);
             });
             // Small stagger between starting each message for natural pacing
