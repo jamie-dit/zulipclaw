@@ -509,7 +509,7 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let responsesScopeFallbackRetried = false;
-      let forcedApiModelForRetry: typeof model | undefined;
+      let scopeFallbackModel: typeof model | undefined;
       try {
         while (true) {
           if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
@@ -542,8 +542,7 @@ export async function runEmbeddedPiAgent(
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
-          const modelForAttempt = forcedApiModelForRetry ?? model;
-          forcedApiModelForRetry = undefined;
+          const modelForAttempt = scopeFallbackModel ?? model;
 
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
@@ -877,7 +876,7 @@ export async function runEmbeddedPiAgent(
               isMissingScopeResponsesWrite(errorText)
             ) {
               responsesScopeFallbackRetried = true;
-              forcedApiModelForRetry = {
+              scopeFallbackModel = {
                 ...model,
                 api: "openai-completions",
               };
