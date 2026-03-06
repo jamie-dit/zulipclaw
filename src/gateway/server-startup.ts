@@ -26,6 +26,7 @@ import {
   shouldWakeFromRestartSentinel,
 } from "./server-restart-sentinel.js";
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
+import { startSubagentWatchdog } from "../infra/subagent-watchdog.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
 
@@ -179,6 +180,13 @@ export async function startGatewaySidecars(params: {
     setTimeout(() => {
       void scheduleRestartSentinelWake({ deps: params.deps });
     }, 750);
+  }
+
+  // Start native sub-agent watchdog (monitors runs without spawning LLM sessions).
+  try {
+    startSubagentWatchdog();
+  } catch (err) {
+    params.log.warn(`subagent watchdog failed to start: ${String(err)}`);
   }
 
   return { browserControl, pluginServices };
