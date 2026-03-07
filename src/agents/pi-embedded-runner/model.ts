@@ -160,7 +160,7 @@ export function resolveModelWithRegistry(params: {
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
   );
   if (inlineMatch) {
-    const resolved = normalizeModelCompat(inlineMatch as Model<Api>);
+    const resolved = applyCodexOverrides(provider, normalizeModelCompat(inlineMatch as Model<Api>));
     log.debug(
       `[model-resolve] ${provider}/${modelId}: api=${resolved.api} baseUrl=${resolved.baseUrl ?? "default"} via=inline`,
     );
@@ -171,12 +171,15 @@ export function resolveModelWithRegistry(params: {
   // Otherwise, configured providers can default to a generic API and break specific transports.
   const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
   if (forwardCompat) {
-    const resolved = normalizeModelCompat(
-      applyConfiguredProviderOverrides({
-        discoveredModel: forwardCompat,
-        providerConfig,
-        modelId,
-      }),
+    const resolved = applyCodexOverrides(
+      provider,
+      normalizeModelCompat(
+        applyConfiguredProviderOverrides({
+          discoveredModel: forwardCompat,
+          providerConfig,
+          modelId,
+        }),
+      ),
     );
     log.debug(
       `[model-resolve] ${provider}/${modelId}: api=${resolved.api} baseUrl=${resolved.baseUrl ?? "default"} via=forward-compat`,
@@ -204,31 +207,35 @@ export function resolveModelWithRegistry(params: {
 
   const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
   if (providerConfig || modelId.startsWith("mock-")) {
-    log.debug(
-      `[model-resolve] ${provider}/${modelId}: api=${providerConfig?.api ?? "openai-responses"} baseUrl=${providerConfig?.baseUrl ?? "default"} via=provider-fallback`,
-    );
-    return normalizeModelCompat({
-      id: modelId,
-      name: modelId,
-      api: providerConfig?.api ?? "openai-responses",
+    const resolved = applyCodexOverrides(
       provider,
-      baseUrl: providerConfig?.baseUrl,
-      reasoning: configuredModel?.reasoning ?? false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow:
-        configuredModel?.contextWindow ??
-        providerConfig?.models?.[0]?.contextWindow ??
-        DEFAULT_CONTEXT_TOKENS,
-      maxTokens:
-        configuredModel?.maxTokens ??
-        providerConfig?.models?.[0]?.maxTokens ??
-        DEFAULT_CONTEXT_TOKENS,
-      headers:
-        providerConfig?.headers || configuredModel?.headers
-          ? { ...providerConfig?.headers, ...configuredModel?.headers }
-          : undefined,
-    } as Model<Api>);
+      normalizeModelCompat({
+        id: modelId,
+        name: modelId,
+        api: providerConfig?.api ?? "openai-responses",
+        provider,
+        baseUrl: providerConfig?.baseUrl,
+        reasoning: configuredModel?.reasoning ?? false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow:
+          configuredModel?.contextWindow ??
+          providerConfig?.models?.[0]?.contextWindow ??
+          DEFAULT_CONTEXT_TOKENS,
+        maxTokens:
+          configuredModel?.maxTokens ??
+          providerConfig?.models?.[0]?.maxTokens ??
+          DEFAULT_CONTEXT_TOKENS,
+        headers:
+          providerConfig?.headers || configuredModel?.headers
+            ? { ...providerConfig?.headers, ...configuredModel?.headers }
+            : undefined,
+      } as Model<Api>),
+    );
+    log.debug(
+      `[model-resolve] ${provider}/${modelId}: api=${resolved.api} baseUrl=${resolved.baseUrl ?? "default"} via=provider-fallback`,
+    );
+    return resolved;
   }
 
   return undefined;
