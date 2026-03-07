@@ -104,6 +104,28 @@ function applyConfiguredProviderOverrides(params: {
   };
 }
 
+// The pi-ai SDK auto-discovers codex models from auth.json credentials but
+// generates them with wrong baseUrl (api.openai.com) and api (openai-completions).
+// Codex OAuth tokens must use chatgpt.com/backend-api with openai-codex-responses.
+const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
+const CODEX_API = "openai-codex-responses";
+
+function applyCodexOverrides<T extends { api?: string; baseUrl?: string }>(
+  provider: string,
+  model: T,
+): T {
+  if (normalizeProviderId(provider) !== "openai-codex") {
+    return model;
+  }
+  if (model.baseUrl === CODEX_BASE_URL && model.api === CODEX_API) {
+    return model;
+  }
+  log.debug(
+    `[model-resolve] Correcting codex model: api=${model.api} → ${CODEX_API}, baseUrl=${model.baseUrl} → ${CODEX_BASE_URL}`,
+  );
+  return { ...model, baseUrl: CODEX_BASE_URL, api: CODEX_API };
+}
+
 export function resolveModelWithRegistry(params: {
   provider: string;
   modelId: string;
@@ -115,12 +137,15 @@ export function resolveModelWithRegistry(params: {
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 
   if (model) {
-    const resolved = normalizeModelCompat(
-      applyConfiguredProviderOverrides({
-        discoveredModel: model,
-        providerConfig,
-        modelId,
-      }),
+    const resolved = applyCodexOverrides(
+      provider,
+      normalizeModelCompat(
+        applyConfiguredProviderOverrides({
+          discoveredModel: model,
+          providerConfig,
+          modelId,
+        }),
+      ),
     );
     log.debug(
       `[model-resolve] ${provider}/${modelId}: api=${resolved.api} baseUrl=${resolved.baseUrl ?? "default"} via=registry`,
