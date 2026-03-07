@@ -16,6 +16,7 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
   buildHuggingfaceModelDefinition,
 } from "./huggingface-models.js";
+import { discoverLiteLLMModels, LITELLM_BASE_URL } from "./litellm-models.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
 import {
@@ -29,7 +30,6 @@ import {
   buildTogetherModelDefinition,
 } from "./together-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
-import { discoverLiteLLMModels, LITELLM_BASE_URL } from "./litellm-models.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -247,12 +247,11 @@ async function discoverOllamaCloudModels(apiKey?: string): Promise<ModelDefiniti
   }
   try {
     // Resolve env var name to actual value (apiKey may be "OLLAMA_CLOUD_API_KEY").
-    const resolvedSecret =
-      apiKey?.trim()
-        ? /^[A-Z][A-Z0-9_]*$/.test(apiKey.trim())
-          ? (process.env[apiKey.trim()] ?? "").trim()
-          : apiKey.trim()
-        : "";
+    const resolvedSecret = apiKey?.trim()
+      ? /^[A-Z][A-Z0-9_]*$/.test(apiKey.trim())
+        ? (process.env[apiKey.trim()] ?? "").trim()
+        : apiKey.trim()
+      : "";
     const headers: Record<string, string> = {};
     if (resolvedSecret) {
       headers.Authorization = `Bearer ${resolvedSecret}`;
@@ -470,6 +469,27 @@ export function normalizeProviders(params: {
       normalizedProvider = googleNormalized;
     }
 
+    // Fix openai-codex provider: SDK auto-discovery generates wrong baseUrl and api.
+    // Codex OAuth tokens use chatgpt.com/backend-api with openai-codex-responses API,
+    // NOT api.openai.com with openai-completions.
+    if (normalizedKey === "openai-codex") {
+      const codexFixed = {
+        ...normalizedProvider,
+        baseUrl: "https://chatgpt.com/backend-api",
+        api: "openai-codex-responses" as const,
+      };
+      if (
+        normalizedProvider.baseUrl !== codexFixed.baseUrl ||
+        normalizedProvider.api !== codexFixed.api
+      ) {
+        console.warn(
+          `[models-config] Correcting openai-codex provider: baseUrl=${normalizedProvider.baseUrl} → ${codexFixed.baseUrl}, api=${String(normalizedProvider.api)} → ${codexFixed.api}`,
+        );
+        mutated = true;
+        normalizedProvider = codexFixed;
+      }
+    }
+
     next[key] = normalizedProvider;
   }
 
@@ -668,6 +688,7 @@ async function buildVllmProvider(params?: {
   };
 }
 
+// eslint-disable-next-line no-unused-vars
 async function buildLitellmProvider(params?: {
   baseUrl?: string;
   apiKey?: string;
