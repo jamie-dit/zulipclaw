@@ -7,6 +7,7 @@ import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/c
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
+  getProfilesCooldownReason,
   isProfileInCooldown,
   listProfilesForProvider,
   markAuthProfileFailure,
@@ -343,7 +344,7 @@ export async function runEmbeddedPiAgent(
         message: string;
       }): FailoverReason => {
         if (params.allInCooldown) {
-          return "rate_limit";
+          return getProfilesCooldownReason(authStore, profileOrder);
         }
         const classified = classifyFailoverReason(params.message);
         return classified ?? "auth";

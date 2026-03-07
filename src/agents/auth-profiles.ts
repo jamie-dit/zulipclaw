@@ -35,6 +35,7 @@ export {
   calculateAuthProfileCooldownMs,
   clearAuthProfileCooldown,
   clearExpiredCooldowns,
+  getProfilesCooldownReason,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
   markAuthProfileCooldown,

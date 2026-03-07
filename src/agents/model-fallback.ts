@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import {
   ensureAuthProfileStore,
+  getProfilesCooldownReason,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
   resolveAuthProfileOrder,
@@ -317,7 +318,7 @@ export async function runWithModelFallback<T>(params: {
             provider: candidate.provider,
             model: candidate.model,
             error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
-            reason: "rate_limit",
+            reason: getProfilesCooldownReason(authStore, profileIds),
           });
           continue;
         }

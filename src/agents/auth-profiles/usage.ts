@@ -254,6 +254,49 @@ export function resolveProfileUnusableUntilForDisplay(
   return resolveProfileUnusableUntil(stats);
 }
 
+/**
+ * Determine the most relevant failure reason across a set of profiles that are
+ * all currently in cooldown. Returns the reason with the highest failure count
+ * among the profiles, preferring `disabledReason` (e.g. billing) when set.
+ * Falls back to `"unknown"` when no usage stats are recorded.
+ */
+export function getProfilesCooldownReason(
+  store: AuthProfileStore,
+  profileIds: string[],
+): AuthProfileFailureReason {
+  const totals: Partial<Record<AuthProfileFailureReason, number>> = {};
+
+  for (const id of profileIds) {
+    const stats = store.usageStats?.[id];
+    if (!stats) {
+      continue;
+    }
+    // disabledReason is authoritative for billing-style long-term disables
+    if (stats.disabledReason) {
+      totals[stats.disabledReason] = (totals[stats.disabledReason] ?? 0) + 1000;
+    }
+    if (stats.failureCounts) {
+      for (const [reason, count] of Object.entries(stats.failureCounts) as [
+        AuthProfileFailureReason,
+        number,
+      ][]) {
+        totals[reason] = (totals[reason] ?? 0) + count;
+      }
+    }
+  }
+
+  let best: AuthProfileFailureReason | undefined;
+  let bestCount = 0;
+  for (const [reason, count] of Object.entries(totals) as [AuthProfileFailureReason, number][]) {
+    if (count > bestCount) {
+      bestCount = count;
+      best = reason;
+    }
+  }
+
+  return best ?? "unknown";
+}
+
 function computeNextProfileUsageStats(params: {
   existing: ProfileUsageStats;
   now: number;
