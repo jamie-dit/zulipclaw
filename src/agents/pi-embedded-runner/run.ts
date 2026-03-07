@@ -872,7 +872,8 @@ export async function runEmbeddedPiAgent(
             }
             if (
               !responsesScopeFallbackRetried &&
-              modelForAttempt.api === "openai-responses" &&
+              (modelForAttempt.api === "openai-responses" ||
+                modelForAttempt.api === "openai-codex-responses") &&
               isMissingScopeResponsesWrite(errorText)
             ) {
               responsesScopeFallbackRetried = true;
