@@ -544,6 +544,9 @@ export async function runEmbeddedPiAgent(
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
           const modelForAttempt = scopeFallbackModel ?? model;
+          log.debug(
+            `[run] model resolved: api=${modelForAttempt.api} baseUrl=${modelForAttempt.baseUrl ?? "default"} provider=${provider}`,
+          );
 
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;

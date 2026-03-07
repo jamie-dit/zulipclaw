@@ -13,6 +13,7 @@ import {
   type AuthStorage,
   type ModelRegistry,
 } from "../pi-model-discovery.js";
+import { log } from "./logger.js";
 
 type InlineModelEntry = ModelDefinitionConfig & {
   provider: string;
@@ -114,13 +115,17 @@ export function resolveModelWithRegistry(params: {
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 
   if (model) {
-    return normalizeModelCompat(
+    const resolved = normalizeModelCompat(
       applyConfiguredProviderOverrides({
         discoveredModel: model,
         providerConfig,
         modelId,
       }),
     );
+    log.debug(
+      `[model-resolve] ${provider}/${modelId}: api=${resolved.api} baseUrl=${resolved.baseUrl ?? "default"} via=registry`,
+    );
+    return resolved;
   }
 
   const providers = cfg?.models?.providers ?? {};
@@ -130,20 +135,28 @@ export function resolveModelWithRegistry(params: {
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
   );
   if (inlineMatch) {
-    return normalizeModelCompat(inlineMatch as Model<Api>);
+    const resolved = normalizeModelCompat(inlineMatch as Model<Api>);
+    log.debug(
+      `[model-resolve] ${provider}/${modelId}: api=${resolved.api} baseUrl=${resolved.baseUrl ?? "default"} via=inline`,
+    );
+    return resolved;
   }
 
   // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
   // Otherwise, configured providers can default to a generic API and break specific transports.
   const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
   if (forwardCompat) {
-    return normalizeModelCompat(
+    const resolved = normalizeModelCompat(
       applyConfiguredProviderOverrides({
         discoveredModel: forwardCompat,
         providerConfig,
         modelId,
       }),
     );
+    log.debug(
+      `[model-resolve] ${provider}/${modelId}: api=${resolved.api} baseUrl=${resolved.baseUrl ?? "default"} via=forward-compat`,
+    );
+    return resolved;
   }
 
   // OpenRouter is a pass-through proxy - any model ID available on OpenRouter
@@ -166,6 +179,9 @@ export function resolveModelWithRegistry(params: {
 
   const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
   if (providerConfig || modelId.startsWith("mock-")) {
+    log.debug(
+      `[model-resolve] ${provider}/${modelId}: api=${providerConfig?.api ?? "openai-responses"} baseUrl=${providerConfig?.baseUrl ?? "default"} via=provider-fallback`,
+    );
     return normalizeModelCompat({
       id: modelId,
       name: modelId,
