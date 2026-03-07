@@ -5,6 +5,7 @@ import type { AuthProfileStore } from "./auth-profiles.js";
 // Mock auth-profiles module — must be before importing model-fallback
 vi.mock("./auth-profiles.js", () => ({
   ensureAuthProfileStore: vi.fn(),
+  getProfilesCooldownReason: vi.fn().mockReturnValue("rate_limit"),
   getSoonestCooldownExpiry: vi.fn(),
   isProfileInCooldown: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
