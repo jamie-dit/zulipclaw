@@ -331,6 +331,61 @@ describe("zulipMessageActions", () => {
     );
   });
 
+  it("accepts target for member info lookups", async () => {
+    vi.mocked(zulipRequest).mockResolvedValueOnce({
+      result: "success",
+      user: { email: "jamie@example.com" },
+    });
+
+    await zulipMessageActions.handleAction({
+      action: "member-info",
+      params: { target: "jamie@example.com" },
+      cfg,
+      accountId: "default",
+    } as never);
+
+    expect(zulipRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "GET", path: "/api/v1/users/jamie%40example.com" }),
+    );
+  });
+
+  it("resolves participant names through the Zulip user directory", async () => {
+    vi.mocked(zulipRequest)
+      .mockResolvedValueOnce({
+        result: "success",
+        members: [
+          { user_id: 42, email: "marcel@example.com", full_name: "Marcel" },
+          { user_id: 99, email: "jamie@example.com", full_name: "Jamie" },
+        ],
+      })
+      .mockResolvedValueOnce({
+        result: "success",
+        user: { user_id: 99, email: "jamie@example.com", full_name: "Jamie" },
+      });
+
+    const result = await zulipMessageActions.handleAction({
+      action: "member-info",
+      params: { participant: "Jamie" },
+      cfg,
+      accountId: "default",
+    } as never);
+
+    expect(zulipRequest).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ method: "GET", path: "/api/v1/users" }),
+    );
+    expect(zulipRequest).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ method: "GET", path: "/api/v1/users/jamie%40example.com" }),
+    );
+    expect(result.details).toMatchObject({
+      action: "member-info",
+      requested: "Jamie",
+      resolvedUserId: "jamie@example.com",
+      user: { user_id: 99 },
+    });
+  });
+
   it("adds a reaction", async () => {
     const result = await zulipMessageActions.handleAction({
       action: "react",

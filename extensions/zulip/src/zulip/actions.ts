@@ -31,6 +31,19 @@ type ZulipUserResponse = {
   [key: string]: unknown;
 };
 
+type ZulipUserDirectoryEntry = Record<string, unknown> & {
+  user_id?: number;
+  email?: string;
+  full_name?: string;
+};
+
+type ZulipUserDirectoryResponse = {
+  result?: string;
+  members?: ZulipUserDirectoryEntry[];
+  users?: ZulipUserDirectoryEntry[];
+  [key: string]: unknown;
+};
+
 function resolveAuth(
   cfg: unknown,
   accountId?: string | null,
@@ -91,6 +104,84 @@ function optionalNumber(params: ActionParams, key: string): number | undefined {
 function resolveLimit(params: ActionParams, fallback = 20): number {
   const value = optionalNumber(params, "limit") ?? optionalNumber(params, "numBefore") ?? fallback;
   return Math.max(1, Math.floor(value));
+}
+
+function resolveMemberLookupValue(params: ActionParams): string | undefined {
+  const candidates = [
+    optionalString(params, "target"),
+    optionalString(params, "participant"),
+    optionalString(params, "userId"),
+    optionalString(params, "email"),
+    optionalString(params, "user"),
+    optionalString(params, "name"),
+  ];
+  return candidates.find((value) => typeof value === "string" && value.trim().length > 0);
+}
+
+function normalizeMemberLookupValue(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (/^zulip:/i.test(trimmed)) {
+    return trimmed.replace(/^zulip:/i, "").trim() || undefined;
+  }
+  if (/^pm:/i.test(trimmed)) {
+    return trimmed.replace(/^pm:/i, "").trim() || undefined;
+  }
+  return trimmed;
+}
+
+function getDirectoryCandidates(response: ZulipUserDirectoryResponse): ZulipUserDirectoryEntry[] {
+  if (Array.isArray(response.members)) return response.members;
+  if (Array.isArray(response.users)) return response.users;
+  return [];
+}
+
+function scoreDirectoryCandidate(candidate: ZulipUserDirectoryEntry, lookup: string): number {
+  const email = typeof candidate.email === "string" ? candidate.email.trim().toLowerCase() : "";
+  const fullName =
+    typeof candidate.full_name === "string" ? candidate.full_name.trim().toLowerCase() : "";
+  const normalized = lookup.trim().toLowerCase();
+  if (!normalized) return -1;
+  if (email && email === normalized) return 100;
+  if (fullName && fullName === normalized) return 95;
+  const local = email.split("@")[0] || "";
+  if (local && local === normalized) return 90;
+  if (email && email.startsWith(normalized + "@")) return 85;
+  if (fullName && fullName.startsWith(normalized)) return 80;
+  if (fullName && fullName.includes(normalized)) return 70;
+  if (email && email.includes(normalized)) return 60;
+  return -1;
+}
+
+async function resolveMemberIdentifier(auth: ZulipAuth, params: ActionParams): Promise<string> {
+  const rawLookup = resolveMemberLookupValue(params);
+  const lookup = normalizeMemberLookupValue(rawLookup);
+  if (!lookup || lookup.toLowerCase() === "me") {
+    return "me";
+  }
+  if (/^\d+$/.test(lookup)) {
+    return lookup;
+  }
+  if (lookup.includes("@")) {
+    return lookup;
+  }
+
+  const directory = await zulipRequest<ZulipUserDirectoryResponse>({
+    auth,
+    method: "GET",
+    path: "/api/v1/users",
+  });
+  const best = getDirectoryCandidates(directory)
+    .map((candidate) => ({ candidate, score: scoreDirectoryCandidate(candidate, lookup) }))
+    .filter((entry) => entry.score >= 0)
+    .sort((a, b) => b.score - a.score)[0];
+  const candidate = best?.candidate;
+  if (candidate?.email && typeof candidate.email === "string") return candidate.email;
+  if (typeof candidate?.user_id === "number" && Number.isFinite(candidate.user_id)) {
+    return String(candidate.user_id);
+  }
+  return lookup;
 }
 
 function requireStreamTarget(
@@ -317,7 +408,7 @@ async function handleChannelDelete(params: ActionParams, cfg: unknown, accountId
 
 async function handleMemberInfo(params: ActionParams, cfg: unknown, accountId?: string | null) {
   const { auth } = resolveAuth(cfg, accountId);
-  const userId = optionalString(params, "userId") ?? optionalString(params, "email") ?? "me";
+  const userId = await resolveMemberIdentifier(auth, params);
   const response = await zulipRequest<ZulipUserResponse>({
     auth,
     method: "GET",
@@ -327,6 +418,8 @@ async function handleMemberInfo(params: ActionParams, cfg: unknown, accountId?: 
   return {
     ok: true,
     action: "member-info",
+    requested: resolveMemberLookupValue(params) ?? "me",
+    resolvedUserId: userId,
     user: response.user ?? response,
   };
 }
