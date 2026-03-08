@@ -10,9 +10,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: https://gitea.com/actions/checkout@v6
-        with:
-          fetch-depth: 0
+        env:
+          REPO: ${{ gitea.repository }}
+          SHA: ${{ gitea.sha }}
+          SERVER: ${{ gitea.server_url }}
+          TOKEN: ${{ secrets.GTOKEN }}
+          BASE_REF: ${{ gitea.event.pull_request.base.ref }}
+        run: |
+          set -eu
+
+          if [ -z "$TOKEN" ]; then
+            echo "::error::GTOKEN secret missing for checkout"
+            exit 1
+          fi
+
+          git init .
+          git remote add origin "${SERVER}/${REPO}.git"
+          AUTH_HEADER=$(python3 -c "import base64, os; print(base64.b64encode(('x-access-token:' + os.environ['TOKEN']).encode()).decode(), end='')")
+          git -c http.extraHeader="Authorization: Basic $AUTH_HEADER" fetch --depth=1 origin "$SHA"
+          git checkout --detach FETCH_HEAD
+          if [ -n "${BASE_REF:-}" ]; then
+            git -c http.extraHeader="Authorization: Basic $AUTH_HEADER" fetch --depth=1 origin "$BASE_REF"
+          fi
 
       - name: Install Docker
         run: |
@@ -35,9 +54,6 @@ jobs:
             echo "::error::OPENAI_API_KEY secret missing for AI Code Review"
             exit 1
           fi
-
-          AUTH_HEADER=$(python3 -c "import base64, os; print(base64.b64encode(('x-access-token:' + os.environ['GITEA_TOKEN']).encode()).decode(), end='')")
-          git -c http.extraHeader="Authorization: Basic $AUTH_HEADER" fetch origin "$BASE_REF"
 
           if ! DIFF_CONTENT=$(git diff "origin/$BASE_REF"...HEAD 2>/dev/null); then
             echo "::warning::No merge base found, using two-dot diff"
