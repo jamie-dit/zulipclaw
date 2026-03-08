@@ -265,12 +265,24 @@ async function handleChannelCreate(params: ActionParams, cfg: unknown, accountId
 
 // -- Channel Edit --
 
+function resolveChannelStreamLookup(params: ActionParams): {
+  stream?: string;
+  streamId?: string | number;
+} {
+  const target = optionalString(params, "target");
+  const parsedTarget = target ? parseZulipTarget(target) : null;
+  return {
+    stream:
+      parsedTarget?.stream ?? optionalString(params, "name") ?? optionalString(params, "stream"),
+    streamId: optionalString(params, "streamId") ?? optionalNumber(params, "streamId"),
+  };
+}
+
 async function handleChannelEdit(params: ActionParams, cfg: unknown, accountId?: string | null) {
   const { auth } = resolveAuth(cfg, accountId);
   const streamId = await resolveStreamId({
     auth,
-    stream: optionalString(params, "name") ?? optionalString(params, "stream"),
-    streamId: optionalString(params, "streamId") ?? optionalNumber(params, "streamId"),
+    ...resolveChannelStreamLookup(params),
   });
 
   const form: Record<string, string | number | boolean | undefined> = {
@@ -300,8 +312,7 @@ async function handleChannelDelete(params: ActionParams, cfg: unknown, accountId
   const { auth } = resolveAuth(cfg, accountId);
   const streamId = await resolveStreamId({
     auth,
-    stream: optionalString(params, "name") ?? optionalString(params, "stream"),
-    streamId: optionalString(params, "streamId") ?? optionalNumber(params, "streamId"),
+    ...resolveChannelStreamLookup(params),
   });
 
   await zulipRequest({

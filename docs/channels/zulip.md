@@ -170,6 +170,12 @@ openclaw message send --channel zulip --target "stream:marcel-ai#deploy-notes" -
 openclaw message send --channel zulip --target "stream:marcel-ai" --message "screenshot" --media ./screenshot.png
 ```
 
+For Zulip admin-style channel actions:
+
+- `channel-edit` accepts `streamId` from `channel-list` output, plus `target="stream:<name>#<topic>"` or stream name fields
+- `channel-delete` accepts the same forms
+- the topic portion of `target` is ignored for edit/delete and only the stream is used
+
 ## Troubleshooting
 
 - No replies: confirm the bot is subscribed to the stream and that `channels.zulip.streams` includes the stream name (without `#`).
