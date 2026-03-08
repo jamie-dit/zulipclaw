@@ -240,7 +240,7 @@ function createCodexDefaultTransportWrapper(baseStreamFn: StreamFn | undefined):
   return (model, context, options) =>
     underlying(model, context, {
       ...options,
-      transport: options?.transport ?? "auto",
+      transport: options?.transport ?? "sse",
     });
 }
 
@@ -429,7 +429,6 @@ export function applyExtraParamsToAgent(
     log.debug(`applying OpenAI service_tier=${openAIServiceTier} for ${provider}/${modelId}`);
     agent.streamFn = createOpenAIServiceTierWrapper(agent.streamFn, openAIServiceTier);
   }
-
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
   // Force `store=true` for direct OpenAI/OpenAI Codex providers so multi-turn

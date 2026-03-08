@@ -579,7 +579,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("websocket");
   });
 
-  it("defaults Codex transport to auto (WebSocket-first)", () => {
+  it("defaults Codex transport to sse", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
     applyExtraParamsToAgent(agent, undefined, "openai-codex", "gpt-5.3-codex");
@@ -593,7 +593,7 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.transport).toBe("auto");
+    expect(calls[0]?.transport).toBe("sse");
   });
 
   it("does not set transport defaults for non-Codex providers", () => {
@@ -700,7 +700,7 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.transport).toBe("auto");
+    expect(calls[0]?.transport).toBe("sse");
   });
 
   it("disables prompt caching for non-Anthropic Bedrock models", () => {
