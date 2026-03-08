@@ -9,6 +9,7 @@ import {
   resolveDetailFromKeys,
   resolveExecDetail,
   resolveReadDetail,
+  resolveTodoDetail,
   resolveWebFetchDetail,
   resolveWebSearchDetail,
   resolveWriteDetail,
@@ -100,6 +101,10 @@ export function resolveToolDisplay(params: {
 
   if (!detail && key === "web_fetch") {
     detail = resolveWebFetchDetail(params.args);
+  }
+
+  if (!detail && key === "todo") {
+    detail = resolveTodoDetail(params.args);
   }
 
   const detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? FALLBACK.detailKeys ?? [];

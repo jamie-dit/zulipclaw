@@ -33,17 +33,34 @@ const STATUS_EMOJI: Record<TodoItemStatus, string> = {
  */
 export function renderCompact(list: TodoList): string {
   const doneCount = list.items.filter((i) => i.status === "done").length;
-  const header = `📋 ${list.title} (${doneCount}/${list.items.length} done)`;
+  const inProgressCount = list.items.filter((i) => i.status === "in-progress").length;
+  const blockedCount = list.items.filter((i) => i.status === "blocked").length;
+  const parts = [`${doneCount}/${list.items.length} done`];
+  if (inProgressCount > 0) {
+    parts.push(`${inProgressCount} active`);
+  }
+  if (blockedCount > 0) {
+    parts.push(`${blockedCount} blocked`);
+  }
+  const header = `📋 ${list.title} (${parts.join(" · ")})`;
 
   if (list.items.length === 0) {
     return `${header}\n_No items yet._`;
   }
 
-  const lines = list.items.map((item) => {
+  const orderedItems = [...list.items].toSorted(
+    (a, b) => statusOrder(a.status) - statusOrder(b.status),
+  );
+  const lines = orderedItems.slice(0, 6).map((item) => {
     const emoji = STATUS_EMOJI[item.status] ?? "⬜";
     const assigneeSuffix = item.assignee ? ` _(${item.assignee})_` : "";
-    return ` ${emoji} ${item.title}${assigneeSuffix}`;
+    const notesSuffix = item.notes ? ` - ${truncate(item.notes, 40)}` : "";
+    return ` ${emoji} ${item.title}${assigneeSuffix}${notesSuffix}`;
   });
+  const remaining = orderedItems.length - lines.length;
+  if (remaining > 0) {
+    lines.push(` _+${remaining} more item(s)_`);
+  }
 
   return `${header}\n${lines.join("\n")}`;
 }
@@ -92,6 +109,23 @@ export function renderBackingMessage(list: TodoList): string {
 
   const footer = `\n\n_Last updated: ${new Date(list.updatedAt).toISOString()}_`;
   return content + footer;
+}
+
+function statusOrder(status: TodoItemStatus): number {
+  switch (status) {
+    case "in-progress":
+      return 0;
+    case "blocked":
+      return 1;
+    case "pending":
+      return 2;
+    case "done":
+      return 3;
+    case "cancelled":
+      return 4;
+    default:
+      return 5;
+  }
 }
 
 function renderTable(items: TodoItem[]): string {

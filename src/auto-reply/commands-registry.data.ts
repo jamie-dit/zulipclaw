@@ -173,6 +173,13 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
+      key: "tools",
+      nativeName: "tools",
+      description: "Show available tools and current tool debug state.",
+      textAlias: "/tools",
+      category: "tools",
+    }),
+    defineChatCommand({
       key: "allowlist",
       description: "List/add/remove allowlist entries.",
       textAlias: "/allowlist",

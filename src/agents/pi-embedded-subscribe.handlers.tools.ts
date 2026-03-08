@@ -40,6 +40,26 @@ function buildToolCallSummary(toolName: string, args: unknown, meta?: string): T
   };
 }
 
+function buildTodoMeta(toolName: string, args: unknown, meta?: string): string | undefined {
+  const normalized = toolName.trim().toLowerCase();
+  if (normalized !== "todo" || !args || typeof args !== "object") {
+    return meta;
+  }
+  const record = args as Record<string, unknown>;
+  const action = typeof record.action === "string" ? record.action.trim().toLowerCase() : "";
+  const labelByAction: Record<string, string> = {
+    create: "create list",
+    add: "add item",
+    update: "update item",
+    complete: "complete item",
+    delete: "delete item",
+    archive: "archive list",
+    list: "list",
+  };
+  const label = labelByAction[action] ?? action ?? "run";
+  return meta ? `${label}, ${meta}` : label;
+}
+
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
   const normalized = toolName.trim().toLowerCase();
   if (normalized !== "exec" && normalized !== "bash") {
@@ -163,7 +183,11 @@ export async function handleToolExecutionStart(
     }
   }
 
-  const meta = extendExecMeta(toolName, args, inferToolMetaFromArgs(toolName, args));
+  const meta = buildTodoMeta(
+    toolName,
+    args,
+    extendExecMeta(toolName, args, inferToolMetaFromArgs(toolName, args)),
+  );
   ctx.state.toolMetaById.set(toolCallId, buildToolCallSummary(toolName, args, meta));
   ctx.log.debug(
     `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,

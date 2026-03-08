@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveExecDetail } from "./tool-display-common.js";
+import { resolveExecDetail, resolveTodoDetail } from "./tool-display-common.js";
 
 describe("resolveExecDetail – comment stripping", () => {
   it("skips a single leading comment to find the real command", () => {
@@ -93,5 +93,107 @@ describe("resolveExecDetail – newline as command separator", () => {
     });
 
     expect(detail).toContain("run python3 inline script (heredoc)");
+  });
+});
+
+describe("resolveTodoDetail", () => {
+  it("returns undefined for non-object args", () => {
+    expect(resolveTodoDetail(null)).toBeUndefined();
+    expect(resolveTodoDetail(undefined)).toBeUndefined();
+    expect(resolveTodoDetail("string")).toBeUndefined();
+  });
+
+  it("returns undefined when action is missing", () => {
+    expect(resolveTodoDetail({ title: "foo" })).toBeUndefined();
+  });
+
+  it("formats create action with title", () => {
+    expect(resolveTodoDetail({ action: "create", title: "Release prep" })).toBe(
+      'create list "Release prep"',
+    );
+  });
+
+  it("formats create action without title", () => {
+    expect(resolveTodoDetail({ action: "create" })).toBe("create list");
+  });
+
+  it("formats add action with title", () => {
+    expect(resolveTodoDetail({ action: "add", title: "Write migration notes" })).toBe(
+      'add "Write migration notes"',
+    );
+  });
+
+  it("formats add action without title", () => {
+    expect(resolveTodoDetail({ action: "add" })).toBe("add item");
+  });
+
+  it("formats update with title and status", () => {
+    expect(
+      resolveTodoDetail({
+        action: "update",
+        title: "Write migration notes",
+        status: "in-progress",
+      }),
+    ).toBe('update "Write migration notes" → in-progress');
+  });
+
+  it("formats update with only status", () => {
+    expect(resolveTodoDetail({ action: "update", status: "blocked" })).toBe("update → blocked");
+  });
+
+  it("formats update with only title", () => {
+    expect(resolveTodoDetail({ action: "update", title: "Task A" })).toBe('update "Task A"');
+  });
+
+  it("formats update with neither title nor status", () => {
+    expect(resolveTodoDetail({ action: "update" })).toBe("update item");
+  });
+
+  it("formats complete action with title", () => {
+    expect(resolveTodoDetail({ action: "complete", title: "Write migration notes" })).toBe(
+      'complete "Write migration notes"',
+    );
+  });
+
+  it("formats complete action without title", () => {
+    expect(resolveTodoDetail({ action: "complete" })).toBe("complete item");
+  });
+
+  it("formats delete action with title", () => {
+    expect(resolveTodoDetail({ action: "delete", title: "Old task" })).toBe('delete "Old task"');
+  });
+
+  it("formats delete action without title", () => {
+    expect(resolveTodoDetail({ action: "delete" })).toBe("delete item");
+  });
+
+  it("formats archive action with title", () => {
+    expect(resolveTodoDetail({ action: "archive", title: "Release prep" })).toBe(
+      'archive list "Release prep"',
+    );
+  });
+
+  it("formats archive action without title", () => {
+    expect(resolveTodoDetail({ action: "archive" })).toBe("archive list");
+  });
+
+  it("formats list action with topicKey", () => {
+    expect(
+      resolveTodoDetail({ action: "list", topicKey: "stream:marcel-zulipclaw#todo list tracking" }),
+    ).toBe("list current topic");
+  });
+
+  it("formats list action without topicKey", () => {
+    expect(resolveTodoDetail({ action: "list" })).toBe("list all");
+  });
+
+  it("returns undefined for unknown action", () => {
+    expect(resolveTodoDetail({ action: "unknown" })).toBeUndefined();
+  });
+
+  it("trims whitespace from values", () => {
+    expect(resolveTodoDetail({ action: "  create  ", title: "  Spaced  " })).toBe(
+      'create list "Spaced"',
+    );
   });
 });

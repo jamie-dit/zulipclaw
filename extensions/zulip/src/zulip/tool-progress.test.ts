@@ -10,7 +10,10 @@ vi.mock("./client.js", () => {
 import type { ZulipAuth } from "./client.js";
 import { zulipRequestWithRetry } from "./client.js";
 import {
+  buildToolTypeSummary,
+  extractToolType,
   formatClockTime,
+  renderLinesWithGroupedTimestamps,
   ToolProgressAccumulator,
   type ToolProgressStatus,
 } from "./tool-progress.js";
@@ -23,13 +26,18 @@ function makeAuth(): ZulipAuth {
   };
 }
 
-function makeAccumulator(overrides?: { log?: (m: string) => void; name?: string }) {
+function makeAccumulator(overrides?: {
+  log?: (m: string) => void;
+  name?: string;
+  debug?: boolean;
+}) {
   return new ToolProgressAccumulator({
     auth: makeAuth(),
     stream: "test-stream",
     topic: "test-topic",
     name: overrides?.name,
     log: overrides?.log,
+    debug: overrides?.debug,
   });
 }
 
@@ -46,6 +54,124 @@ describe("formatClockTime", () => {
     const result = formatClockTime(NaN);
     // Should still return a time string (from Date.now() fallback)
     expect(result).toMatch(/\d{1,2}:\d{2}\s*(AM|PM)/);
+  });
+});
+
+describe("extractToolType", () => {
+  it("extracts tool type from formatted line", () => {
+    expect(extractToolType("🔧 exec: ls -la")).toBe("exec");
+    expect(extractToolType('📋 Todo: add "Write notes"')).toBe("todo");
+    expect(extractToolType("📖 Read: from file.ts")).toBe("read");
+    expect(extractToolType("✍️ Write: to output.ts (200 chars)")).toBe("write");
+  });
+
+  it("returns undefined for lines without colon", () => {
+    expect(extractToolType("no colon here")).toBeUndefined();
+  });
+
+  it("returns undefined for empty label before colon", () => {
+    expect(extractToolType(": value only")).toBeUndefined();
+  });
+
+  it("handles lines with multiple emoji codepoints", () => {
+    expect(extractToolType("🧑‍🔧 Sub-agent: spawn task")).toBe("sub-agent");
+  });
+
+  it("normalizes to lowercase", () => {
+    expect(extractToolType("📋 Todo: create list")).toBe("todo");
+    expect(extractToolType("🔎 Web Search: query")).toBe("web search");
+  });
+});
+
+describe("buildToolTypeSummary", () => {
+  it("returns empty string for no tools", () => {
+    expect(buildToolTypeSummary(new Map(), new Map())).toBe("");
+  });
+
+  it("shows single tool with count 1 (no multiplier)", () => {
+    const counts = new Map([["exec", 1]]);
+    expect(buildToolTypeSummary(counts, new Map())).toBe("exec");
+  });
+
+  it("shows single tool with count > 1", () => {
+    const counts = new Map([["exec", 3]]);
+    expect(buildToolTypeSummary(counts, new Map())).toBe("exec ×3");
+  });
+
+  it("shows single tool with detail", () => {
+    const counts = new Map([["todo", 1]]);
+    const details = new Map([["todo", 'add "Write notes"']]);
+    expect(buildToolTypeSummary(counts, details)).toBe('todo: add "Write notes"');
+  });
+
+  it("shows multiple tool with detail and count", () => {
+    const counts = new Map([["todo", 3]]);
+    const details = new Map([["todo", 'complete "Deploy"']]);
+    expect(buildToolTypeSummary(counts, details)).toBe('todo ×3 (complete "Deploy")');
+  });
+
+  it("shows multiple tools sorted by count descending", () => {
+    const counts = new Map([
+      ["exec", 5],
+      ["read", 2],
+      ["todo", 1],
+    ]);
+    const details = new Map([["todo", 'add "Task"']]);
+    const result = buildToolTypeSummary(counts, details);
+    expect(result).toBe('exec ×5, read ×2, todo: add "Task"');
+  });
+
+  it("truncates to maxTypes and shows remainder count", () => {
+    const counts = new Map([
+      ["exec", 5],
+      ["read", 3],
+      ["write", 2],
+      ["todo", 1],
+      ["browser", 1],
+    ]);
+    const result = buildToolTypeSummary(counts, new Map(), 3);
+    expect(result).toBe("exec ×5, read ×3, write ×2, +2 more");
+  });
+});
+
+describe("renderLinesWithGroupedTimestamps", () => {
+  it("returns empty array for empty input", () => {
+    expect(renderLinesWithGroupedTimestamps([])).toEqual([]);
+  });
+
+  it("shows timestamp for single line", () => {
+    const lines = [{ ts: "7:58 PM", text: "🔧 exec: ls" }];
+    expect(renderLinesWithGroupedTimestamps(lines)).toEqual(["[7:58 PM] 🔧 exec: ls"]);
+  });
+
+  it("de-emphasizes repeated timestamps in same minute", () => {
+    const lines = [
+      { ts: "7:58 PM", text: "🔧 exec: cmd1" },
+      { ts: "7:58 PM", text: "📖 read: file.ts" },
+      { ts: "7:58 PM", text: "✍️ write: out.ts" },
+    ];
+    const result = renderLinesWithGroupedTimestamps(lines);
+    expect(result).toEqual([
+      "[7:58 PM] 🔧 exec: cmd1",
+      "  ├ 📖 read: file.ts",
+      "  ├ ✍️ write: out.ts",
+    ]);
+  });
+
+  it("shows new timestamp when minute changes", () => {
+    const lines = [
+      { ts: "7:58 PM", text: "🔧 exec: cmd1" },
+      { ts: "7:58 PM", text: "📖 read: file.ts" },
+      { ts: "7:59 PM", text: "✍️ write: out.ts" },
+      { ts: "7:59 PM", text: "🔧 exec: cmd2" },
+    ];
+    const result = renderLinesWithGroupedTimestamps(lines);
+    expect(result).toEqual([
+      "[7:58 PM] 🔧 exec: cmd1",
+      "  ├ 📖 read: file.ts",
+      "[7:59 PM] ✍️ write: out.ts",
+      "  ├ 🔧 exec: cmd2",
+    ]);
   });
 });
 
@@ -85,12 +211,11 @@ describe("ToolProgressAccumulator", () => {
     expect(call.form?.type).toBe("stream");
     expect(call.form?.to).toBe("test-stream");
     expect(call.form?.topic).toBe("test-topic");
-    // Content should contain the tool line with a timestamp inside a spoiler
+    // Content should contain the tool line inside a spoiler
     const content = String(call.form?.content ?? "");
     expect(content).toContain("🔧 exec: ls -la");
-    expect(content).toMatch(/\[\d{1,2}:\d{2}\s*(AM|PM)\]/);
-    // Should have spoiler block
-    expect(content).toContain("```spoiler Tool calls");
+    // Should have spoiler block with tool type summary
+    expect(content).toMatch(/```spoiler/);
     expect(content).toMatch(/```$/);
     // Should have header with status emoji, name and count
     expect(content).toContain("🔄 **`Marcel`**");
@@ -109,7 +234,7 @@ describe("ToolProgressAccumulator", () => {
     acc.addLine("🔧 exec: ls -la");
     await acc.flush();
 
-    acc.addLine("📖 read: /path/to/file.ts");
+    acc.addLine("📖 Read: from /path/to/file.ts");
     await acc.flush();
 
     expect(zulipRequestWithRetry).toHaveBeenCalledTimes(2);
@@ -118,7 +243,7 @@ describe("ToolProgressAccumulator", () => {
     expect(editCall.path).toBe("/api/v1/messages/999");
     const content = String(editCall.form?.content ?? "");
     expect(content).toContain("🔧 exec: ls -la");
-    expect(content).toContain("📖 read: /path/to/file.ts");
+    expect(content).toContain("📖 Read: from /path/to/file.ts");
     // Header should show updated count
     expect(content).toContain("2 tool calls");
   });
@@ -200,25 +325,25 @@ describe("ToolProgressAccumulator", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("network error"));
   });
 
-  it("multiple lines each get a timestamp prefix inside spoiler", async () => {
+  it("lines inside spoiler use grouped timestamps", async () => {
     vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 300 });
 
     const acc = makeAccumulator({ name: "TestBot" });
     acc.addLine("🔧 exec: cmd1");
-    acc.addLine("📖 read: file.ts");
+    acc.addLine("📖 Read: file.ts");
     await acc.flush();
 
     const content = String(vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "");
     // Extract lines inside the spoiler block
-    const spoilerMatch = content.match(/```spoiler Tool calls\n([\s\S]*?)\n```/);
+    const spoilerMatch = content.match(/```spoiler [^\n]+\n([\s\S]*?)\n```/);
     expect(spoilerMatch).not.toBeNull();
     const spoilerContent = spoilerMatch![1]!;
     const lines = spoilerContent.split("\n");
     expect(lines).toHaveLength(2);
-    // Each line starts with a timestamp
-    for (const line of lines) {
-      expect(line).toMatch(/^\[\d{1,2}:\d{2}\s*(AM|PM)\]/);
-    }
+    // First line should have full timestamp
+    expect(lines[0]).toMatch(/^\[\d{1,2}:\d{2}\s*(AM|PM)\]/);
+    // Second line should be de-emphasized (same minute)
+    expect(lines[1]).toMatch(/^\s+├/);
   });
 
   it("uses 'Agent' as default name when none provided", async () => {
@@ -242,7 +367,7 @@ describe("ToolProgressAccumulator", () => {
     const content = String(vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "");
     // The spoiler block should not be broken by the backticks in the tool line.
     // The sanitizer inserts zero-width spaces between consecutive backticks.
-    const spoilerMatch = content.match(/```spoiler Tool calls\n([\s\S]*?)\n```$/);
+    const spoilerMatch = content.match(/```spoiler [^\n]+\n([\s\S]*?)\n```$/);
     expect(spoilerMatch).not.toBeNull();
     // The inner content should NOT contain raw triple backticks
     const inner = spoilerMatch![1]!;
@@ -259,7 +384,7 @@ describe("ToolProgressAccumulator", () => {
     await acc.flush();
 
     const content = String(vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "");
-    const spoilerMatch = content.match(/```spoiler Tool calls\n([\s\S]*?)\n```$/);
+    const spoilerMatch = content.match(/```spoiler [^\n]+\n([\s\S]*?)\n```$/);
     expect(spoilerMatch).not.toBeNull();
     const inner = spoilerMatch![1]!;
     // The heading syntax should be escaped (zero-width space before #)
@@ -278,7 +403,7 @@ describe("ToolProgressAccumulator", () => {
     await acc.flush();
 
     const content = String(vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "");
-    const spoilerMatch = content.match(/```spoiler Tool calls\n([\s\S]*?)\n```$/);
+    const spoilerMatch = content.match(/```spoiler [^\n]+\n([\s\S]*?)\n```$/);
     expect(spoilerMatch).not.toBeNull();
     const inner = spoilerMatch![1]!;
     // No raw heading markers at start of any line
@@ -296,7 +421,7 @@ describe("ToolProgressAccumulator", () => {
     await acc.flush();
 
     const content = String(vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "");
-    const spoilerMatch = content.match(/```spoiler Tool calls\n([\s\S]*?)\n```$/);
+    const spoilerMatch = content.match(/```spoiler [^\n]+\n([\s\S]*?)\n```$/);
     expect(spoilerMatch).not.toBeNull();
     const inner = spoilerMatch![1]!;
     // The # inside the line (not at start) should be untouched
@@ -408,6 +533,65 @@ describe("ToolProgressAccumulator", () => {
     expect(acc.currentStatus).toBe("error");
   });
 
+  describe("tool type summary in spoiler header", () => {
+    it("shows tool type in spoiler title for single tool", async () => {
+      vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 1500 });
+
+      const acc = makeAccumulator({ name: "Marcel" });
+      acc.addLine("🔧 exec: ls -la");
+      await acc.flush();
+
+      const content = String(
+        vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "",
+      );
+      // Spoiler title should contain the tool type
+      expect(content).toMatch(/```spoiler exec: ls -la/);
+    });
+
+    it("shows multiple tool types in spoiler title", async () => {
+      vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 1501 });
+
+      const acc = makeAccumulator({ name: "Marcel" });
+      acc.addLine("🔧 exec: ls");
+      acc.addLine("🔧 exec: cat file.ts");
+      acc.addLine("📖 Read: from src/index.ts");
+      acc.addLine('📋 Todo: add "Write tests"');
+      await acc.flush();
+
+      const content = String(
+        vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "",
+      );
+      // Spoiler title should contain tool type summary
+      expect(content).toMatch(/```spoiler .*(exec|read|todo).*\n/);
+    });
+
+    it("shows todo action detail in spoiler title", async () => {
+      vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 1502 });
+
+      const acc = makeAccumulator({ name: "Marcel" });
+      acc.addLine('📋 Todo: add "Write migration notes"');
+      await acc.flush();
+
+      const content = String(
+        vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "",
+      );
+      expect(content).toContain('```spoiler todo: add "Write migration notes"');
+    });
+
+    it("falls back to 'Tool calls' when no types extracted", async () => {
+      vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 1503 });
+
+      const acc = makeAccumulator({ name: "Marcel" });
+      acc.addLine("plain text without colon");
+      await acc.flush();
+
+      const content = String(
+        vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "",
+      );
+      expect(content).toContain("```spoiler Tool calls");
+    });
+  });
+
   describe("model in header", () => {
     it("includes model name in header when set via constructor", async () => {
       vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 1100 });
@@ -482,6 +666,34 @@ describe("ToolProgressAccumulator", () => {
         vi.mocked(zulipRequestWithRetry).mock.calls[1]![0].form?.content ?? "",
       );
       expect(content2).toContain("**`Marcel`** · claude-opus-4-6 · 2 tool calls");
+    });
+  });
+
+  describe("debug mode", () => {
+    it("emits debug log lines when debug is enabled", async () => {
+      vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 2000 });
+      const log = vi.fn();
+
+      const acc = makeAccumulator({ name: "Marcel", debug: true, log });
+      acc.addLine("🔧 exec: test");
+      await acc.flush();
+
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("[zulip:tool-progress:debug]"));
+    });
+
+    it("does not emit debug log lines when debug is disabled", async () => {
+      vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 2001 });
+      const log = vi.fn();
+
+      const acc = makeAccumulator({ name: "Marcel", log });
+      acc.addLine("🔧 exec: test");
+      await acc.flush();
+
+      // Should not have any debug-prefixed log calls
+      const debugCalls = log.mock.calls.filter((args) =>
+        String(args[0]).includes("[zulip:tool-progress:debug]"),
+      );
+      expect(debugCalls).toHaveLength(0);
     });
   });
 });

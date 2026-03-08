@@ -25,6 +25,8 @@ export interface TodoItem {
   notes?: string;
   createdAt: number;
   updatedAt: number;
+  lastAckAt?: number;
+  lastAckBy?: string;
 }
 
 export interface TodoList {
@@ -45,10 +47,12 @@ export interface TodoList {
 
 export type TodoListSummary = Pick<
   TodoList,
-  "id" | "topicKey" | "title" | "archived" | "createdAt" | "updatedAt"
+  "id" | "topicKey" | "title" | "archived" | "createdAt" | "updatedAt" | "backingMessageId"
 > & {
   itemCount: number;
   doneCount: number;
+  inProgressCount: number;
+  blockedCount: number;
 };
 
 // ── Persistence ──────────────────────────────────────────────────────────────
@@ -182,6 +186,9 @@ export function summariseList(list: TodoList): TodoListSummary {
     updatedAt: list.updatedAt,
     itemCount: list.items.length,
     doneCount: list.items.filter((i) => i.status === "done").length,
+    inProgressCount: list.items.filter((i) => i.status === "in-progress").length,
+    blockedCount: list.items.filter((i) => i.status === "blocked").length,
+    backingMessageId: list.backingMessageId,
   };
 }
 
@@ -295,7 +302,14 @@ export async function addItem(
 export async function updateItem(
   listId: string,
   itemId: string,
-  patch: { title?: string; status?: TodoItemStatus; assignee?: string; notes?: string },
+  patch: {
+    title?: string;
+    status?: TodoItemStatus;
+    assignee?: string;
+    notes?: string;
+    lastAckAt?: number;
+    lastAckBy?: string;
+  },
 ): Promise<TodoItem> {
   return withListLock(listId, () => {
     const list = lists.get(listId);
@@ -324,6 +338,12 @@ export async function updateItem(
     if (patch.notes !== undefined) {
       item.notes = patch.notes;
     }
+    if (patch.lastAckAt !== undefined) {
+      item.lastAckAt = patch.lastAckAt;
+    }
+    if (patch.lastAckBy !== undefined) {
+      item.lastAckBy = patch.lastAckBy;
+    }
     item.updatedAt = now;
     list.updatedAt = now;
     persist();
@@ -335,8 +355,14 @@ export async function completeItem(
   listId: string,
   itemId: string,
   notes?: string,
+  ack?: { at?: number; by?: string },
 ): Promise<TodoItem> {
-  return updateItem(listId, itemId, { status: "done", ...(notes !== undefined ? { notes } : {}) });
+  return updateItem(listId, itemId, {
+    status: "done",
+    ...(notes !== undefined ? { notes } : {}),
+    ...(ack?.at !== undefined ? { lastAckAt: ack.at } : {}),
+    ...(ack?.by !== undefined ? { lastAckBy: ack.by } : {}),
+  });
 }
 
 export async function deleteItem(listId: string, itemId: string): Promise<void> {
@@ -391,6 +417,61 @@ export function setLastSyncedAt(listId: string, ts: number): void {
     list.lastSyncedAt = ts;
     // No persist needed - lastSyncedAt is transient/derived.
   }
+}
+
+export function resolveItemByAssignee(list: TodoList, assignee: string): TodoItem | undefined {
+  return list.items.find((item) => item.assignee === assignee && item.status !== "done");
+}
+
+export async function applySubagentProgressEvent(params: {
+  topicKey: string;
+  assignee: string;
+  event:
+    | {
+        type: "todo-progress";
+        itemId?: string;
+        status?: TodoItemStatus;
+        notes?: string;
+        title?: string;
+      }
+    | { type: "todo-complete"; itemId?: string; notes?: string }
+    | { type: "todo-ack"; itemId?: string; notes?: string };
+}): Promise<{ list: TodoList; item: TodoItem } | null> {
+  const list = findActiveListByTopic(params.topicKey);
+  if (!list) {
+    return null;
+  }
+
+  const targetItem =
+    (params.event.itemId
+      ? list.items.find((item) => item.id === params.event.itemId)
+      : undefined) ?? resolveItemByAssignee(list, params.assignee);
+  if (!targetItem) {
+    return null;
+  }
+
+  const now = Date.now();
+  if (params.event.type === "todo-complete") {
+    const item = await completeItem(list.id, targetItem.id, params.event.notes, {
+      at: now,
+      by: params.assignee,
+    });
+    return { list, item };
+  }
+
+  const status =
+    params.event.type === "todo-ack"
+      ? "in-progress"
+      : (params.event.status ??
+        (targetItem.status === "pending" ? "in-progress" : targetItem.status));
+  const item = await updateItem(list.id, targetItem.id, {
+    ...(params.event.title !== undefined ? { title: params.event.title } : {}),
+    ...(params.event.notes !== undefined ? { notes: params.event.notes } : {}),
+    status,
+    lastAckAt: now,
+    lastAckBy: params.assignee,
+  });
+  return { list, item };
 }
 
 // ── Recovery ─────────────────────────────────────────────────────────────────

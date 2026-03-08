@@ -910,6 +910,63 @@ export function resolveActionSpec(
   return spec.actions?.[action] ?? undefined;
 }
 
+/**
+ * Produce a human-readable summary for a todo tool call.
+ *
+ * Examples:
+ *   create list "Release prep"
+ *   add "Write migration notes"
+ *   update "Write migration notes" → in-progress
+ *   complete "Write migration notes"
+ *   archive list "Release prep"
+ *   list current topic
+ */
+export function resolveTodoDetail(args: unknown): string | undefined {
+  const record = asRecord(args);
+  if (!record) {
+    return undefined;
+  }
+
+  const action = typeof record.action === "string" ? record.action.trim() : undefined;
+  if (!action) {
+    return undefined;
+  }
+
+  const title = typeof record.title === "string" ? record.title.trim() : undefined;
+  const status = typeof record.status === "string" ? record.status.trim() : undefined;
+  const topicKey = typeof record.topicKey === "string" ? record.topicKey.trim() : undefined;
+
+  switch (action) {
+    case "create":
+      return title ? `create list "${title}"` : "create list";
+    case "add":
+      return title ? `add "${title}"` : "add item";
+    case "update": {
+      const parts = ["update"];
+      if (title) {
+        parts.push(`"${title}"`);
+      }
+      if (status) {
+        parts.push(`→ ${status}`);
+      }
+      return parts.length > 1 ? parts.join(" ") : "update item";
+    }
+    case "complete":
+      return title ? `complete "${title}"` : "complete item";
+    case "delete":
+      return title ? `delete "${title}"` : "delete item";
+    case "archive":
+      return title ? `archive list "${title}"` : "archive list";
+    case "list":
+      if (topicKey) {
+        return "list current topic";
+      }
+      return "list all";
+    default:
+      return undefined;
+  }
+}
+
 export function resolveDetailFromKeys(
   args: unknown,
   keys: string[],

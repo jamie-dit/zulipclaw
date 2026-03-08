@@ -4,9 +4,21 @@ import { _resetForTests } from "../todo-state.js";
 import { createTodoTool } from "./todo-tool.js";
 
 // Mock persistence.
-vi.mock("../../config/paths.js", () => ({
-  resolveStateDir: () => "/tmp/openclaw-test-todo-tool",
+vi.mock("../../config/paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/paths.js")>();
+  return {
+    ...actual,
+    resolveStateDir: () => "/tmp/openclaw-test-todo-tool",
+  };
+});
+
+vi.mock("../../channels/plugins/message-actions.js", () => ({
+  dispatchChannelMessageAction: vi.fn(async ({ action }: { action: string }) =>
+    action === "send" ? { payload: { messageId: "todo-msg-1" } } : { payload: {} },
+  ),
 }));
+
+vi.mock("../../config/config.js", () => ({ loadConfig: () => ({}) }));
 
 vi.mock("../../infra/json-file.js", () => {
   let stored: unknown = undefined;

@@ -53,6 +53,12 @@ describe("tool meta formatting", () => {
     expect(out).toBe("🛠️ Exec: elevated · `cd ~/dir && gemini 2>&1`");
   });
 
+  it("formats todo actions with meaningful labels", () => {
+    const out = formatToolPrefix("todo", "create list, Sprint board, stream:marcel#topic");
+    expect(out).toContain("📋 Todo");
+    expect(out).toContain("create list");
+  });
+
   it("formats prefixes with default labels", () => {
     vi.stubEnv("HOME", home);
     expect(formatToolPrefix(undefined, undefined)).toBe("🧩 Tool");

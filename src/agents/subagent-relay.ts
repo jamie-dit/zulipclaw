@@ -71,6 +71,8 @@ export type WatchdogStatus = "active" | "nudged" | "frozen";
 
 export type ToolEntry = {
   line: string;
+  summaryLabel?: string;
+  hideDuration?: boolean;
   name: string;
   startedAtMs?: number;
   completedAtMs?: number;
@@ -984,9 +986,56 @@ function renderToolSummaryLine(entries: ToolEntry[], toolCount: number): string 
   return segments.length > 0 ? segments.join(" · ") : undefined;
 }
 
+function summarizeToolLabel(toolName: string, args: Record<string, unknown>): string | undefined {
+  switch (toolName.trim().toLowerCase()) {
+    case "todo": {
+      const action = typeof args.action === "string" ? args.action.trim().toLowerCase() : "";
+      if (!action) {
+        return "todo";
+      }
+      switch (action) {
+        case "create":
+          return "todo: create list";
+        case "add":
+          return "todo: add item";
+        case "update":
+          return "todo: update item";
+        case "complete":
+          return "todo: complete item";
+        case "delete":
+          return "todo: delete item";
+        case "archive":
+          return "todo: archive list";
+        case "list":
+          return "todo: list";
+        default:
+          return `todo: ${action}`;
+      }
+    }
+    default:
+      return undefined;
+  }
+}
+
+function shouldHideToolDuration(toolName: string, args: Record<string, unknown>): boolean {
+  const normalized = toolName.trim().toLowerCase();
+  if (normalized === "todo") {
+    return true;
+  }
+  if (normalized === "message") {
+    const action = typeof args.action === "string" ? args.action.trim().toLowerCase() : "";
+    if (action in { send: 1, edit: 1, react: 1, delete: 1 }) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function buildToolSpoilerTitle(entry: ToolEntry): string {
-  const toolName = entry.name.replace(/\s+/g, " ").trim() || "tool";
-  const duration = formatToolDuration(entry.startedAtMs, entry.completedAtMs);
+  const toolName = entry.summaryLabel ?? (entry.name.replace(/\s+/g, " ").trim() || "tool");
+  const duration = entry.hideDuration
+    ? undefined
+    : formatToolDuration(entry.startedAtMs, entry.completedAtMs);
   if (!duration) {
     return toolName;
   }
@@ -1979,9 +2028,12 @@ function handleToolEvent(evt: AgentEventPayload) {
     state.startedAt = startedAt;
 
     const line = formatToolLine(toolName, args, startedAt, evt.ts);
+    const summaryLabel = summarizeToolLabel(toolName, argsRecord);
     const eventTs = typeof evt.ts === "number" && Number.isFinite(evt.ts) ? evt.ts : Date.now();
     const entry: ToolEntry = {
       line,
+      summaryLabel,
+      hideDuration: shouldHideToolDuration(toolName, argsRecord),
       name: toolName,
       startedAtMs: eventTs,
     };

@@ -284,6 +284,22 @@
       "title": "Session Status",
       "detailKeys": ["sessionKey", "model"]
     },
+    "todo": {
+      "emoji": "📋",
+      "title": "Todo",
+      "actions": {
+        "create": { "label": "create list", "detailKeys": ["title", "topicKey"] },
+        "add": { "label": "add item", "detailKeys": ["title", "listId", "topicKey", "assignee"] },
+        "update": {
+          "label": "update item",
+          "detailKeys": ["itemId", "status", "title", "assignee"]
+        },
+        "complete": { "label": "complete item", "detailKeys": ["itemId", "listId", "topicKey"] },
+        "delete": { "label": "delete item", "detailKeys": ["itemId", "listId", "topicKey"] },
+        "archive": { "label": "archive list", "detailKeys": ["listId", "topicKey"] },
+        "list": { "label": "list", "detailKeys": ["listId", "topicKey", "includeArchived"] }
+      }
+    },
     "memory_search": {
       "emoji": "🧠",
       "title": "Memory Search",
@@ -310,6 +326,19 @@
       "actions": {
         "start": { "label": "start" },
         "wait": { "label": "wait" }
+      }
+    },
+    "todo": {
+      "emoji": "📋",
+      "title": "Todo",
+      "actions": {
+        "create": { "label": "create list", "detailKeys": ["title"] },
+        "add": { "label": "add", "detailKeys": ["title"] },
+        "update": { "label": "update", "detailKeys": ["title", "status"] },
+        "complete": { "label": "complete", "detailKeys": ["title", "itemId"] },
+        "delete": { "label": "delete", "detailKeys": ["title", "itemId"] },
+        "archive": { "label": "archive list", "detailKeys": ["title", "listId"] },
+        "list": { "label": "list", "detailKeys": ["topicKey", "listId"] }
       }
     }
   }

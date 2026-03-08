@@ -28,6 +28,7 @@ import {
   summariseList,
   checkOwnership,
 } from "../todo-state.js";
+import { getTodoTopicKey, syncTodoBackingMessage } from "../todo-topic.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 
 const TODO_ACTIONS = ["create", "add", "update", "complete", "delete", "archive", "list"] as const;
@@ -55,6 +56,8 @@ const TodoToolSchema = Type.Object({
 
 export type TodoToolOptions = {
   agentSessionKey?: string;
+  agentTo?: string;
+  agentThreadId?: string | number;
 };
 
 export function createTodoTool(opts?: TodoToolOptions): AnyAgentTool {
@@ -72,10 +75,15 @@ export function createTodoTool(opts?: TodoToolOptions): AnyAgentTool {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const sessionKey = opts?.agentSessionKey ?? "unknown";
+      const topicKeyHint = getTodoTopicKey({
+        sessionKey: opts?.agentSessionKey,
+        agentTo: opts?.agentTo,
+        agentThreadId: opts?.agentThreadId,
+      });
 
       switch (action) {
         case "create":
-          return handleCreate(params, sessionKey);
+          return handleCreate(params, sessionKey, topicKeyHint);
         case "add":
           return handleAdd(params, sessionKey);
         case "update":
@@ -87,7 +95,7 @@ export function createTodoTool(opts?: TodoToolOptions): AnyAgentTool {
         case "archive":
           return handleArchive(params, sessionKey);
         case "list":
-          return handleList(params);
+          return handleList(params, topicKeyHint);
         default:
           throw new Error(`Unknown todo action: ${action}`);
       }
@@ -117,11 +125,19 @@ function resolveListId(params: Record<string, unknown>): string {
 
 // ── Action handlers ──────────────────────────────────────────────────────────
 
-async function handleCreate(params: Record<string, unknown>, sessionKey: string) {
-  const topicKey = readStringParam(params, "topicKey", { required: true });
+async function handleCreate(
+  params: Record<string, unknown>,
+  sessionKey: string,
+  topicKeyHint?: string,
+) {
+  const topicKey = readStringParam(params, "topicKey") ?? topicKeyHint;
+  if (!topicKey) {
+    throw new Error("topicKey is required for todo create.");
+  }
   const title = readStringParam(params, "title", { required: true });
 
   const list = await createList({ topicKey, title, ownerSessionKey: sessionKey });
+  await syncTodoBackingMessage(list);
   return jsonResult({
     ok: true,
     action: "create",
@@ -147,12 +163,14 @@ async function handleAdd(params: Record<string, unknown>, sessionKey: string) {
       ok: false,
       action: "add",
       error: ownership.reason,
-      hint: "Sub-agents should return a structured event like: { type: 'todo-request', action: 'add', title, notes }",
+      hint: "Sub-agents should report structured ack/progress to the main agent instead of mutating todo directly.",
+      event: { type: "todo-request", action: "add", title, notes },
     });
   }
 
   const item = await addItem(listId, { title, assignee, notes });
   scheduleSyncForList(listId);
+  await syncTodoBackingMessage(list);
 
   return jsonResult({
     ok: true,
@@ -181,12 +199,14 @@ async function handleUpdate(params: Record<string, unknown>, sessionKey: string)
       ok: false,
       action: "update",
       error: ownership.reason,
-      hint: "Emit a structured event: { type: 'todo-progress', itemId, status, notes }",
+      hint: "Report progress back to the main agent instead of mutating todo directly.",
+      event: { type: "todo-progress", itemId, status, notes },
     });
   }
 
   const item = await updateItem(listId, itemId, { title, status, assignee, notes });
   scheduleSyncForList(listId);
+  await syncTodoBackingMessage(list);
 
   return jsonResult({
     ok: true,
@@ -212,12 +232,14 @@ async function handleComplete(params: Record<string, unknown>, sessionKey: strin
       ok: false,
       action: "complete",
       error: ownership.reason,
-      hint: "Emit a structured event: { type: 'todo-complete', itemId, notes }",
+      hint: "Report completion back to the main agent instead of mutating todo directly.",
+      event: { type: "todo-complete", itemId, notes },
     });
   }
 
   const item = await completeItem(listId, itemId, notes);
   scheduleSyncForList(listId);
+  await syncTodoBackingMessage(list);
 
   return jsonResult({
     ok: true,
@@ -247,6 +269,7 @@ async function handleDelete(params: Record<string, unknown>, sessionKey: string)
 
   await deleteItem(listId, itemId);
   scheduleSyncForList(listId);
+  await syncTodoBackingMessage(list);
 
   return jsonResult({
     ok: true,
@@ -274,6 +297,7 @@ async function handleArchive(params: Record<string, unknown>, sessionKey: string
   }
 
   const archived = await archiveList(listId);
+  await syncTodoBackingMessage(archived);
   return jsonResult({
     ok: true,
     action: "archive",
@@ -281,8 +305,8 @@ async function handleArchive(params: Record<string, unknown>, sessionKey: string
   });
 }
 
-async function handleList(params: Record<string, unknown>) {
-  const topicKey = readStringParam(params, "topicKey");
+async function handleList(params: Record<string, unknown>, topicKeyHint?: string) {
+  const topicKey = readStringParam(params, "topicKey") ?? topicKeyHint;
   const listId = readStringParam(params, "listId");
   const includeArchived = params.includeArchived === true;
 

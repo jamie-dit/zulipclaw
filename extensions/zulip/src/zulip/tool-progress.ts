@@ -21,6 +21,101 @@ export function formatClockTime(ts: number): string {
   }
 }
 
+/**
+ * Extract the tool type from a formatted tool line.
+ *
+ * Lines come in as e.g. "📋 Todo: add \"Write notes\"" or "🔧 exec: ls -la".
+ * We extract the label (e.g. "Todo", "exec") to build a summary.
+ */
+export function extractToolType(lineText: string): string | undefined {
+  // Strip leading emoji sequences including ZWJ compound emoji (e.g. 🧑‍🔧)
+  // and variation selectors, then any trailing whitespace.
+  const withoutEmoji = lineText.replace(
+    /^(?:[\p{Emoji_Presentation}\p{Emoji}\uFE0E\uFE0F\u200D])+\s*/u,
+    "",
+  );
+  // Take the part before the first colon
+  const colonIndex = withoutEmoji.indexOf(":");
+  if (colonIndex <= 0) {
+    return undefined;
+  }
+  const label = withoutEmoji.slice(0, colonIndex).trim().toLowerCase();
+  return label || undefined;
+}
+
+/**
+ * Build a compact summary of tool types used.
+ *
+ * Example: "todo: add \"Write notes\", exec ×3, read ×2"
+ *
+ * For todo tools specifically, shows the first action detail.
+ * For other tools, shows the count if > 1.
+ */
+export function buildToolTypeSummary(
+  toolTypeCounts: Map<string, number>,
+  toolTypeDetails: Map<string, string>,
+  maxTypes = 4,
+): string {
+  if (toolTypeCounts.size === 0) {
+    return "";
+  }
+
+  // Sort by count descending, then alphabetically
+  const sorted = [...toolTypeCounts.entries()].sort((a, b) => {
+    if (b[1] !== a[1]) return b[1] - a[1];
+    return a[0].localeCompare(b[0]);
+  });
+
+  const segments: string[] = [];
+  const shown = sorted.slice(0, maxTypes);
+  const remaining = sorted.slice(maxTypes);
+
+  for (const [type, count] of shown) {
+    const detail = toolTypeDetails.get(type);
+    if (detail) {
+      // Show the latest detail for this tool type
+      segments.push(count > 1 ? `${type} ×${count} (${detail})` : `${type}: ${detail}`);
+    } else {
+      segments.push(count > 1 ? `${type} ×${count}` : type);
+    }
+  }
+
+  if (remaining.length > 0) {
+    const otherCount = remaining.reduce((sum, [, c]) => sum + c, 0);
+    segments.push(`+${otherCount} more`);
+  }
+
+  return segments.join(", ");
+}
+
+/**
+ * Render lines with de-emphasized timestamps for rapid batched calls.
+ *
+ * When multiple lines share the same minute-level timestamp,
+ * only the first line in that group shows the full timestamp.
+ * Subsequent lines in the same minute show a minimal indent marker.
+ */
+export function renderLinesWithGroupedTimestamps(
+  lines: Array<{ ts: string; text: string }>,
+): string[] {
+  if (lines.length === 0) return [];
+
+  const result: string[] = [];
+  let lastTs: string | undefined;
+
+  for (const { ts, text } of lines) {
+    if (ts === lastTs) {
+      // Same minute - de-emphasize timestamp
+      result.push(`  ├ ${text}`);
+    } else {
+      result.push(`[${ts}] ${text}`);
+      lastTs = ts;
+    }
+  }
+
+  return result;
+}
+
 export type ToolProgressParams = {
   auth: ZulipAuth;
   stream: string;
@@ -31,13 +126,15 @@ export type ToolProgressParams = {
   model?: string;
   abortSignal?: AbortSignal;
   log?: (message: string) => void;
+  /** Enable debug logging for tool progress rendering. */
+  debug?: boolean;
 };
 
 /**
  * Accumulates tool call progress lines into a single Zulip message
  * that is created on the first tool call and edited on subsequent ones.
  *
- * Each line has a clock-time timestamp prefix.
+ * Each line has a clock-time timestamp prefix (de-emphasized for rapid calls).
  * Edits are debounced to avoid excessive API calls during rapid-fire tool use.
  */
 export type ToolProgressStatus = "running" | "success" | "error";
@@ -48,14 +145,25 @@ const STATUS_EMOJI: Record<ToolProgressStatus, string> = {
   error: "❌",
 };
 
+interface ToolProgressLine {
+  ts: string;
+  text: string;
+  rawText: string; // original text before sanitization, for type extraction
+}
+
 export class ToolProgressAccumulator {
-  private lines: string[] = [];
+  private lines: ToolProgressLine[] = [];
   private messageId: number | undefined;
   private editTimer: NodeJS.Timeout | undefined;
   private flushInFlight: Promise<void> | undefined;
   private finalized = false;
   private status: ToolProgressStatus = "running";
-  private readonly params: ToolProgressParams;
+  private params: ToolProgressParams;
+
+  /** Track tool types for the summary header. */
+  private toolTypeCounts = new Map<string, number>();
+  /** Track latest detail per tool type for summary. */
+  private toolTypeDetails = new Map<string, string>();
 
   /** Debounce interval for edits (ms). */
   private static readonly EDIT_DEBOUNCE_MS = 300;
@@ -104,20 +212,57 @@ export class ToolProgressAccumulator {
   /**
    * Add a tool progress line. The line text should already be formatted
    * (e.g. "🔧 exec: ls -la"). A clock-time timestamp is prepended automatically.
+   *
+   * The tool type is extracted from the line text and tracked for the
+   * summary header.
    */
   addLine(text: string): void {
     if (this.finalized) {
       return;
     }
     const timestamp = formatClockTime(Date.now());
-    this.lines.push(`[${timestamp}] ${text}`);
+    this.lines.push({ ts: timestamp, text, rawText: text });
+
+    // Track tool types for the summary
+    this.trackToolType(text);
+
+    if (this.params.debug) {
+      this.params.log?.(`[zulip:tool-progress:debug] addLine: ts=${timestamp} text=${text}`);
+    }
+
     this.scheduleFlush();
+  }
+
+  /**
+   * Extract and track tool type from line text.
+   */
+  private trackToolType(text: string): void {
+    const type = extractToolType(text);
+    if (!type) return;
+
+    this.toolTypeCounts.set(type, (this.toolTypeCounts.get(type) ?? 0) + 1);
+
+    // Extract detail: everything after "Type: " in the line (first line only)
+    const withoutEmoji = text.replace(
+      /^(?:[\p{Emoji_Presentation}\p{Emoji}\uFE0E\uFE0F\u200D])+\s*/u,
+      "",
+    );
+    const colonIndex = withoutEmoji.indexOf(":");
+    if (colonIndex >= 0) {
+      // Take only the first line and truncate for the summary
+      const rawDetail = withoutEmoji.slice(colonIndex + 1).trim();
+      const firstLine = rawDetail.split(/\r?\n/)[0]?.trim();
+      if (firstLine) {
+        const detail = firstLine.length > 80 ? `${firstLine.slice(0, 77)}…` : firstLine;
+        this.toolTypeDetails.set(type, detail);
+      }
+    }
   }
 
   /**
    * Append a keepalive/heartbeat line to the accumulated message.
    */
-  addHeartbeat(elapsedMs: number): void {
+  addHeartbeat(_elapsedMs: number): void {
     if (this.finalized || this.lines.length === 0) {
       return;
     }
@@ -150,6 +295,13 @@ export class ToolProgressAccumulator {
   /**
    * Render the accumulated message content wrapped in a Zulip spoiler
    * block with a metadata header.
+   *
+   * The header includes:
+   * - Status emoji
+   * - Agent name and model
+   * - Tool call count
+   * - Summary of tool types used (collapsed spoiler title)
+   * - Updated timestamp
    */
   private renderMessage(): string {
     const name = this.params.name || "Agent";
@@ -160,10 +312,19 @@ export class ToolProgressAccumulator {
     const lastTimestamp = formatClockTime(Date.now());
     const emoji = STATUS_EMOJI[this.status] ?? "🔄";
     const header = `${emoji} **\`${name}\`**${modelSegment} · ${count} ${callWord} · updated ${lastTimestamp}`;
-    const sanitizedLines = this.lines.map((line) =>
-      ToolProgressAccumulator.sanitizeForSpoiler(line),
-    );
-    return `${header}\n\n\`\`\`spoiler Tool calls\n${sanitizedLines.join("\n")}\n\`\`\``;
+
+    // Build tool type summary for the spoiler title (must be single-line)
+    const typeSummary = buildToolTypeSummary(this.toolTypeCounts, this.toolTypeDetails);
+    const spoilerTitle = typeSummary ? typeSummary.replace(/[\r\n]+/g, " ").trim() : "Tool calls";
+
+    // Render lines with grouped timestamps to reduce clutter
+    const sanitizedLines = this.lines.map((line) => ({
+      ts: line.ts,
+      text: ToolProgressAccumulator.sanitizeForSpoiler(line.text),
+    }));
+    const renderedLines = renderLinesWithGroupedTimestamps(sanitizedLines);
+
+    return `${header}\n\n\`\`\`spoiler ${spoilerTitle}\n${renderedLines.join("\n")}\n\`\`\``;
   }
 
   /**

@@ -176,6 +176,8 @@ export function createOpenClawTools(options?: {
     }),
     createTodoTool({
       agentSessionKey: options?.agentSessionKey,
+      agentTo: options?.agentTo,
+      agentThreadId: options?.agentThreadId,
     }),
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
