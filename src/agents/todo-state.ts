@@ -464,8 +464,9 @@ export async function applySubagentProgressEvent(params: {
       ? "in-progress"
       : (params.event.status ??
         (targetItem.status === "pending" ? "in-progress" : targetItem.status));
+  const title = "title" in params.event ? params.event.title : undefined;
   const item = await updateItem(list.id, targetItem.id, {
-    ...(params.event.title !== undefined ? { title: params.event.title } : {}),
+    ...(title !== undefined ? { title } : {}),
     ...(params.event.notes !== undefined ? { notes: params.event.notes } : {}),
     status,
     lastAckAt: now,
