@@ -39,6 +39,11 @@ const cfg: OpenClawConfig = {
       apiKey: "key",
       streams: ["marcel-ai"],
       defaultTopic: "general chat",
+      actions: {
+        channelCreate: true,
+        channelEdit: true,
+        channelDelete: true,
+      },
     },
   },
 };
@@ -49,7 +54,7 @@ describe("zulipMessageActions", () => {
   });
 
   it("lists the supported actions without fake pin actions", () => {
-    expect(zulipMessageActions.listActions()).toEqual(
+    expect(zulipMessageActions.listActions?.({ cfg, accountId: "default" })).toEqual(
       expect.arrayContaining([
         "send",
         "sendWithReactions",
@@ -65,13 +70,13 @@ describe("zulipMessageActions", () => {
         "member-info",
       ]),
     );
-    expect(zulipMessageActions.listActions()).not.toEqual(
+    expect(zulipMessageActions.listActions?.({ cfg, accountId: "default" })).not.toEqual(
       expect.arrayContaining(["pin", "unpin", "list-pins"]),
     );
   });
 
   it("exposes the intended public action list without pin actions", () => {
-    const actions = zulipMessageActions.listActions();
+    const actions = zulipMessageActions.listActions?.({ cfg, accountId: "default" }) ?? [];
     expect(actions).toContain("react");
     expect(actions).toContain("channel-delete");
     expect(actions).not.toContain("pin");
@@ -165,6 +170,55 @@ describe("zulipMessageActions", () => {
       }),
     );
     expect(result.details).toMatchObject({ action: "search", query: "deploy failed", count: 1 });
+  });
+
+  it("hides channel mutation actions by default while keeping channel-list", () => {
+    const safeCfg: OpenClawConfig = {
+      channels: {
+        zulip: {
+          enabled: true,
+          baseUrl: "https://zulip.example.com",
+          email: "bot@example.com",
+          apiKey: "key",
+          streams: ["marcel-ai"],
+        },
+      },
+    };
+
+    const actions = zulipMessageActions.listActions?.({ cfg: safeCfg, accountId: "default" }) ?? [];
+    expect(actions).toContain("channel-list");
+    expect(actions).not.toContain("channel-create");
+    expect(actions).not.toContain("channel-edit");
+    expect(actions).not.toContain("channel-delete");
+  });
+
+  it("allows per-account overrides to re-enable channel mutation actions", () => {
+    const accountCfg: OpenClawConfig = {
+      channels: {
+        zulip: {
+          enabled: true,
+          baseUrl: "https://zulip.example.com",
+          email: "bot@example.com",
+          apiKey: "key",
+          streams: ["marcel-ai"],
+          actions: { channelCreate: false, channelEdit: false, channelDelete: false },
+          accounts: {
+            ops: {
+              enabled: true,
+              baseUrl: "https://zulip.example.com",
+              email: "ops@example.com",
+              apiKey: "key-ops",
+              actions: { channelCreate: true, channelEdit: true },
+            },
+          },
+        },
+      },
+    };
+
+    const actions = zulipMessageActions.listActions?.({ cfg: accountCfg, accountId: "ops" }) ?? [];
+    expect(actions).toContain("channel-create");
+    expect(actions).toContain("channel-edit");
+    expect(actions).not.toContain("channel-delete");
   });
 
   it("lists streams with includePublic/includeWebPublic flags", async () => {
@@ -292,6 +346,69 @@ describe("zulipMessageActions", () => {
       expect.objectContaining({ method: "DELETE", path: "/api/v1/streams/22" }),
     );
     expect(result.details).toMatchObject({ action: "channel-delete", streamId: 22 });
+  });
+
+  it("edits a stream by target stream form", async () => {
+    vi.mocked(zulipRequest).mockResolvedValueOnce({
+      result: "success",
+      streams: [{ stream_id: 18, name: "marcel-canary-actions-bf4d6e" }],
+    });
+
+    const result = await zulipMessageActions.handleAction({
+      action: "channel-edit",
+      params: {
+        target: "stream:marcel-canary-actions-bf4d6e#ignored-topic",
+        newName: "marcel-canary-actions-bf4d6e-renamed",
+      },
+      cfg,
+      accountId: "default",
+    } as never);
+
+    expect(zulipRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "GET", path: "/api/v1/streams" }),
+    );
+    expect(zulipRequestWithRetry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "PATCH",
+        path: "/api/v1/streams/18",
+        form: expect.objectContaining({ new_name: "marcel-canary-actions-bf4d6e-renamed" }),
+      }),
+    );
+    expect(result.details).toMatchObject({ action: "channel-edit", streamId: 18 });
+  });
+
+  it("deletes a stream by target stream form", async () => {
+    vi.mocked(zulipRequest).mockResolvedValueOnce({
+      result: "success",
+      streams: [{ stream_id: 18, name: "marcel-canary-actions-bf4d6e" }],
+    });
+
+    const result = await zulipMessageActions.handleAction({
+      action: "channel-delete",
+      params: { target: "stream:marcel-canary-actions-bf4d6e#ignored-topic" },
+      cfg,
+      accountId: "default",
+    } as never);
+
+    expect(zulipRequest).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ method: "DELETE", path: "/api/v1/streams/18" }),
+    );
+    expect(result.details).toMatchObject({ action: "channel-delete", streamId: 18 });
+  });
+
+  it("deletes a stream when streamId is provided as a string", async () => {
+    const result = await zulipMessageActions.handleAction({
+      action: "channel-delete",
+      params: { streamId: "18" },
+      cfg,
+      accountId: "default",
+    } as never);
+
+    expect(zulipRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "DELETE", path: "/api/v1/streams/18" }),
+    );
+    expect(result.details).toMatchObject({ action: "channel-delete", streamId: 18 });
   });
 
   it("fetches member info for self by default", async () => {
@@ -472,11 +589,84 @@ describe("zulipMessageActions", () => {
     expect(result.details).toMatchObject({ action: "sendWithReactions", messageId: "888" });
   });
 
+  it("rejects disabled channel-create at runtime", async () => {
+    const safeCfg: OpenClawConfig = {
+      channels: {
+        zulip: {
+          enabled: true,
+          baseUrl: "https://zulip.example.com",
+          email: "bot@example.com",
+          apiKey: "key",
+          streams: ["marcel-ai"],
+        },
+      },
+    };
+
+    await expect(
+      zulipMessageActions.handleAction({
+        action: "channel-create",
+        params: { name: "new-stream" },
+        cfg: safeCfg,
+        accountId: "default",
+      } as never),
+    ).rejects.toThrow("channels.zulip.actions.channelCreate");
+    expect(zulipRequestWithRetry).not.toHaveBeenCalled();
+  });
+
+  it("rejects disabled channel-edit at runtime", async () => {
+    const safeCfg: OpenClawConfig = {
+      channels: {
+        zulip: {
+          enabled: true,
+          baseUrl: "https://zulip.example.com",
+          email: "bot@example.com",
+          apiKey: "key",
+          streams: ["marcel-ai"],
+        },
+      },
+    };
+
+    await expect(
+      zulipMessageActions.handleAction({
+        action: "channel-edit",
+        params: { streamId: 22, description: "changed" },
+        cfg: safeCfg,
+        accountId: "default",
+      } as never),
+    ).rejects.toThrow("channels.zulip.actions.channelEdit");
+    expect(zulipRequestWithRetry).not.toHaveBeenCalled();
+  });
+
+  it("rejects disabled channel-delete at runtime", async () => {
+    const safeCfg: OpenClawConfig = {
+      channels: {
+        zulip: {
+          enabled: true,
+          baseUrl: "https://zulip.example.com",
+          email: "bot@example.com",
+          apiKey: "key",
+          streams: ["marcel-ai"],
+        },
+      },
+    };
+
+    await expect(
+      zulipMessageActions.handleAction({
+        action: "channel-delete",
+        params: { streamId: 22 },
+        cfg: safeCfg,
+        accountId: "default",
+      } as never),
+    ).rejects.toThrow("channels.zulip.actions.channelDelete");
+    expect(zulipRequest).not.toHaveBeenCalled();
+  });
+
   it("keeps the public action list aligned with the supported Zulip surface", () => {
-    expect(zulipMessageActions.listActions()).toContain("send");
-    expect(zulipMessageActions.listActions()).toContain("member-info");
-    expect(zulipMessageActions.listActions()).not.toContain("pin");
-    expect(zulipMessageActions.listActions()).not.toContain("unpin");
-    expect(zulipMessageActions.listActions()).not.toContain("list-pins");
+    const actions = zulipMessageActions.listActions?.({ cfg, accountId: "default" }) ?? [];
+    expect(actions).toContain("send");
+    expect(actions).toContain("member-info");
+    expect(actions).not.toContain("pin");
+    expect(actions).not.toContain("unpin");
+    expect(actions).not.toContain("list-pins");
   });
 });

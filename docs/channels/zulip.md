@@ -54,6 +54,13 @@ Minimal config:
 
       // Default topic when outbound targets omit a topic.
       defaultTopic: "general chat",
+
+      // Safe by default: channel mutations stay off unless explicitly enabled.
+      actions: {
+        channelCreate: false,
+        channelEdit: false,
+        channelDelete: false,
+      },
     },
   },
 }
@@ -170,7 +177,39 @@ openclaw message send --channel zulip --target "stream:marcel-ai#deploy-notes" -
 openclaw message send --channel zulip --target "stream:marcel-ai" --message "screenshot" --media ./screenshot.png
 ```
 
+For Zulip admin-style channel actions:
+
+- `channel-edit` accepts `streamId` from `channel-list` output, plus `target="stream:<name>#<topic>"` or stream name fields
+- `channel-delete` accepts the same forms
+- the topic portion of `target` is ignored for edit/delete and only the stream is used
+
 ## Troubleshooting
 
 - No replies: confirm the bot is subscribed to the stream and that `channels.zulip.streams` includes the stream name (without `#`).
 - Auth errors: verify `baseUrl`, `email`, and `apiKey` (bot API key, not your personal user key).
+
+## Channel admin actions
+
+`channel-list` stays available by default. Stream mutation actions are opt-in and hidden unless enabled.
+
+```json5
+{
+  channels: {
+    zulip: {
+      actions: {
+        channelCreate: true,
+        channelEdit: true,
+        channelDelete: false,
+      },
+    },
+  },
+}
+```
+
+Defaults:
+
+- `channels.zulip.actions.channelCreate`: `false`
+- `channels.zulip.actions.channelEdit`: `false`
+- `channels.zulip.actions.channelDelete`: `false`
+
+These gates apply both to advertised tool actions and runtime execution. If a flag is off, the action is not listed and direct calls are rejected. Account-level overrides are also supported under `channels.zulip.accounts.<accountId>.actions`.
