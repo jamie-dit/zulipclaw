@@ -36,7 +36,7 @@ jobs:
             exit 1
           fi
 
-          AUTH_HEADER=$(printf 'x-access-token:%s' "$GITEA_TOKEN" | base64 | tr -d '\n')
+          AUTH_HEADER=$(python3 -c "import base64, os; print(base64.b64encode(('x-access-token:' + os.environ['GITEA_TOKEN']).encode()).decode(), end='')")
           git -c http.extraHeader="Authorization: Basic $AUTH_HEADER" fetch origin "$BASE_REF"
 
           if ! DIFF_CONTENT=$(git diff "origin/$BASE_REF"...HEAD 2>/dev/null); then
