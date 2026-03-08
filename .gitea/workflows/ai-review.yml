@@ -30,7 +30,7 @@ jobs:
           git -c http.extraHeader="Authorization: Basic $AUTH_HEADER" fetch origin "$SHA"
           git checkout --detach FETCH_HEAD
           if [ -n "${BASE_REF:-}" ]; then
-            git -c http.extraHeader="Authorization: Basic $AUTH_HEADER" fetch origin "$BASE_REF"
+            git -c http.extraHeader="Authorization: Basic $AUTH_HEADER" fetch origin "refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
           fi
 
       - name: Install Docker
