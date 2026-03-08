@@ -442,10 +442,20 @@ export async function applySubagentProgressEvent(params: {
     return null;
   }
 
-  const targetItem =
-    (params.event.itemId
-      ? list.items.find((item) => item.id === params.event.itemId)
-      : undefined) ?? resolveItemByAssignee(list, params.assignee);
+  // Resolve target item: prefer explicit itemId, but enforce that
+  // sub-agents can only modify items assigned to them.
+  let targetItem: TodoItem | undefined;
+  if (params.event.itemId) {
+    const candidate = list.items.find((item) => item.id === params.event.itemId);
+    // Sub-agents can only modify items assigned to them – reject if assignee mismatch.
+    if (candidate && candidate.assignee === params.assignee) {
+      targetItem = candidate;
+    }
+  }
+  // Fallback: find the first non-done item assigned to this sub-agent.
+  if (!targetItem) {
+    targetItem = resolveItemByAssignee(list, params.assignee);
+  }
   if (!targetItem) {
     return null;
   }
