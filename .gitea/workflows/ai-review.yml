@@ -27,10 +27,10 @@ jobs:
           git init .
           git remote add origin "${SERVER}/${REPO}.git"
           AUTH_HEADER=$(python3 -c "import base64, os; print(base64.b64encode(('x-access-token:' + os.environ['TOKEN']).encode()).decode(), end='')")
-          git -c http.extraHeader="Authorization: Basic $AUTH_HEADER" fetch --depth=1 origin "$SHA"
+          git -c http.extraHeader="Authorization: Basic $AUTH_HEADER" fetch origin "$SHA"
           git checkout --detach FETCH_HEAD
           if [ -n "${BASE_REF:-}" ]; then
-            git -c http.extraHeader="Authorization: Basic $AUTH_HEADER" fetch --depth=1 origin "$BASE_REF"
+            git -c http.extraHeader="Authorization: Basic $AUTH_HEADER" fetch origin "$BASE_REF"
           fi
 
       - name: Install Docker
