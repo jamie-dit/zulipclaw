@@ -331,38 +331,6 @@ async function handleMemberInfo(params: ActionParams, cfg: unknown, accountId?: 
   };
 }
 
-// -- Pin / Unpin --
-
-async function handlePinState(
-  params: ActionParams,
-  cfg: unknown,
-  operation: "add" | "remove",
-  accountId?: string | null,
-) {
-  const { auth } = resolveAuth(cfg, accountId);
-  const messageId = requireString(params, "messageId");
-  await zulipRequestWithRetry({
-    auth,
-    method: "POST",
-    path: "/api/v1/messages/flags",
-    form: {
-      messages: JSON.stringify([Number(messageId)]),
-      op: operation,
-      flag: "starred",
-    },
-    retry: { maxRetries: 3 },
-  });
-  return { ok: true, action: operation === "add" ? "pin" : "unpin", messageId };
-}
-
-async function handlePin(params: ActionParams, cfg: unknown, accountId?: string | null) {
-  return handlePinState(params, cfg, "add", accountId);
-}
-
-async function handleUnpin(params: ActionParams, cfg: unknown, accountId?: string | null) {
-  return handlePinState(params, cfg, "remove", accountId);
-}
-
 // -- Edit --
 
 async function handleEdit(params: ActionParams, cfg: unknown, accountId?: string | null) {
@@ -524,8 +492,6 @@ const SUPPORTED_ACTIONS = [
   "channel-edit",
   "channel-delete",
   "member-info",
-  "pin",
-  "unpin",
 ] as const;
 
 export const zulipMessageActions: ChannelMessageActionAdapter = {
@@ -575,12 +541,6 @@ export const zulipMessageActions: ChannelMessageActionAdapter = {
         break;
       case "member-info":
         result = await handleMemberInfo(params, cfg, accountId);
-        break;
-      case "pin":
-        result = await handlePin(params, cfg, accountId);
-        break;
-      case "unpin":
-        result = await handleUnpin(params, cfg, accountId);
         break;
       default:
         throw new Error(`Unsupported action: ${action}`);
