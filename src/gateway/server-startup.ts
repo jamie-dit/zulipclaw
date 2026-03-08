@@ -7,6 +7,7 @@ import {
 } from "../agents/model-selection.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
+import { initializeTodoTopicSupport } from "../agents/todo-topic.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -180,6 +181,14 @@ export async function startGatewaySidecars(params: {
     setTimeout(() => {
       void scheduleRestartSentinelWake({ deps: params.deps });
     }, 750);
+  }
+
+  // Initialize todo list persistence, lifecycle sweeper, and backing-message sync.
+  try {
+    initializeTodoTopicSupport();
+    params.log.info("todo topic support initialized");
+  } catch (err) {
+    params.log.warn(`todo topic support failed to initialize: ${String(err)}`);
   }
 
   // Start native sub-agent watchdog (monitors runs without spawning LLM sessions).

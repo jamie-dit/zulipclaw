@@ -51,4 +51,22 @@ describe("todo-topic", () => {
     expect(result.applied).toBe(true);
     expect(result.summary).toContain("working");
   });
+
+  it("rejects subagent progress for items not assigned to them", async () => {
+    const list = await createList({
+      topicKey: "stream:marcel-zulipclaw#todo list tracking",
+      title: "Board",
+      ownerSessionKey: "main",
+    });
+    const item = await addItem(list.id, { title: "Implement", assignee: "agent:sub:1" });
+
+    // Sub-agent 2 tries to modify sub-agent 1's item by specifying its ID
+    const result = await maybeApplyTodoProgressFromSubagent({
+      sessionKey: "agent:sub:2",
+      agentTo: "stream:marcel-zulipclaw#todo list tracking",
+      text: `done\n\n\`\`\`json\n${JSON.stringify({ type: "todo_progress", itemId: item.id, status: "done", notes: "hijacked" })}\n\`\`\``,
+    });
+
+    expect(result.applied).toBe(false);
+  });
 });

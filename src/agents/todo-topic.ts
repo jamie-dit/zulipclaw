@@ -1,6 +1,10 @@
 import { dispatchChannelMessageAction } from "../channels/plugins/message-actions.js";
 import { loadConfig } from "../config/config.js";
-import { registerSyncCallback, scheduleSyncForList } from "./todo-lifecycle.js";
+import {
+  registerSyncCallback,
+  scheduleSyncForList,
+  startLifecycleSweeper,
+} from "./todo-lifecycle.js";
 import { renderCompact } from "./todo-render.js";
 import {
   type TodoList,
@@ -243,6 +247,7 @@ export function initializeTodoTopicSupport(params?: {
   initialized = true;
   loadFromDisk();
   registerSyncCallback(syncBackingMessage);
+  startLifecycleSweeper();
   const activeSessionKeys = new Set(params?.activeSessionKeys ?? []);
   recoverAfterRestart(activeSessionKeys);
   for (const list of getAllLists()) {
