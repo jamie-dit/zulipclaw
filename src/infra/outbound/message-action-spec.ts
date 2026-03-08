@@ -32,7 +32,7 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     search: "to",
     sticker: "to",
     "sticker-search": "none",
-    "member-info": "none",
+    "member-info": "to",
     "role-info": "none",
     "emoji-list": "none",
     "emoji-upload": "none",
