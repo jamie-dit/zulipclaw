@@ -21,19 +21,23 @@ jobs:
           fi
 
       - name: Run AI Code Review
+        env:
+          GITEA_TOKEN: ${{ secrets.GTOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           BASE_REF="${{ gitea.event.pull_request.base.ref }}"
-          if [ -z "${{ secrets.GTOKEN }}" ]; then
+          if [ -z "$GITEA_TOKEN" ]; then
             echo "::error::GTOKEN secret missing for AI Code Review"
             exit 1
           fi
 
-          if [ -z "${{ secrets.OPENAI_API_KEY }}" ]; then
+          if [ -z "$OPENAI_API_KEY" ]; then
             echo "::error::OPENAI_API_KEY secret missing for AI Code Review"
             exit 1
           fi
 
-          git fetch origin "$BASE_REF"
+          AUTH_HEADER=$(printf 'x-access-token:%s' "$GITEA_TOKEN" | base64 | tr -d '\n')
+          git -c http.extraHeader="Authorization: Basic $AUTH_HEADER" fetch origin "$BASE_REF"
 
           if ! DIFF_CONTENT=$(git diff "origin/$BASE_REF"...HEAD 2>/dev/null); then
             echo "::warning::No merge base found, using two-dot diff"
@@ -50,7 +54,7 @@ jobs:
 
           echo "Diff size: $(echo "$DIFF_CONTENT" | wc -c) bytes"
 
-          printf '%s' "${{ secrets.GTOKEN }}" | docker login gitea.hosting-cloud.net -u "${{ gitea.actor }}" --password-stdin
+          printf '%s' "$GITEA_TOKEN" | docker login gitea.hosting-cloud.net -u "${{ gitea.actor }}" --password-stdin
           docker pull gitea.hosting-cloud.net/dreamit/dreamguard:latest
 
           VOLUMES_FLAG=""
@@ -71,8 +75,8 @@ jobs:
           echo "$DIFF_CONTENT" | docker run --rm -i \
             $VOLUMES_FLAG \
             -e REPO_ROOT=/workspace \
-            -e OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
-            -e GITEA_TOKEN="${{ secrets.GTOKEN }}" \
+            -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+            -e GITEA_TOKEN="$GITEA_TOKEN" \
             -e REPO_NAME="${{ gitea.repository }}" \
             -e PR_NUMBER="${{ gitea.event.pull_request.number }}" \
             -e DIFF_PATH=/dev/stdin \
