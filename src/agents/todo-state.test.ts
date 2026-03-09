@@ -11,6 +11,7 @@ import {
   findActiveListByTopic,
   getAllLists,
   getList,
+  hasActiveListsWithPendingItems,
   loadFromDisk,
   recoverAfterRestart,
   setBackingMessageId,
@@ -382,6 +383,44 @@ describe("todo-state", () => {
 
       expect(results).toHaveLength(3);
       expect(getList(list.id)?.items).toHaveLength(3);
+    });
+  });
+
+  describe("hasActiveListsWithPendingItems", () => {
+    it("returns false when no lists exist", () => {
+      expect(hasActiveListsWithPendingItems()).toBe(false);
+    });
+
+    it("returns false for empty lists", async () => {
+      await createList({ topicKey: "t", title: "T", ownerSessionKey: "main" });
+      expect(hasActiveListsWithPendingItems()).toBe(false);
+    });
+
+    it("returns true when a list has pending items", async () => {
+      const list = await createList({ topicKey: "t", title: "T", ownerSessionKey: "main" });
+      await addItem(list.id, { title: "Task" });
+      expect(hasActiveListsWithPendingItems()).toBe(true);
+    });
+
+    it("returns true when a list has in-progress items", async () => {
+      const list = await createList({ topicKey: "t", title: "T", ownerSessionKey: "main" });
+      const item = await addItem(list.id, { title: "Task" });
+      await updateItem(list.id, item.id, { status: "in-progress" });
+      expect(hasActiveListsWithPendingItems()).toBe(true);
+    });
+
+    it("returns false when all items are done", async () => {
+      const list = await createList({ topicKey: "t", title: "T", ownerSessionKey: "main" });
+      const item = await addItem(list.id, { title: "Task" });
+      await completeItem(list.id, item.id);
+      expect(hasActiveListsWithPendingItems()).toBe(false);
+    });
+
+    it("returns false for archived lists with pending items", async () => {
+      const list = await createList({ topicKey: "t", title: "T", ownerSessionKey: "main" });
+      await addItem(list.id, { title: "Task" });
+      await archiveList(list.id);
+      expect(hasActiveListsWithPendingItems()).toBe(false);
     });
   });
 });

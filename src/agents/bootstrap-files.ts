@@ -6,6 +6,7 @@ import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "./pi-embedded-helpers.js";
+import { getActiveTodoSnapshot, getTodoTopicKey } from "./todo-topic.js";
 import {
   filterBootstrapFilesForSession,
   loadWorkspaceBootstrapFiles,
@@ -63,5 +64,16 @@ export async function resolveBootstrapContextForRun(params: {
     totalMaxChars: resolveBootstrapTotalMaxChars(params.config),
     warn: params.warn,
   });
+
+  // Inject active todo list context for sessions with a topic key.
+  const topicKey = getTodoTopicKey({ sessionKey: params.sessionKey });
+  const todoSnapshot = getActiveTodoSnapshot(topicKey);
+  if (todoSnapshot) {
+    contextFiles.push({
+      path: "Active Todo List",
+      content: todoSnapshot,
+    });
+  }
+
   return { bootstrapFiles, contextFiles };
 }

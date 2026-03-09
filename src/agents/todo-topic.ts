@@ -121,19 +121,54 @@ async function syncBackingMessage(
   content: string,
   messageId: string,
 ): Promise<void> {
+  const list = getList(listId);
+  const topic = list ? parseTopicKey(list.topicKey) : null;
+  if (!topic) {
+    return;
+  }
+
   const cfg = loadConfig();
-  await dispatchChannelMessageAction({
+
+  // Delete the old backing message (best-effort - it may already be gone).
+  try {
+    await dispatchChannelMessageAction({
+      channel: "zulip",
+      action: "delete",
+      cfg,
+      accountId: undefined,
+      params: {
+        channel: "zulip",
+        messageId,
+      },
+      dryRun: false,
+    });
+  } catch {
+    // Old message may already be gone - that's fine.
+  }
+
+  // Send a new message at the bottom of the topic.
+  const result = await dispatchChannelMessageAction({
     channel: "zulip",
-    action: "edit",
+    action: "send",
     cfg,
     accountId: undefined,
     params: {
       channel: "zulip",
-      messageId,
+      target: `stream:${topic.stream}#${topic.topic}`,
       message: content,
     },
     dryRun: false,
   });
+
+  // Extract the new message ID and update state.
+  const raw = result as Record<string, unknown> | null | undefined;
+  const details = raw?.details as Record<string, unknown> | undefined;
+  const payload = raw?.payload as Record<string, unknown> | undefined;
+  const rawId = details?.messageId ?? payload?.messageId;
+  const newMessageId = typeof rawId === "string" || typeof rawId === "number" ? String(rawId) : "";
+  if (newMessageId && list) {
+    setBackingMessageId(list.id, newMessageId);
+  }
 }
 
 export async function syncTodoBackingMessage(list: TodoList): Promise<void> {
