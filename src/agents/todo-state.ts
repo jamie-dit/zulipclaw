@@ -419,6 +419,19 @@ export function setLastSyncedAt(listId: string, ts: number): void {
   }
 }
 
+/** Check if any active (non-archived) list has pending or in-progress items. */
+export function hasActiveListsWithPendingItems(): boolean {
+  for (const list of lists.values()) {
+    if (list.archived) {
+      continue;
+    }
+    if (list.items.some((i) => i.status === "pending" || i.status === "in-progress")) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function resolveItemByAssignee(list: TodoList, assignee: string): TodoItem | undefined {
   return list.items.find((item) => item.assignee === assignee && item.status !== "done");
 }

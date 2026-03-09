@@ -1,8 +1,10 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
-import { _resetLifecycleForTests } from "./todo-lifecycle.js";
+import { _resetLifecycleForTests, scheduleSyncForList, DEBOUNCE_MS } from "./todo-lifecycle.js";
 import { _resetForTests, createList, addItem, setBackingMessageId, getList } from "./todo-state.js";
 import {
   getTodoTopicKey,
+  getActiveTodoSnapshot,
+  initializeTodoTopicSupport,
   maybeApplyTodoProgressFromSubagent,
   syncTodoBackingMessage,
   _resetTopicForTests,
@@ -18,19 +20,25 @@ vi.mock("../infra/json-file.js", () => ({
 }));
 
 // Mock returns the real AgentToolResult<unknown> shape: { content: [...], details: { messageId } }
-const mockDispatch = vi.fn(async ({ action }: { action: string }) =>
-  action === "send"
-    ? {
-        content: [
-          { type: "text", text: '{"ok":true,"action":"send","messageId":"backing-msg-1"}' },
-        ],
-        details: { ok: true, action: "send", messageId: "backing-msg-1" },
-      }
-    : {
-        content: [{ type: "text", text: '{"ok":true}' }],
-        details: { ok: true },
-      },
-);
+let sendCounter = 0;
+const mockDispatch = vi.fn(async ({ action }: { action: string }) => {
+  if (action === "send") {
+    sendCounter++;
+    return {
+      content: [
+        {
+          type: "text",
+          text: `{"ok":true,"action":"send","messageId":"backing-msg-${sendCounter}"}`,
+        },
+      ],
+      details: { ok: true, action: "send", messageId: `backing-msg-${sendCounter}` },
+    };
+  }
+  return {
+    content: [{ type: "text", text: '{"ok":true}' }],
+    details: { ok: true },
+  };
+});
 
 vi.mock("../channels/plugins/message-actions.js", () => ({
   dispatchChannelMessageAction: (...args: unknown[]) => mockDispatch(args[0] as { action: string }),
@@ -43,6 +51,7 @@ describe("todo-topic", () => {
     _resetForTests();
     _resetLifecycleForTests();
     _resetTopicForTests();
+    sendCounter = 0;
     mockDispatch.mockClear();
   });
 
@@ -236,6 +245,119 @@ describe("todo-topic", () => {
 
       expect(getList(list1.id)?.backingMessageId).toBe("msg-1");
       expect(getList(list2.id)?.backingMessageId).toBe("msg-2");
+    });
+  });
+
+  describe("repost (delete + send) on sync", () => {
+    it("deletes old message and sends new one when syncing", async () => {
+      const list = await createList({
+        topicKey: "stream:test-stream#test-topic",
+        title: "Repost Board",
+        ownerSessionKey: "main",
+      });
+      setBackingMessageId(list.id, "old-msg-99");
+
+      // Initialize topic support which registers the sync callback
+      initializeTodoTopicSupport();
+
+      // Trigger a sync via the lifecycle debounce mechanism
+      scheduleSyncForList(list.id);
+
+      // Wait for debounce to fire
+      await vi.waitFor(
+        () => {
+          const deleteCalls = mockDispatch.mock.calls.filter(
+            (c) => (c[0] as { action: string }).action === "delete",
+          );
+          expect(deleteCalls.length).toBeGreaterThanOrEqual(1);
+        },
+        { timeout: DEBOUNCE_MS + 1000 },
+      );
+
+      // Verify: delete was called with the old message ID
+      const deleteCalls = mockDispatch.mock.calls.filter(
+        (c) => (c[0] as { action: string }).action === "delete",
+      );
+      expect(deleteCalls.length).toBeGreaterThanOrEqual(1);
+      const deleteParams = deleteCalls[0][0] as { params?: { messageId?: string } };
+      expect(deleteParams.params?.messageId).toBe("old-msg-99");
+
+      // Verify: send was called to create a new message
+      const sendCalls = mockDispatch.mock.calls.filter(
+        (c) => (c[0] as { action: string }).action === "send",
+      );
+      expect(sendCalls.length).toBeGreaterThanOrEqual(1);
+
+      // Verify: backing message ID was updated to the new message
+      const updated = getList(list.id);
+      expect(updated?.backingMessageId).not.toBe("old-msg-99");
+      expect(updated?.backingMessageId).toBeTruthy();
+    });
+
+    it("still sends new message even if delete fails", async () => {
+      const list = await createList({
+        topicKey: "stream:test-stream#test-topic",
+        title: "Resilient Board",
+        ownerSessionKey: "main",
+      });
+      setBackingMessageId(list.id, "gone-msg-404");
+
+      // Make delete throw but send succeed
+      mockDispatch.mockImplementation(async ({ action }: { action: string }) => {
+        if (action === "delete") {
+          throw new Error("Message not found");
+        }
+        if (action === "send") {
+          return {
+            content: [{ type: "text", text: '{"ok":true,"messageId":"new-msg-1"}' }],
+            details: { ok: true, action: "send", messageId: "new-msg-1" },
+          };
+        }
+        return { content: [{ type: "text", text: '{"ok":true}' }], details: { ok: true } };
+      });
+
+      initializeTodoTopicSupport();
+      scheduleSyncForList(list.id);
+
+      await vi.waitFor(
+        () => {
+          const sendCalls = mockDispatch.mock.calls.filter(
+            (c) => (c[0] as { action: string }).action === "send",
+          );
+          expect(sendCalls.length).toBeGreaterThanOrEqual(1);
+        },
+        { timeout: DEBOUNCE_MS + 1000 },
+      );
+
+      const updated = getList(list.id);
+      expect(updated?.backingMessageId).toBe("new-msg-1");
+    });
+  });
+
+  describe("getActiveTodoSnapshot", () => {
+    it("returns a compact snapshot for an active list", async () => {
+      const list = await createList({
+        topicKey: "stream:test-stream#todo-topic",
+        title: "My Tasks",
+        ownerSessionKey: "main",
+      });
+      await addItem(list.id, { title: "Write tests" });
+      await addItem(list.id, { title: "Fix bug" });
+
+      const snapshot = getActiveTodoSnapshot("stream:test-stream#todo-topic");
+      expect(snapshot).toContain("My Tasks");
+      expect(snapshot).toContain("Write tests");
+      expect(snapshot).toContain("Fix bug");
+    });
+
+    it("returns undefined for topics without active lists", () => {
+      const snapshot = getActiveTodoSnapshot("stream:none#nothing");
+      expect(snapshot).toBeUndefined();
+    });
+
+    it("returns undefined when topicKey is undefined", () => {
+      const snapshot = getActiveTodoSnapshot(undefined);
+      expect(snapshot).toBeUndefined();
     });
   });
 });

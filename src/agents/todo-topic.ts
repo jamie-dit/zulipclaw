@@ -1,5 +1,6 @@
 import { dispatchChannelMessageAction } from "../channels/plugins/message-actions.js";
 import { loadConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   registerSyncCallback,
   scheduleSyncForList,
@@ -17,6 +18,8 @@ import {
   setBackingMessageId,
 } from "./todo-state.js";
 import { normalizeToolName } from "./tool-policy.js";
+
+const log = createSubsystemLogger("todo:topic");
 
 let initialized = false;
 
@@ -121,19 +124,58 @@ async function syncBackingMessage(
   content: string,
   messageId: string,
 ): Promise<void> {
+  const list = getList(listId);
+  const topic = list ? parseTopicKey(list.topicKey) : null;
+  if (!topic) {
+    return;
+  }
+
   const cfg = loadConfig();
-  await dispatchChannelMessageAction({
+
+  // Delete the old backing message (best-effort - it may already be gone).
+  try {
+    await dispatchChannelMessageAction({
+      channel: "zulip",
+      action: "delete",
+      cfg,
+      accountId: undefined,
+      params: {
+        channel: "zulip",
+        messageId,
+      },
+      dryRun: false,
+    });
+  } catch (err) {
+    // Old message may already be gone - log but continue with repost.
+    log.info("syncBackingMessage: delete failed (message may be gone)", {
+      messageId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Send a new message at the bottom of the topic.
+  const result = await dispatchChannelMessageAction({
     channel: "zulip",
-    action: "edit",
+    action: "send",
     cfg,
     accountId: undefined,
     params: {
       channel: "zulip",
-      messageId,
+      target: `stream:${topic.stream}#${topic.topic}`,
       message: content,
     },
     dryRun: false,
   });
+
+  // Extract the new message ID and update state.
+  const raw = result as Record<string, unknown> | null | undefined;
+  const details = raw?.details as Record<string, unknown> | undefined;
+  const payload = raw?.payload as Record<string, unknown> | undefined;
+  const rawId = details?.messageId ?? payload?.messageId;
+  const newMessageId = typeof rawId === "string" || typeof rawId === "number" ? String(rawId) : "";
+  if (newMessageId && list) {
+    setBackingMessageId(list.id, newMessageId);
+  }
 }
 
 export async function syncTodoBackingMessage(list: TodoList): Promise<void> {
