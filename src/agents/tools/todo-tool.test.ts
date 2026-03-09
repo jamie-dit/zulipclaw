@@ -13,9 +13,18 @@ vi.mock("../../config/paths.js", async (importOriginal) => {
   };
 });
 
+// Mock returns the real AgentToolResult<unknown> shape: { content: [...], details: { messageId } }
 vi.mock("../../channels/plugins/message-actions.js", () => ({
   dispatchChannelMessageAction: vi.fn(async ({ action }: { action: string }) =>
-    action === "send" ? { payload: { messageId: "todo-msg-1" } } : { payload: {} },
+    action === "send"
+      ? {
+          content: [{ type: "text", text: '{"ok":true,"action":"send","messageId":"todo-msg-1"}' }],
+          details: { ok: true, action: "send", messageId: "todo-msg-1" },
+        }
+      : {
+          content: [{ type: "text", text: '{"ok":true}' }],
+          details: { ok: true },
+        },
   ),
 }));
 
@@ -353,7 +362,7 @@ describe("todo-tool", () => {
       });
       expect(result._meta).toBeDefined();
       expect(result._meta.boardUpdated).toBe(true);
-      expect(result._meta.hint).toContain("Do not repeat");
+      expect(result._meta.hint).toContain("NO_REPLY");
     });
 
     it("add result includes boardUpdated hint", async () => {

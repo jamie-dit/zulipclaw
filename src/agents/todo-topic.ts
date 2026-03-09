@@ -100,10 +100,15 @@ async function createBackingMessage(list: TodoList): Promise<string | undefined>
     },
     dryRun: false,
   });
-  const messageId =
-    result && typeof result === "object" && "payload" in result
-      ? String((result as { payload?: { messageId?: string | number } }).payload?.messageId ?? "")
-      : "";
+  // dispatchChannelMessageAction returns AgentToolResult<unknown> whose shape is
+  // { content: [...], details: { ok, action, messageId } }.  Extract messageId
+  // from `details` (the real property), falling back to the legacy `payload` path
+  // that the original code expected but which never actually existed at runtime.
+  const raw = result as Record<string, unknown> | null | undefined;
+  const details = raw?.details as Record<string, unknown> | undefined;
+  const payload = raw?.payload as Record<string, unknown> | undefined;
+  const rawId = details?.messageId ?? payload?.messageId;
+  const messageId = typeof rawId === "string" || typeof rawId === "number" ? String(rawId) : "";
   if (!messageId) {
     return undefined;
   }
@@ -295,8 +300,13 @@ export function initializeTodoTopicSupport(params?: {
   startLifecycleSweeper();
   const activeSessionKeys = new Set(params?.activeSessionKeys ?? []);
   recoverAfterRestart(activeSessionKeys);
+  // Only sync active (non-archived) lists that already have a backing message.
+  // Archived lists don't need their backing message refreshed, and lists
+  // without a backingMessageId will get one created on the next mutation.
   for (const list of getAllLists()) {
-    void syncTodoBackingMessage(list);
+    if (!list.archived && list.backingMessageId) {
+      void syncTodoBackingMessage(list);
+    }
   }
 }
 

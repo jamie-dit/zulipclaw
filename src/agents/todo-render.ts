@@ -107,7 +107,14 @@ export function renderBackingMessage(list: TodoList): string {
     }
   }
 
-  const footer = `\n\n_Last updated: ${new Date(list.updatedAt).toISOString()}_`;
+  // Use Zulip bold (*text*) for the footer instead of italic (_text_).
+  // Zulip's italic parser can produce malformed output when the text between
+  // underscores contains colons/periods from ISO timestamps.
+  const ts = new Date(list.updatedAt)
+    .toISOString()
+    .replace("T", " ")
+    .replace(/\.\d{3}Z$/, " UTC");
+  const footer = `\n\n**Last updated:** ${ts}`;
   return content + footer;
 }
 

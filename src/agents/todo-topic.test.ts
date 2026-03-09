@@ -17,8 +17,19 @@ vi.mock("../infra/json-file.js", () => ({
   saveJsonFile: () => undefined,
 }));
 
+// Mock returns the real AgentToolResult<unknown> shape: { content: [...], details: { messageId } }
 const mockDispatch = vi.fn(async ({ action }: { action: string }) =>
-  action === "send" ? { payload: { messageId: "backing-msg-1" } } : { payload: {} },
+  action === "send"
+    ? {
+        content: [
+          { type: "text", text: '{"ok":true,"action":"send","messageId":"backing-msg-1"}' },
+        ],
+        details: { ok: true, action: "send", messageId: "backing-msg-1" },
+      }
+    : {
+        content: [{ type: "text", text: '{"ok":true}' }],
+        details: { ok: true },
+      },
 );
 
 vi.mock("../channels/plugins/message-actions.js", () => ({
@@ -147,6 +158,26 @@ describe("todo-topic", () => {
       const updated = getList(list.id);
       expect(updated?.backingMessageId).toBe("backing-msg-1");
     });
+
+    it("extracts messageId from details (AgentToolResult shape)", async () => {
+      // Regression: the original code looked for result.payload.messageId
+      // but the real dispatch returns { content: [...], details: { messageId } }
+      mockDispatch.mockImplementationOnce(async () => ({
+        content: [{ type: "text", text: '{"ok":true,"messageId":"real-msg-42"}' }],
+        details: { ok: true, action: "send", messageId: "real-msg-42" },
+      }));
+
+      const list = await createList({
+        topicKey: "stream:regression#test",
+        title: "Regression Board",
+        ownerSessionKey: "main",
+      });
+
+      await syncTodoBackingMessage(list);
+
+      const updated = getList(list.id);
+      expect(updated?.backingMessageId).toBe("real-msg-42");
+    });
   });
 
   describe("concurrent sync safety", () => {
@@ -170,10 +201,18 @@ describe("todo-topic", () => {
     });
 
     it("sequential syncs for different lists each create their own message", async () => {
-      // Use a counter to produce unique message IDs
+      // Use a counter to produce unique message IDs (real AgentToolResult shape)
       let msgCounter = 0;
       mockDispatch.mockImplementation(async ({ action }: { action: string }) =>
-        action === "send" ? { payload: { messageId: `msg-${++msgCounter}` } } : { payload: {} },
+        action === "send"
+          ? {
+              content: [{ type: "text", text: `{"ok":true,"messageId":"msg-${++msgCounter}"}` }],
+              details: { ok: true, action: "send", messageId: `msg-${msgCounter}` },
+            }
+          : {
+              content: [{ type: "text", text: '{"ok":true}' }],
+              details: { ok: true },
+            },
       );
 
       const list1 = await createList({
