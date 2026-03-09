@@ -117,7 +117,7 @@ describe("todo-render", () => {
       const result = renderBackingMessage(list);
       expect(result).toContain("| Status | Item | Assignee | Notes |");
       expect(result).toContain("| ⬜ | Task A | - | First task |");
-      expect(result).toContain("Completed:");
+      expect(result).toContain("Completed items:");
       expect(result).toContain("| ✅ | Task B | sub-1 | - |");
       expect(result).toContain("Last updated:");
     });
