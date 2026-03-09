@@ -146,10 +146,9 @@
 - Vocabulary: "makeup" = "mac app".
 - Never edit `node_modules` (global/Homebrew/npm/git installs too). Updates overwrite. Skill notes go in `tools.md` or `AGENTS.md`.
 - When adding a new `AGENTS.md` anywhere in the repo, also add a `CLAUDE.md` symlink pointing to it (example: `ln -s AGENTS.md CLAUDE.md`).
-- Signal: "update fly" => `fly ssh console -a flawd-bot -C "bash -lc 'cd /data/clawd/openclaw && git pull --rebase origin main'"` then `fly machines restart e825232f34d058 -a flawd-bot`.
-- Zulip gateway debugging host: use `ssh root@marcel.jle.id.au`. On that server, treat `/root/.openclaw` as the runtime root; start with `/root/.openclaw/.env`, `/root/.openclaw/openclaw.json`, `/root/.openclaw/logs/*`, and `/root/.openclaw/runtime/zulip/*` when tracing delayed Zulip events or reactions.
-  For Codex/Zulip model issues, check `gpt-5.3-codex` against `gpt54` (`openai-codex/gpt-5.4`) first. Inspect `/root/.openclaw/agents/main/agent/auth-profiles.json` for `usageStats`, `/root/.openclaw/logs/gateway.err.log` for raw provider errors like `refresh_token_reused`, and `/root/.openclaw/agents/main/sessions/*.jsonl` to compare `api: "openai-codex-responses"` vs `api: "openai-completions"`.
-  Marcel currently runs the deployed bundle at `/opt/zulipclaw/openclaw.mjs`, so confirm `openclaw --version` and the bundle contents before assuming the live host matches the local checkout. Session state may also show a requested `providerOverride`/`modelOverride` while the actual last run is recorded separately in `modelProvider`/`model`.
+- Zulip gateway debugging: treat `~/.openclaw` as the runtime root; start with `.env`, `openclaw.json`, `logs/*`, and `runtime/zulip/*` when tracing delayed Zulip events or reactions.
+  For Codex/Zulip model issues, check `gpt-5.3-codex` against `gpt54` (`openai-codex/gpt-5.4`) first. Inspect `agents/main/agent/auth-profiles.json` for `usageStats`, `logs/gateway.err.log` for raw provider errors, and `agents/main/sessions/*.jsonl` to compare `api: "openai-codex-responses"` vs `api: "openai-completions"`.
+  Confirm `openclaw --version` and the bundle contents before assuming the live host matches the local checkout. Session state may also show a requested `providerOverride`/`modelOverride` while the actual last run is recorded separately in `modelProvider`/`model`.
 - When working on a GitHub Issue or PR, print the full URL at the end of the task.
 - When answering questions, respond with high-confidence answers only: verify in code; do not guess.
 - Never update the Carbon dependency.
