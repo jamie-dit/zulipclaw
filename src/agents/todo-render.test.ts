@@ -93,7 +93,7 @@ describe("todo-render", () => {
       expect(result).toContain("No items yet");
     });
 
-    it("renders a table with items", () => {
+    it("renders active and completed items as separate Zulip tables", () => {
       const list = makeTodoList({
         items: [
           {
@@ -117,9 +117,35 @@ describe("todo-render", () => {
       const result = renderBackingMessage(list);
       expect(result).toContain("| Status | Item | Assignee | Notes |");
       expect(result).toContain("| ⬜ | Task A | - | First task |");
-      expect(result).toContain("Completed:");
+      expect(result).toContain("**Completed items:**\n\n| Status | Item | Assignee | Notes |");
       expect(result).toContain("| ✅ | Task B | sub-1 | - |");
       expect(result).toContain("Last updated:");
+    });
+
+    it("renders archived lists with final-state summary and completed table", () => {
+      const ts = Date.parse("2026-03-09T06:14:00Z");
+      const list = makeTodoList({
+        archived: true,
+        updatedAt: ts,
+        items: [
+          {
+            id: "i1",
+            title: "Ship fix",
+            status: "done",
+            assignee: "agent:sub:1",
+            createdAt: ts,
+            updatedAt: ts,
+          },
+        ],
+      });
+
+      const result = renderBackingMessage(list);
+      expect(result).toContain("**Archived:** 9 Mar 2026, 5:14 pm");
+      expect(result).toContain("**Final state:** 0 open · 1 done · 0 cancelled");
+      expect(result).toContain("**Completed items:**\n\n| Status | Item | Assignee | Notes |");
+      expect(result).toContain("| ✅ | Ship fix | agent:sub:1 | - |");
+      expect(result).toContain("**Last updated:** 9 Mar 2026, 5:14 pm");
+      expect(result).not.toContain("UTC");
     });
 
     it("escapes pipe characters in cell values", () => {

@@ -80,41 +80,50 @@ const COMPLETED_COLLAPSE_THRESHOLD = 0.7; // collapse completed items when >70% 
  */
 export function renderBackingMessage(list: TodoList): string {
   const doneCount = list.items.filter((i) => i.status === "done").length;
-  const header = `## 📋 ${list.title}\n**${doneCount}/${list.items.length}** items done`;
+  const cancelledCount = list.items.filter((i) => i.status === "cancelled").length;
+  const openCount = Math.max(0, list.items.length - doneCount - cancelledCount);
+  const archiveLine = list.archived
+    ? `\n**Archived:** ${formatMelbourneTimestamp(list.updatedAt)}`
+    : "";
+  const header = `## 📋 ${list.title}\n**${doneCount}/${list.items.length}** items done${archiveLine}`;
 
   if (list.items.length === 0) {
-    return `${header}\n\n_No items yet._`;
+    return `${header}\n\n_No items yet._\n\n**Last updated:** ${formatMelbourneTimestamp(list.updatedAt)}`;
   }
 
-  // Split items into active and completed.
   const active = list.items.filter((i) => i.status !== "done" && i.status !== "cancelled");
   const completed = list.items.filter((i) => i.status === "done" || i.status === "cancelled");
 
-  // Render the table for active items first.
-  let table = renderTable(active);
-  let content = `${header}\n\n${table}`;
+  if (list.archived) {
+    const sections: string[] = [
+      header,
+      "",
+      `**Final state:** ${openCount} open · ${doneCount} done · ${cancelledCount} cancelled`,
+    ];
+    if (active.length > 0) {
+      sections.push("", "**Open items at archive:**", "", renderTable(active));
+    }
+    if (completed.length > 0) {
+      sections.push("", "**Completed items:**", "", renderTable(completed));
+    }
+    sections.push("", `**Last updated:** ${formatMelbourneTimestamp(list.updatedAt)}`);
+    return sections.join("\n");
+  }
 
-  // Check if we should collapse completed items.
+  let content = `${header}\n\n${renderTable(active)}`;
+
   if (completed.length > 0) {
     const completedTable = renderTable(completed);
-    const full = `${content}\n\n**Completed:**\n${completedTable}`;
+    const full = `${content}\n\n**Completed items:**\n\n${completedTable}`;
 
     if (full.length > ZULIP_MAX_CHARS * COMPLETED_COLLAPSE_THRESHOLD) {
-      // Collapse: just show count.
       content += `\n\n_${completed.length} completed item(s) collapsed._`;
     } else {
       content = full;
     }
   }
 
-  // Use Zulip bold (*text*) for the footer instead of italic (_text_).
-  // Zulip's italic parser can produce malformed output when the text between
-  // underscores contains colons/periods from ISO timestamps.
-  const ts = new Date(list.updatedAt)
-    .toISOString()
-    .replace("T", " ")
-    .replace(/\.\d{3}Z$/, " UTC");
-  const footer = `\n\n**Last updated:** ${ts}`;
+  const footer = `\n\n**Last updated:** ${formatMelbourneTimestamp(list.updatedAt)}`;
   return content + footer;
 }
 
@@ -159,4 +168,23 @@ function truncate(text: string, maxLen: number): string {
     return text;
   }
   return `${text.slice(0, maxLen - 3)}...`;
+}
+
+function formatMelbourneTimestamp(ts: number): string {
+  try {
+    return new Intl.DateTimeFormat("en-AU", {
+      timeZone: "Australia/Melbourne",
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    }).format(new Date(ts));
+  } catch {
+    return new Date(ts)
+      .toISOString()
+      .replace("T", " ")
+      .replace(/\.\d{3}Z$/, " UTC");
+  }
 }
