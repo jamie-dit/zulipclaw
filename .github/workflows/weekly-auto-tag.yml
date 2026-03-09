@@ -1,0 +1,69 @@
+name: Weekly Auto-Tag
+
+on:
+  schedule:
+    # Every Monday at midnight UTC (11am AEDT)
+    - cron: '0 0 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  auto-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate version tag
+        id: version
+        run: |
+          # Get the current date and week number
+          YEAR=$(date -u +%Y)
+          WEEK=$(date -u +%V)
+          BASE_TAG="v${YEAR}.${WEEK}"
+          
+          # Check if there are new commits since the last tag
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$LAST_TAG" ]; then
+            echo "No tags found, creating first tag"
+            NEW_COMMITS=1
+          else
+            NEW_COMMITS=$(git rev-list ${LAST_TAG}..HEAD --count)
+          fi
+          
+          if [ "$NEW_COMMITS" -eq 0 ]; then
+            echo "No new commits since last tag. Skipping."
+            echo "should_tag=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "Found $NEW_COMMITS new commits. Creating tag."
+          echo "should_tag=true" >> $GITHUB_OUTPUT
+          
+          # Check if the base tag exists, if so append patch version
+          if git rev-parse "$BASE_TAG" >/dev/null 2>&1; then
+            echo "Tag $BASE_TAG already exists, appending patch version"
+            PATCH=1
+            while git rev-parse "${BASE_TAG}.${PATCH}" >/dev/null 2>&1; do
+              PATCH=$((PATCH + 1))
+            done
+            FINAL_TAG="${BASE_TAG}.${PATCH}"
+          else
+            FINAL_TAG="$BASE_TAG"
+          fi
+          
+          echo "final_tag=${FINAL_TAG}" >> $GITHUB_OUTPUT
+          echo "Creating tag: $FINAL_TAG"
+
+      - name: Create and push tag
+        if: steps.version.outputs.should_tag == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ steps.version.outputs.final_tag }}
+          git push origin ${{ steps.version.outputs.final_tag }}
+          echo "✅ Created and pushed tag: ${{ steps.version.outputs.final_tag }}"
