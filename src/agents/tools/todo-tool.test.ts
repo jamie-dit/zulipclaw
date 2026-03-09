@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetLifecycleForTests } from "../todo-lifecycle.js";
 import { _resetForTests } from "../todo-state.js";
+import { _resetTopicForTests } from "../todo-topic.js";
 import { createTodoTool } from "./todo-tool.js";
 
 // Mock persistence.
@@ -41,11 +42,13 @@ describe("todo-tool", () => {
   beforeEach(() => {
     _resetForTests();
     _resetLifecycleForTests();
+    _resetTopicForTests();
   });
 
   afterEach(() => {
     _resetForTests();
     _resetLifecycleForTests();
+    _resetTopicForTests();
   });
 
   async function exec(tool: typeof mainTool, params: Record<string, unknown>) {
@@ -338,6 +341,117 @@ describe("todo-tool", () => {
       });
       expect(addResult.ok).toBe(true);
       expect(addResult.item.title).toBe("Auto-resolved");
+    });
+  });
+
+  describe("_meta.boardUpdated hint", () => {
+    it("create result includes boardUpdated hint", async () => {
+      const result = await exec(mainTool, {
+        action: "create",
+        topicKey: "stream:test#topic",
+        title: "Tasks",
+      });
+      expect(result._meta).toBeDefined();
+      expect(result._meta.boardUpdated).toBe(true);
+      expect(result._meta.hint).toContain("Do not repeat");
+    });
+
+    it("add result includes boardUpdated hint", async () => {
+      await exec(mainTool, {
+        action: "create",
+        topicKey: "stream:test#topic",
+        title: "Tasks",
+      });
+      const result = await exec(mainTool, {
+        action: "add",
+        topicKey: "stream:test#topic",
+        title: "Item A",
+      });
+      expect(result._meta?.boardUpdated).toBe(true);
+    });
+
+    it("update result includes boardUpdated hint", async () => {
+      await exec(mainTool, {
+        action: "create",
+        topicKey: "stream:test#topic",
+        title: "Tasks",
+      });
+      const addResult = await exec(mainTool, {
+        action: "add",
+        topicKey: "stream:test#topic",
+        title: "Item A",
+      });
+      const result = await exec(mainTool, {
+        action: "update",
+        topicKey: "stream:test#topic",
+        itemId: addResult.item.id,
+        status: "in-progress",
+      });
+      expect(result._meta?.boardUpdated).toBe(true);
+    });
+
+    it("complete result includes boardUpdated hint", async () => {
+      await exec(mainTool, {
+        action: "create",
+        topicKey: "stream:test#topic",
+        title: "Tasks",
+      });
+      const addResult = await exec(mainTool, {
+        action: "add",
+        topicKey: "stream:test#topic",
+        title: "Item A",
+      });
+      const result = await exec(mainTool, {
+        action: "complete",
+        topicKey: "stream:test#topic",
+        itemId: addResult.item.id,
+      });
+      expect(result._meta?.boardUpdated).toBe(true);
+    });
+
+    it("delete result includes boardUpdated hint", async () => {
+      await exec(mainTool, {
+        action: "create",
+        topicKey: "stream:test#topic",
+        title: "Tasks",
+      });
+      const addResult = await exec(mainTool, {
+        action: "add",
+        topicKey: "stream:test#topic",
+        title: "Item A",
+      });
+      const result = await exec(mainTool, {
+        action: "delete",
+        topicKey: "stream:test#topic",
+        itemId: addResult.item.id,
+      });
+      expect(result._meta?.boardUpdated).toBe(true);
+    });
+
+    it("archive result includes boardUpdated hint", async () => {
+      const createResult = await exec(mainTool, {
+        action: "create",
+        topicKey: "stream:test#topic",
+        title: "Tasks",
+      });
+      const result = await exec(mainTool, {
+        action: "archive",
+        listId: createResult.list.id,
+      });
+      expect(result._meta?.boardUpdated).toBe(true);
+    });
+
+    it("list result does not include boardUpdated hint", async () => {
+      await exec(mainTool, {
+        action: "create",
+        topicKey: "stream:test#topic",
+        title: "Tasks",
+      });
+      const result = await exec(mainTool, {
+        action: "list",
+        topicKey: "stream:test#topic",
+      });
+      expect(result._meta).toBeUndefined();
     });
   });
 });

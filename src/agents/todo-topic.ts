@@ -5,11 +5,12 @@ import {
   scheduleSyncForList,
   startLifecycleSweeper,
 } from "./todo-lifecycle.js";
-import { renderCompact } from "./todo-render.js";
+import { renderBackingMessage, renderCompact } from "./todo-render.js";
 import {
   type TodoList,
   applySubagentProgressEvent,
   findActiveListByTopic,
+  getList,
   getAllLists,
   loadFromDisk,
   recoverAfterRestart,
@@ -23,7 +24,7 @@ function isZulipTopicKey(value: string): boolean {
   return /^stream:[^#]+#.+$/i.test(value.trim());
 }
 
-function parseTopicKey(topicKey: string): { stream: string; topic: string } | null {
+export function parseTopicKey(topicKey: string): { stream: string; topic: string } | null {
   const trimmed = topicKey.trim();
   if (!isZulipTopicKey(trimmed)) {
     return null;
@@ -39,14 +40,53 @@ function parseTopicKey(topicKey: string): { stream: string; topic: string } | nu
   };
 }
 
+// ── Concurrency guard for backing-message creation ───────────────────────────
+//
+// Prevents duplicate backing messages when multiple mutations fire
+// near-simultaneously for the same list (e.g., create + add in quick
+// succession). Only one in-flight send per list is allowed; concurrent
+// callers wait on the same promise.
+
+const backingMessageInflight = new Map<string, Promise<string | undefined>>();
+
 async function ensureBackingMessage(list: TodoList): Promise<string | undefined> {
+  // Fast path: already have a backing message.
   if (list.backingMessageId) {
     return list.backingMessageId;
   }
+
+  // Check if another call is already creating one for this list.
+  const inflight = backingMessageInflight.get(list.id);
+  if (inflight) {
+    return inflight;
+  }
+
+  const promise = createBackingMessage(list);
+  backingMessageInflight.set(list.id, promise);
+
+  try {
+    return await promise;
+  } finally {
+    backingMessageInflight.delete(list.id);
+  }
+}
+
+async function createBackingMessage(list: TodoList): Promise<string | undefined> {
+  // Re-check after acquiring the slot (another caller may have finished).
+  if (list.backingMessageId) {
+    return list.backingMessageId;
+  }
+
   const topic = parseTopicKey(list.topicKey);
   if (!topic) {
     return undefined;
   }
+
+  // Send the real rendered content immediately instead of a placeholder.
+  // This avoids a visible "Preparing todo board..." card that then gets
+  // edited moments later.
+  const content = renderBackingMessage(list);
+
   const cfg = loadConfig();
   const result = await dispatchChannelMessageAction({
     channel: "zulip",
@@ -56,7 +96,7 @@ async function ensureBackingMessage(list: TodoList): Promise<string | undefined>
     params: {
       channel: "zulip",
       target: `stream:${topic.stream}#${topic.topic}`,
-      message: `## 📋 ${list.title}\n\n_Preparing todo board..._`,
+      message: content,
     },
     dryRun: false,
   });
@@ -97,6 +137,11 @@ export async function syncTodoBackingMessage(list: TodoList): Promise<void> {
   }
   const messageId = await ensureBackingMessage(list);
   if (!messageId) {
+    return;
+  }
+  // Re-read the list in case it was mutated between the ensure call and now.
+  const fresh = getList(list.id);
+  if (!fresh) {
     return;
   }
   scheduleSyncForList(list.id);
@@ -253,4 +298,11 @@ export function initializeTodoTopicSupport(params?: {
   for (const list of getAllLists()) {
     void syncTodoBackingMessage(list);
   }
+}
+
+// ── Test helpers ─────────────────────────────────────────────────────────────
+
+export function _resetTopicForTests(): void {
+  initialized = false;
+  backingMessageInflight.clear();
 }

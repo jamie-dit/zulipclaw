@@ -12,7 +12,6 @@
 
 import { Type } from "@sinclair/typebox";
 import { stringEnum, optionalStringEnum } from "../schema/typebox.js";
-import { scheduleSyncForList } from "../todo-lifecycle.js";
 import { renderCompact } from "../todo-render.js";
 import {
   type TodoItemStatus,
@@ -69,7 +68,8 @@ export function createTodoTool(opts?: TodoToolOptions): AnyAgentTool {
       "Actions: create (new list for a topic), add (item to list), " +
       "update (item status/title/notes), complete (mark item done), " +
       "delete (remove item), archive (close list), list (show all lists or items in a list). " +
-      "One active list per topic. Main session owns writes; sub-agents can only update/complete their assigned items.",
+      "One active list per topic. Main session owns writes; sub-agents can only update/complete their assigned items. " +
+      "Mutations automatically update a backing message in the Zulip topic - do not restate board contents in your reply.",
     parameters: TodoToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -143,6 +143,10 @@ async function handleCreate(
     action: "create",
     list: summariseList(list),
     render: renderCompact(list),
+    _meta: {
+      boardUpdated: true,
+      hint: "The todo board backing message has been updated in the topic. Do not repeat the board contents in your reply.",
+    },
   });
 }
 
@@ -169,7 +173,6 @@ async function handleAdd(params: Record<string, unknown>, sessionKey: string) {
   }
 
   const item = await addItem(listId, { title, assignee, notes });
-  scheduleSyncForList(listId);
   await syncTodoBackingMessage(list);
 
   return jsonResult({
@@ -177,6 +180,10 @@ async function handleAdd(params: Record<string, unknown>, sessionKey: string) {
     action: "add",
     item,
     render: renderCompact(list),
+    _meta: {
+      boardUpdated: true,
+      hint: "The todo board backing message has been updated. Do not repeat the board contents in your reply.",
+    },
   });
 }
 
@@ -205,7 +212,6 @@ async function handleUpdate(params: Record<string, unknown>, sessionKey: string)
   }
 
   const item = await updateItem(listId, itemId, { title, status, assignee, notes });
-  scheduleSyncForList(listId);
   await syncTodoBackingMessage(list);
 
   return jsonResult({
@@ -213,6 +219,10 @@ async function handleUpdate(params: Record<string, unknown>, sessionKey: string)
     action: "update",
     item,
     render: renderCompact(list),
+    _meta: {
+      boardUpdated: true,
+      hint: "The todo board backing message has been updated. Do not repeat the board contents in your reply.",
+    },
   });
 }
 
@@ -238,7 +248,6 @@ async function handleComplete(params: Record<string, unknown>, sessionKey: strin
   }
 
   const item = await completeItem(listId, itemId, notes);
-  scheduleSyncForList(listId);
   await syncTodoBackingMessage(list);
 
   return jsonResult({
@@ -246,6 +255,10 @@ async function handleComplete(params: Record<string, unknown>, sessionKey: strin
     action: "complete",
     item,
     render: renderCompact(list),
+    _meta: {
+      boardUpdated: true,
+      hint: "The todo board backing message has been updated. Do not repeat the board contents in your reply.",
+    },
   });
 }
 
@@ -268,7 +281,6 @@ async function handleDelete(params: Record<string, unknown>, sessionKey: string)
   }
 
   await deleteItem(listId, itemId);
-  scheduleSyncForList(listId);
   await syncTodoBackingMessage(list);
 
   return jsonResult({
@@ -276,6 +288,10 @@ async function handleDelete(params: Record<string, unknown>, sessionKey: string)
     action: "delete",
     itemId,
     render: renderCompact(list),
+    _meta: {
+      boardUpdated: true,
+      hint: "The todo board backing message has been updated. Do not repeat the board contents in your reply.",
+    },
   });
 }
 
@@ -302,6 +318,10 @@ async function handleArchive(params: Record<string, unknown>, sessionKey: string
     ok: true,
     action: "archive",
     list: summariseList(archived),
+    _meta: {
+      boardUpdated: true,
+      hint: "The todo board backing message has been updated. Do not repeat the board contents in your reply.",
+    },
   });
 }
 
