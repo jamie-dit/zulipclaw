@@ -69,7 +69,8 @@ export function createTodoTool(opts?: TodoToolOptions): AnyAgentTool {
       "update (item status/title/notes), complete (mark item done), " +
       "delete (remove item), archive (close list), list (show all lists or items in a list). " +
       "One active list per topic. Main session owns writes; sub-agents can only update/complete their assigned items. " +
-      "Mutations automatically update a backing message in the Zulip topic - do not restate board contents in your reply.",
+      "Mutations automatically update a backing message in the Zulip topic - do not restate board contents in your reply. " +
+      "After a successful mutation, reply with NO_REPLY since the board message is already updated in-place.",
     parameters: TodoToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -145,7 +146,7 @@ async function handleCreate(
     render: renderCompact(list),
     _meta: {
       boardUpdated: true,
-      hint: "The todo board backing message has been updated in the topic. Do not repeat the board contents in your reply.",
+      hint: "The todo board backing message has been updated in the topic. Respond with NO_REPLY - do not send any additional text.",
     },
   });
 }
@@ -182,7 +183,7 @@ async function handleAdd(params: Record<string, unknown>, sessionKey: string) {
     render: renderCompact(list),
     _meta: {
       boardUpdated: true,
-      hint: "The todo board backing message has been updated. Do not repeat the board contents in your reply.",
+      hint: "The todo board backing message has been updated. Respond with NO_REPLY - do not send any additional text.",
     },
   });
 }
@@ -221,7 +222,7 @@ async function handleUpdate(params: Record<string, unknown>, sessionKey: string)
     render: renderCompact(list),
     _meta: {
       boardUpdated: true,
-      hint: "The todo board backing message has been updated. Do not repeat the board contents in your reply.",
+      hint: "The todo board backing message has been updated. Respond with NO_REPLY - do not send any additional text.",
     },
   });
 }
@@ -257,7 +258,7 @@ async function handleComplete(params: Record<string, unknown>, sessionKey: strin
     render: renderCompact(list),
     _meta: {
       boardUpdated: true,
-      hint: "The todo board backing message has been updated. Do not repeat the board contents in your reply.",
+      hint: "The todo board backing message has been updated. Respond with NO_REPLY - do not send any additional text.",
     },
   });
 }
@@ -290,7 +291,7 @@ async function handleDelete(params: Record<string, unknown>, sessionKey: string)
     render: renderCompact(list),
     _meta: {
       boardUpdated: true,
-      hint: "The todo board backing message has been updated. Do not repeat the board contents in your reply.",
+      hint: "The todo board backing message has been updated. Respond with NO_REPLY - do not send any additional text.",
     },
   });
 }
@@ -320,7 +321,7 @@ async function handleArchive(params: Record<string, unknown>, sessionKey: string
     list: summariseList(archived),
     _meta: {
       boardUpdated: true,
-      hint: "The todo board backing message has been updated. Do not repeat the board contents in your reply.",
+      hint: "The todo board backing message has been updated. Respond with NO_REPLY - do not send any additional text.",
     },
   });
 }
