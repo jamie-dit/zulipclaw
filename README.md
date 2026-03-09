@@ -2,7 +2,7 @@
 
 ZulipClaw is a personal AI assistant stack focused on self-hosted messaging, tool use, and device-connected automation.
 
-This repository tracks the DreamIT-maintained fork and keeps documentation centered on this project.
+ZulipClaw is a Zulip-optimised fork of OpenClaw, focused on self-hosted messaging, tool use, and device-connected automation.
 
 ## Highlights
 
@@ -16,7 +16,7 @@ This repository tracks the DreamIT-maintained fork and keeps documentation cente
 Runtime: **Node >= 22**
 
 ```bash
-git clone git@gitea.hosting-cloud.net:dreamit/zulip-claw.git
+git clone https://github.com/jamie-dit/zulip-claw.git
 cd zulip-claw
 pnpm install
 pnpm ui:build
