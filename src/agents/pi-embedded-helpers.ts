@@ -31,6 +31,7 @@ export {
   isImageDimensionErrorMessage,
   isImageSizeError,
   isOverloadedErrorMessage,
+  isOverloadHttpError,
   isRawApiErrorPayload,
   isRateLimitAssistantError,
   isRateLimitErrorMessage,
