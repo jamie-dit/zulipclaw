@@ -275,21 +275,34 @@ export class ToolProgressAccumulator {
    * Sanitize text for inclusion inside a Zulip spoiler block.
    *
    * Zulip spoiler blocks (` ```spoiler Title `) render their content as
-   * full markdown, NOT as a code block. This means:
-   * - Runs of 3+ backticks can close the spoiler fence prematurely.
-   * - Markdown heading syntax (`#`, `##`, etc.) at the start of a line
-   *   renders as actual headings, breaking the compact display.
+   * full markdown, NOT as a code block. This means line-start markdown can
+   * still render inside the collapsed body unless we neutralize it.
    *
-   * This method inserts zero-width spaces to neutralize both patterns.
+   * This method inserts zero-width spaces (\u200B) to neutralize:
+   * - Runs of 3+ backticks (would close the spoiler fence prematurely)
+   * - Heading syntax (`# `, `## `, etc.) at line start
+   * - Unordered list markers (`- `, `+ `, `* `) at line start
+   * - Blockquote markers (`> `) at line start
+   * - Ordered list markers (`1. `, `2. `, etc.) at line start
+   * - Horizontal rule patterns (`---`, `***`, `___` on their own line)
    */
   private static sanitizeForSpoiler(text: string): string {
-    // Break up runs of 3+ backticks so they don't close the spoiler fence.
-    let sanitized = text.replace(/`{3,}/g, (match) => match.split("").join("\u200B"));
-    // Escape markdown heading syntax at the start of any line.
-    // Insert a zero-width space before the leading '#' so it's not
-    // interpreted as a heading while remaining visually identical.
-    sanitized = sanitized.replace(/^(#{1,6}\s)/gm, "\u200B$1");
-    return sanitized;
+    return text
+      .split("\n")
+      .map((line) => {
+        // Break up runs of 3+ backticks so they don't close the spoiler fence.
+        let sanitized = line.replace(/`{3,}/g, (match) => match.split("").join("\u200B"));
+
+        // Neutralize markdown constructs that only trigger at line start.
+        // Preserve leading indentation; only prefix the markdown token with ZWS.
+        sanitized = sanitized.replace(
+          /^(\s*)(#{1,6}\s|[-+*]\s|>\s?|\d+\.\s|(?:-{3,}|\*{3,}|_{3,})\s*$)/,
+          "$1\u200B$2",
+        );
+
+        return sanitized;
+      })
+      .join("\n");
   }
 
   /**

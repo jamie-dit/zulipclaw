@@ -9,6 +9,7 @@ import { defaultRuntime } from "../runtime.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { lookupContextTokens } from "./context.js";
 import { extractToolResultText } from "./pi-embedded-subscribe.tools.js";
+import { stripDowngradedToolCallText, stripMinimaxToolCallXml } from "./pi-embedded-utils.js";
 import {
   buildResumptionTask,
   readSessionProgressSummary,
@@ -743,12 +744,34 @@ export function formatRelayFooter(
 }
 
 /**
- * Sanitize text for inclusion inside a triple-backtick code fence.
- * Breaks up runs of 3+ backticks with zero-width spaces so they
- * don't prematurely close the fence.
+ * Sanitize text for inclusion inside a Zulip spoiler or triple-backtick code fence.
+ *
+ * Zulip spoiler blocks (`\`\`\`spoiler Title`) render their content as full markdown,
+ * NOT as a code block. This means:
+ * - Runs of 3+ backticks can close the spoiler fence prematurely.
+ * - Line-start markdown constructs (headings, lists, blockquotes, HRs, ordered lists)
+ *   render as formatted markdown inside the spoiler body.
+ *
+ * This function inserts zero-width spaces (\u200B) to neutralize all such patterns
+ * while keeping the content visually identical to human readers.
  */
-function sanitizeForCodeFence(text: string): string {
-  return text.replace(/`{3,}/g, (match) => match.split("").join("\u200B"));
+export function sanitizeForCodeFence(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => {
+      // Break up runs of 3+ backticks so they don't close the spoiler/code fence.
+      let sanitized = line.replace(/`{3,}/g, (match) => match.split("").join("\u200B"));
+
+      // Neutralize markdown constructs that only trigger at line start.
+      // Preserve leading indentation; only prefix the markdown token with ZWS.
+      sanitized = sanitized.replace(
+        /^(\s*)(#{1,6}\s|[-+*]\s|>\s?|\d+\.\s|(?:-{3,}|\*{3,}|_{3,})\s*$)/,
+        "$1\u200B$2",
+      );
+
+      return sanitized;
+    })
+    .join("\n");
 }
 
 /**
@@ -2256,16 +2279,40 @@ function handleUsageEvent(evt: AgentEventPayload) {
 }
 
 /**
- * Best-effort extraction of readable text from a chat message payload.
+ * Strip raw downgraded tool call text from a completion text string.
+ *
+ * Some models (e.g. older OpenAI-compatible APIs or models running without
+ * native tool-call support) emit tool calls as plain text blocks like:
+ *
+ *   [Tool Call: exec (ID: abc123)]
+ *   Arguments: {"command": "ls -la"}
+ *
+ * These appear as `text`-type content blocks in the assistant message and
+ * would otherwise leak raw JSON arguments into the relay Output spoiler.
+ * This helper strips them the same way `extractAssistantText` does in the
+ * embedded runner path.
  */
-function extractRelayMessageText(content: unknown): string | undefined {
-  if (typeof content === "string" && content.trim()) {
-    return content.trim();
+function stripDowngradedToolCalls(text: string): string {
+  return stripDowngradedToolCallText(stripMinimaxToolCallXml(text)).trim();
+}
+
+/**
+ * Best-effort extraction of readable text from a chat message payload.
+ *
+ * Strips downgraded tool-call text (raw JSON arguments that some models embed
+ * as plain text blocks) so that raw tool argument JSON does not leak into the
+ * relay Output spoiler.
+ */
+export function extractRelayMessageText(content: unknown): string | undefined {
+  if (typeof content === "string") {
+    const stripped = stripDowngradedToolCalls(content);
+    return stripped || undefined;
   }
   if (!Array.isArray(content)) {
     return undefined;
   }
   const text = extractTextFromChatContent(content, {
+    sanitizeText: stripDowngradedToolCalls,
     normalizeText: (t) => t.trim(),
     joinWith: "\n",
   });

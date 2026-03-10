@@ -696,4 +696,82 @@ describe("ToolProgressAccumulator", () => {
       expect(debugCalls).toHaveLength(0);
     });
   });
+
+  describe("sanitizeForSpoiler - extended line-start markdown patterns", () => {
+    it("neutralizes unordered list markers (- * +) inside spoiler content", async () => {
+      vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 3000 });
+
+      const acc = makeAccumulator({ name: "Marcel" });
+      acc.addLine("🔧 exec: ls\n- file1.ts\n* file2.ts\n+ file3.ts");
+      await acc.flush();
+
+      const content = String(
+        vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "",
+      );
+      const spoilerMatch = content.match(/```spoiler [^\n]+\n([\s\S]*?)\n```$/);
+      expect(spoilerMatch).not.toBeNull();
+      const inner = spoilerMatch![1]!;
+      // No raw list markers at start of any line
+      expect(inner).not.toMatch(/^[-*+]\s/m);
+      // Content still present
+      expect(inner).toContain("file1.ts");
+    });
+
+    it("neutralizes blockquote markers (>) inside spoiler content", async () => {
+      vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 3001 });
+
+      const acc = makeAccumulator({ name: "Marcel" });
+      acc.addLine("📄 read: note.md\n> This is a blockquote");
+      await acc.flush();
+
+      const content = String(
+        vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "",
+      );
+      const spoilerMatch = content.match(/```spoiler [^\n]+\n([\s\S]*?)\n```$/);
+      expect(spoilerMatch).not.toBeNull();
+      const inner = spoilerMatch![1]!;
+      // No raw blockquote at start of any line
+      expect(inner).not.toMatch(/^>\s/m);
+      // Content still present
+      expect(inner).toContain("This is a blockquote");
+    });
+
+    it("neutralizes ordered list markers (1. 2. etc.) inside spoiler content", async () => {
+      vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 3002 });
+
+      const acc = makeAccumulator({ name: "Marcel" });
+      acc.addLine("🔧 exec: steps\n1. First step\n2. Second step");
+      await acc.flush();
+
+      const content = String(
+        vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "",
+      );
+      const spoilerMatch = content.match(/```spoiler [^\n]+\n([\s\S]*?)\n```$/);
+      expect(spoilerMatch).not.toBeNull();
+      const inner = spoilerMatch![1]!;
+      // No raw ordered list markers at start of any line
+      expect(inner).not.toMatch(/^\d+\.\s/m);
+      // Content still present
+      expect(inner).toContain("First step");
+    });
+
+    it("neutralizes horizontal rule patterns inside spoiler content", async () => {
+      vi.mocked(zulipRequestWithRetry).mockResolvedValue({ result: "success", id: 3003 });
+
+      const acc = makeAccumulator({ name: "Marcel" });
+      acc.addLine("📄 read: doc.md\n---\nSection content");
+      await acc.flush();
+
+      const content = String(
+        vi.mocked(zulipRequestWithRetry).mock.calls[0]![0].form?.content ?? "",
+      );
+      const spoilerMatch = content.match(/```spoiler [^\n]+\n([\s\S]*?)\n```$/);
+      expect(spoilerMatch).not.toBeNull();
+      const inner = spoilerMatch![1]!;
+      // No raw HR at start of any line
+      expect(inner).not.toMatch(/^---\s*$/m);
+      // Content still present
+      expect(inner).toContain("Section content");
+    });
+  });
 });

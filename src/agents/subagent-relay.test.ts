@@ -3,11 +3,13 @@ import {
   countToolCallsFromHistory,
   extractOriginTopic,
   extractProfileShortName,
+  extractRelayMessageText,
   formatRelayFooter,
   formatRelayUpdatedTime,
   formatToolElapsed,
   formatToolLine,
   renderRelayMessage,
+  sanitizeForCodeFence,
 } from "./subagent-relay.js";
 
 describe("subagent-relay", () => {
@@ -962,6 +964,203 @@ describe("subagent-relay", () => {
       // Triple backticks inside should be broken with zero-width spaces
       const outputSpoiler = msg.split("spoiler Output")[1];
       expect(outputSpoiler).not.toContain("```python");
+    });
+  });
+
+  describe("sanitizeForCodeFence", () => {
+    it("breaks up triple backticks with zero-width spaces", () => {
+      expect(sanitizeForCodeFence("```python")).not.toContain("```");
+      expect(sanitizeForCodeFence("```python")).toContain("\u200B");
+    });
+
+    it("neutralizes markdown heading at line start", () => {
+      expect(sanitizeForCodeFence("# Heading")).toContain("\u200B#");
+      expect(sanitizeForCodeFence("## Sub")).toContain("\u200B##");
+      expect(sanitizeForCodeFence("### Third")).toContain("\u200B###");
+    });
+
+    it("neutralizes unordered list markers at line start", () => {
+      expect(sanitizeForCodeFence("- item")).toContain("\u200B-");
+      expect(sanitizeForCodeFence("* item")).toContain("\u200B*");
+      expect(sanitizeForCodeFence("+ item")).toContain("\u200B+");
+    });
+
+    it("neutralizes blockquote markers at line start", () => {
+      expect(sanitizeForCodeFence("> quoted")).toContain("\u200B>");
+    });
+
+    it("neutralizes ordered list markers at line start", () => {
+      expect(sanitizeForCodeFence("1. item")).toContain("\u200B1.");
+      expect(sanitizeForCodeFence("42. item")).toContain("\u200B42.");
+    });
+
+    it("neutralizes horizontal rule patterns at line start", () => {
+      expect(sanitizeForCodeFence("---")).toContain("\u200B");
+      expect(sanitizeForCodeFence("***")).toContain("\u200B");
+      expect(sanitizeForCodeFence("___")).toContain("\u200B");
+    });
+
+    it("preserves leading indentation before the markdown token", () => {
+      // Indented list items still get the ZWS before the marker, not before the whitespace
+      const result = sanitizeForCodeFence("  - item");
+      expect(result).toContain("  \u200B-");
+      expect(result).not.toContain("\u200B  -");
+    });
+
+    it("does not modify plain prose text", () => {
+      const plain = "Just some plain text without markdown.";
+      expect(sanitizeForCodeFence(plain)).toBe(plain);
+    });
+
+    it("handles multi-line input (each line sanitized independently)", () => {
+      const input = "normal text\n# Heading\n- item\n> quote\nmore text";
+      const result = sanitizeForCodeFence(input);
+      const lines = result.split("\n");
+      expect(lines[0]).toBe("normal text");
+      expect(lines[1]).toContain("\u200B#");
+      expect(lines[2]).toContain("\u200B-");
+      expect(lines[3]).toContain("\u200B>");
+      expect(lines[4]).toBe("more text");
+    });
+  });
+
+  describe("extractRelayMessageText", () => {
+    it("returns undefined for non-string, non-array input", () => {
+      expect(extractRelayMessageText(null)).toBeUndefined();
+      expect(extractRelayMessageText(undefined)).toBeUndefined();
+      expect(extractRelayMessageText(42)).toBeUndefined();
+      expect(extractRelayMessageText({})).toBeUndefined();
+    });
+
+    it("returns trimmed string for plain string input", () => {
+      expect(extractRelayMessageText("  Hello world  ")).toBe("Hello world");
+    });
+
+    it("returns undefined for empty/whitespace string input", () => {
+      expect(extractRelayMessageText("   ")).toBeUndefined();
+      expect(extractRelayMessageText("")).toBeUndefined();
+    });
+
+    it("extracts text from content array with text blocks", () => {
+      const content = [
+        { type: "text", text: "Line one" },
+        { type: "text", text: "Line two" },
+      ];
+      expect(extractRelayMessageText(content)).toBe("Line one\nLine two");
+    });
+
+    it("skips non-text blocks (e.g. tool_use blocks)", () => {
+      const content = [
+        { type: "text", text: "Commentary before tool call" },
+        { type: "tool_use", id: "call_123", name: "exec", input: { command: "ls" } },
+      ];
+      expect(extractRelayMessageText(content)).toBe("Commentary before tool call");
+    });
+
+    it("strips downgraded [Tool Call:] text from string content", () => {
+      const raw =
+        'I will run a command.\n[Tool Call: exec (ID: call_123)]\nArguments: {"command": "ls -la"}\n';
+      const result = extractRelayMessageText(raw);
+      expect(result).not.toContain("[Tool Call:");
+      expect(result).not.toContain('"command"');
+      expect(result).toContain("I will run a command.");
+    });
+
+    it("strips downgraded [Tool Call:] text from text blocks in content array", () => {
+      const content = [
+        {
+          type: "text",
+          text: 'Checking files.\n[Tool Call: read (ID: call_456)]\nArguments: {"path": "/etc/hosts"}\n',
+        },
+      ];
+      const result = extractRelayMessageText(content);
+      expect(result).not.toContain("[Tool Call:");
+      expect(result).not.toContain('"path"');
+      expect(result).toContain("Checking files.");
+    });
+
+    it("returns undefined when all content is stripped downgraded tool calls", () => {
+      const content = [
+        {
+          type: "text",
+          text: '[Tool Call: exec (ID: call_789)]\nArguments: {"command": "whoami"}',
+        },
+      ];
+      expect(extractRelayMessageText(content)).toBeUndefined();
+    });
+  });
+
+  describe("renderRelayMessage spoiler markdown sanitization", () => {
+    it("sanitizes markdown heading in tool result inside spoiler", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "agent",
+        model: "anthropic/claude-sonnet-4-20250514",
+        toolEntries: [
+          {
+            line: "[+0:01] 📖 read: /tmp/file.md",
+            name: "read",
+            resultText: "# Title\nSome content",
+          },
+        ],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 1,
+        status: "ok",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+      // The result text inside the spoiler should have the heading neutralized
+      const toolCallsSpoiler = msg.split("```spoiler Tool calls")[1];
+      expect(toolCallsSpoiler).not.toMatch(/^# Title/m);
+      expect(toolCallsSpoiler).toContain("\u200B#");
+    });
+
+    it("sanitizes unordered list in tool result inside spoiler", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "agent",
+        model: "anthropic/claude-sonnet-4-20250514",
+        toolEntries: [
+          {
+            line: "[+0:01] 🔧 exec: ls",
+            name: "exec",
+            resultText: "- file1.ts\n- file2.ts\n- file3.ts",
+          },
+        ],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 1,
+        status: "ok",
+        lastUpdatedAt: 5_000,
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+      const toolCallsSpoiler = msg.split("```spoiler Tool calls")[1];
+      expect(toolCallsSpoiler).not.toMatch(/^- file/m);
+      expect(toolCallsSpoiler).toContain("\u200B-");
+    });
+
+    it("sanitizes markdown heading in completion text inside Output spoiler", () => {
+      const msg = renderRelayMessage({
+        runId: "test-run",
+        label: "research",
+        model: "anthropic/claude-sonnet-4-20250514",
+        toolEntries: [],
+        pendingToolCallIds: new Map(),
+        startedAt: 1_000,
+        toolCount: 0,
+        status: "ok",
+        lastUpdatedAt: 5_000,
+        completionText: "## Results\n- Item 1\n- Item 2\n> Note: done",
+        deliveryContext: { channel: "zulip", to: "stream:marcel#general" },
+      });
+      const outputSpoiler = msg.split("spoiler Output")[1];
+      expect(outputSpoiler).not.toMatch(/^## Results/m);
+      expect(outputSpoiler).not.toMatch(/^- Item/m);
+      expect(outputSpoiler).not.toMatch(/^> Note/m);
+      expect(outputSpoiler).toContain("\u200B##");
+      expect(outputSpoiler).toContain("\u200B-");
+      expect(outputSpoiler).toContain("\u200B>");
     });
   });
 });
