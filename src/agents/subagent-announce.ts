@@ -883,7 +883,11 @@ function formatIterationsUsedLabel(outcome: SubagentRunOutcome): string {
   return "unknown";
 }
 
-function buildAnnounceReplyInstruction(params: {
+/**
+ * Exported for testing only. Builds the reply instruction appended to the
+ * trigger message sent to the requester session when a sub-agent completes.
+ */
+export function buildAnnounceReplyInstruction(params: {
   remainingActiveSubagentRuns: number;
   requesterIsSubagent: boolean;
   announceType: SubagentAnnounceType;
@@ -899,7 +903,11 @@ function buildAnnounceReplyInstruction(params: {
   if (params.requesterIsSubagent) {
     return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
   }
-  return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the system message verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
+  // NOTE: No NO_REPLY escape hatch here. A visible completion announcement
+  // MUST always be delivered to the user so they can see the sub-agent finished.
+  // Allowing NO_REPLY caused the main agent to silently suppress completions,
+  // leaving later turns with no record that the sub-agent had finished.
+  return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the system message verbatim.`;
 }
 
 export async function runSubagentAnnounceFlow(params: {
@@ -1140,7 +1148,11 @@ export async function runSubagentAnnounceFlow(params: {
       },
     });
     const internalSummaryMessage = [
-      `[System Message] [sessionId: ${announceSessionId}] A ${announceType} "${taskLabel}" just ${statusLabel}.`,
+      // The [COMPLETED] tag is a durable marker that persists in conversation
+      // context across turns (and survives compaction summaries). It allows
+      // the assistant to know a sub-agent has finished in later turns without
+      // needing to call subagents(action=list) every time.
+      `[System Message] [COMPLETED] [sessionId: ${announceSessionId}] A ${announceType} "${taskLabel}" just ${statusLabel}.`,
       "",
       "Result:",
       findings,
