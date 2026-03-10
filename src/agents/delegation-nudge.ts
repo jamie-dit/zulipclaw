@@ -208,7 +208,22 @@ export function applyDelegationNudgeToToolResultMessage(params: {
 
   const toolCallCount = getDelegationNudgeCounter(params.sessionKey);
   const softThreshold = params.config?.softThreshold ?? 3;
+  const hardThreshold = params.config?.hardThreshold ?? 6;
+  const blockOnHardLimit = params.config?.blockOnHardLimit !== false;
 
+  // In nudge-only mode (blockOnHardLimit: false), emit an escalated warning once the
+  // hard threshold is reached (and on every subsequent call), so the model is aware it
+  // is operating beyond the recommended limit even though it is not being blocked.
+  if (!blockOnHardLimit && toolCallCount >= hardThreshold && toolCallCount >= softThreshold) {
+    const escalated =
+      `\n\n${DELEGATION_NUDGE_MARKER} [ADVISORY] Tool calls in this turn: ${toolCallCount}/${hardThreshold}. ` +
+      "You are operating beyond the recommended delegation threshold. " +
+      "You SHOULD delegate remaining work to a sub-agent using sessions_spawn. " +
+      "Direct tool use in the main session should be minimal.";
+    return appendTextToToolResultMessage(params.message, escalated);
+  }
+
+  // Normal cadence: emit a nudge at the soft threshold and every 10th call thereafter.
   if (toolCallCount < softThreshold || toolCallCount < 10 || toolCallCount % 10 !== 0) {
     return params.message;
   }

@@ -285,6 +285,46 @@ describe("config paths", () => {
   });
 });
 
+describe("tools.delegationNudge.blockOnHardLimit", () => {
+  it("accepts blockOnHardLimit: false", () => {
+    const res = validateConfigObject({
+      tools: {
+        delegationNudge: {
+          enabled: true,
+          blockOnHardLimit: false,
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("defaults blockOnHardLimit to true when omitted", () => {
+    const res = validateConfigObject({
+      tools: {
+        delegationNudge: {
+          enabled: true,
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.tools?.delegationNudge?.blockOnHardLimit).toBe(true);
+    }
+  });
+
+  it("rejects non-boolean blockOnHardLimit", () => {
+    const res = validateConfigObject({
+      tools: {
+        delegationNudge: {
+          // @ts-expect-error intentional bad type for test
+          blockOnHardLimit: "yes",
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+});
+
 describe("config strict validation", () => {
   it("rejects unknown fields", async () => {
     const res = validateConfigObject({

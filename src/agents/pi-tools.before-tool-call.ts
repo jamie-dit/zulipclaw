@@ -339,7 +339,7 @@ async function autoDelegateOnHardLimit(args: {
   if (!marked) {
     return {
       delegated: false,
-      blockReason: "auto-delegation was already attempted for this turn",
+      blockReason: "another auto-delegation already completed",
     };
   }
 
@@ -350,18 +350,6 @@ async function autoDelegateOnHardLimit(args: {
     turnPrompt: args.ctx.turnPrompt,
     recentToolCallSummary: summarizeRecentToolCalls(args.sessionState),
   });
-
-  // Double-check race condition guard: another concurrent tool call may have
-  // already triggered auto-delegation between the initial mark and now.
-  if (hasDelegationNudgeAutoDelegated(sessionKey)) {
-    // This check is intentionally after buildAutoDelegationTask to avoid
-    // unnecessary work if another call already won the race.
-    // We still return failure since we didn't actually delegate.
-    return {
-      delegated: false,
-      blockReason: "another auto-delegation already completed",
-    };
-  }
 
   try {
     const result = await spawnSubagentDirect(
@@ -563,32 +551,45 @@ export async function runBeforeToolCallHook(args: {
         toolCallCount > 0 ? toolCallCount : getDelegationNudgeCounter(args.ctx.sessionKey);
 
       if (effectiveToolCallCount >= hardThreshold && !exemptTools.has(toolName)) {
-        const autoDelegation = await autoDelegateOnHardLimit({
-          ctx: args.ctx,
-          toolName,
-          params,
-          toolCallCount: effectiveToolCallCount,
-          hardThreshold,
-          sessionState,
-          loopResult,
-        });
+        // blockOnHardLimit defaults to true to preserve existing behaviour.
+        // When explicitly set to false the limit is advisory only: the tool call is
+        // NOT blocked, but the agent still sees an escalated warning via the nudge
+        // appended to tool-result messages (handled in session-tool-result-guard-wrapper).
+        const blockOnHardLimit = config.blockOnHardLimit !== false;
 
-        const manualDelegationInstruction =
-          "Manual delegation required: use sessions_spawn to delegate this work to a sub-agent. " +
-          "Only delegation tools (sessions_spawn, subagents, message) are allowed after this limit.";
+        if (blockOnHardLimit) {
+          const autoDelegation = await autoDelegateOnHardLimit({
+            ctx: args.ctx,
+            toolName,
+            params,
+            toolCallCount: effectiveToolCallCount,
+            hardThreshold,
+            sessionState,
+            loopResult,
+          });
 
-        const reason = autoDelegation.delegated
-          ? `BLOCKED: Tool call limit exceeded (${effectiveToolCallCount}/${hardThreshold}). Auto-delegation started in child session ${autoDelegation.childSessionKey}. Continue via that child session.`
-          : `BLOCKED: Tool call limit exceeded (${effectiveToolCallCount}/${hardThreshold}).${
-              autoDelegation.blockReason
-                ? ` Auto-delegation gate failed: ${autoDelegation.blockReason}.`
-                : ""
-            } ${manualDelegationInstruction}`;
-        log.error(`Delegation nudge blocking ${toolName}: ${reason}`);
-        return {
-          blocked: true,
-          reason,
-        };
+          const manualDelegationInstruction =
+            "Manual delegation required: use sessions_spawn to delegate this work to a sub-agent. " +
+            "Only delegation tools (sessions_spawn, subagents, message) are allowed after this limit.";
+
+          const reason = autoDelegation.delegated
+            ? `BLOCKED: Tool call limit exceeded (${effectiveToolCallCount}/${hardThreshold}). Auto-delegation started in child session ${autoDelegation.childSessionKey}. Continue via that child session.`
+            : `BLOCKED: Tool call limit exceeded (${effectiveToolCallCount}/${hardThreshold}).${
+                autoDelegation.blockReason
+                  ? ` Auto-delegation gate failed: ${autoDelegation.blockReason}.`
+                  : ""
+              } ${manualDelegationInstruction}`;
+          log.error(`Delegation nudge blocking ${toolName}: ${reason}`);
+          return {
+            blocked: true,
+            reason,
+          };
+        }
+
+        // Nudge-only mode: log a warning but allow the tool call through.
+        log.warn(
+          `Delegation nudge advisory (nudge-only mode): ${toolName} at ${effectiveToolCallCount}/${hardThreshold} tool calls for session=${args.ctx.sessionKey}`,
+        );
       }
     }
   }
