@@ -440,7 +440,21 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
             startedAt: entry.startedAt,
           };
           index += 1;
-          return { line, view: entry.endedAt ? { ...baseView, endedAt: entry.endedAt } : baseView };
+          // Include the durable completion marker when present so that later
+          // agent turns can confirm a sub-agent has finished without relying
+          // solely on ephemeral announce delivery.
+          const completionMarker = entry.completionMarker;
+          const completionView =
+            completionMarker?.completedAt != null
+              ? {
+                  completedAt: completionMarker.completedAt,
+                  ...(completionMarker.summary
+                    ? { completionSummary: completionMarker.summary }
+                    : {}),
+                }
+              : {};
+          const endedView = entry.endedAt ? { ...baseView, endedAt: entry.endedAt } : baseView;
+          return { line, view: { ...endedView, ...completionView } };
         };
         const active = runs
           .filter((entry) => !entry.endedAt)
