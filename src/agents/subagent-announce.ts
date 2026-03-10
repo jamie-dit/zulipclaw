@@ -883,7 +883,13 @@ function formatIterationsUsedLabel(outcome: SubagentRunOutcome): string {
   return "unknown";
 }
 
-function buildAnnounceReplyInstruction(params: {
+/**
+ * Builds the reply instruction appended to the sub-agent completion system message
+ * that is injected into the requester session.
+ *
+ * Exported for unit testing.
+ */
+export function buildAnnounceReplyInstruction(params: {
   remainingActiveSubagentRuns: number;
   requesterIsSubagent: boolean;
   announceType: SubagentAnnounceType;
@@ -899,7 +905,11 @@ function buildAnnounceReplyInstruction(params: {
   if (params.requesterIsSubagent) {
     return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
   }
-  return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the system message verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
+  // Do NOT include a NO_REPLY escape hatch here. The model cannot reliably
+  // determine whether a completion was already delivered in the same turn,
+  // so allowing NO_REPLY causes completions to be silently swallowed. A
+  // completion announce must always produce a visible user-facing message.
+  return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the system message verbatim.`;
 }
 
 export async function runSubagentAnnounceFlow(params: {
