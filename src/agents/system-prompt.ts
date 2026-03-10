@@ -16,6 +16,19 @@ import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
  * - "none": Just basic identity line, no sections
  */
 export type PromptMode = "full" | "minimal" | "none";
+
+/**
+ * Defensive guard injected into the "full" system prompt to prevent the
+ * assistant from falsely claiming a sub-agent is still running.
+ *
+ * The `[COMPLETED]` tag (added to internalSummaryMessage in subagent-announce.ts)
+ * allows the assistant to check conversation context before making a live API call.
+ *
+ * Exported so tests can assert the guard is present without calling the full
+ * async buildAgentSystemPrompt function.
+ */
+export const SUBAGENT_STATUS_GUARD_LINE =
+  "Sub-agent status guard: never claim a sub-agent is still running unless you have explicitly checked live status via `subagents(action=list)` this turn. A `[System Message] [COMPLETED]` tag in context means the sub-agent has already finished.";
 type OwnerIdDisplay = "raw" | "hash";
 
 function buildSkillsSection(params: {
@@ -476,7 +489,7 @@ export async function buildAgentSystemPrompt(params: {
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
     "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
-    "Sub-agent status guard: never claim a sub-agent is still running unless you have explicitly checked live status via `subagents(action=list)` this turn. A `[System Message] [COMPLETED]` tag in context means the sub-agent has already finished.",
+    SUBAGENT_STATUS_GUARD_LINE,
     "",
     "## Tool Call Style",
     "Default: do not narrate routine, low-risk tool calls (just call the tool).",

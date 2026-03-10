@@ -1,75 +1,39 @@
 /**
  * Tests for the sub-agent status guard in the system prompt.
- * Verifies that the system prompt includes a defensive guard preventing the
- * assistant from claiming a sub-agent is still running without checking live status.
+ * Verifies that the exported guard constant (SUBAGENT_STATUS_GUARD_LINE)
+ * contains the correct defensive instruction preventing the assistant from
+ * claiming a sub-agent is still running without checking live status.
  *
  * Covers: fix for sub-agent completion visibility bug (issue #198)
  */
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { buildAgentSystemPrompt } from "./system-prompt.js";
+import { describe, expect, it } from "vitest";
+import { SUBAGENT_STATUS_GUARD_LINE } from "./system-prompt.js";
 
-// Minimal mock to avoid full gateway/config imports
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({
-    session: {},
-    agents: {},
-  }),
-}));
-
-vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: () => ({}),
-  resolveAgentIdFromSessionKey: () => "main",
-  resolveMainSessionKey: () => "agent:main",
-  resolveStorePath: () => "/tmp/test-sessions",
-}));
-
-vi.mock("../runtime.js", () => ({
-  defaultRuntime: {
-    log: vi.fn(),
-    error: vi.fn(),
-  },
-}));
-
-describe("system-prompt sub-agent status guard", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+describe("SUBAGENT_STATUS_GUARD_LINE - defensive status guard", () => {
+  it("is a non-empty string", () => {
+    expect(typeof SUBAGENT_STATUS_GUARD_LINE).toBe("string");
+    expect(SUBAGENT_STATUS_GUARD_LINE.length).toBeGreaterThan(0);
   });
 
-  it("includes the [COMPLETED] tag reference in the sub-agent status guard", async () => {
-    let prompt: string;
-    try {
-      const result = await buildAgentSystemPrompt({
-        mode: "full",
-        availableTools: new Set(["exec", "subagents"]),
-        agentId: "main",
-        sessionKey: "agent:main",
-        channel: "zulip",
-        isMinimal: false,
-      });
-      prompt = typeof result === "string" ? result : JSON.stringify(result);
-    } catch {
-      // If mocks are insufficient for full build, skip - guard is tested via grep
-      return;
-    }
-    expect(prompt).toContain("[COMPLETED]");
-    expect(prompt).toContain("Sub-agent status guard");
+  it("instructs the assistant to check live status before claiming a sub-agent is running", () => {
+    // Must reference the tool call required to verify status
+    expect(SUBAGENT_STATUS_GUARD_LINE).toContain("subagents(action=list)");
   });
 
-  it("system prompt guard instructs to check live status before claiming running", async () => {
-    let prompt: string;
-    try {
-      const result = await buildAgentSystemPrompt({
-        mode: "full",
-        availableTools: new Set(["exec", "subagents"]),
-        agentId: "main",
-        sessionKey: "agent:main",
-        channel: "zulip",
-        isMinimal: false,
-      });
-      prompt = typeof result === "string" ? result : JSON.stringify(result);
-    } catch {
-      return;
-    }
-    expect(prompt).toContain("subagents(action=list)");
+  it("references the [COMPLETED] tag as the durable completion signal", () => {
+    // Must reference the [COMPLETED] tag added to internalSummaryMessage
+    expect(SUBAGENT_STATUS_GUARD_LINE).toContain("[COMPLETED]");
+    expect(SUBAGENT_STATUS_GUARD_LINE).toContain("[System Message]");
+  });
+
+  it("forbids claiming a sub-agent is still running without an explicit check", () => {
+    // Must use a directive that prevents guessing status
+    expect(SUBAGENT_STATUS_GUARD_LINE.toLowerCase()).toContain("never claim");
+  });
+
+  it("mentions that the COMPLETED tag in context is authoritative", () => {
+    // The [COMPLETED] tag means a live API call is not needed
+    const lower = SUBAGENT_STATUS_GUARD_LINE.toLowerCase();
+    expect(lower).toMatch(/already finished|has already|already completed/);
   });
 });
