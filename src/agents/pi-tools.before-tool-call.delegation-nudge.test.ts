@@ -374,3 +374,173 @@ describe("delegation nudge hard-threshold behavior", () => {
     resetDiagnosticSessionStateForTest();
   });
 });
+
+// ---------------------------------------------------------------------------
+// blockOnHardLimit: false  →  nudge-only (advisory) mode
+// ---------------------------------------------------------------------------
+
+describe("delegation nudge nudge-only mode (blockOnHardLimit: false)", () => {
+  const SESSION = "agent:main:zulip:channel:nudge-only";
+
+  beforeEach(() => {
+    const hookRunner = {
+      hasHooks: vi.fn(() => false),
+      runBeforeToolCall: vi.fn(),
+    };
+    // oxlint-disable-next-line typescript/no-explicit-any
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
+    mockSpawnSubagentDirect.mockReset();
+    mockCallGateway.mockReset();
+    resetDiagnosticSessionStateForTest();
+    resetDelegationNudgeCounter(SESSION);
+    startDelegationNudgeTurn({ sessionKey: SESSION, isFirstTurn: false });
+  });
+
+  afterEach(() => {
+    resetDelegationNudgeCounter(SESSION);
+    resetDiagnosticSessionStateForTest();
+  });
+
+  const nudgeOnlyConfig = {
+    enabled: true,
+    hardThreshold: 3,
+    firstTurnHardThreshold: 10,
+    softThreshold: 2,
+    exemptTools: [] as string[],
+    blockOnHardLimit: false,
+  } as const;
+
+  it("does NOT block tool calls that exceed hardThreshold when blockOnHardLimit is false", async () => {
+    for (let i = 0; i < 5; i += 1) {
+      const result = await runBeforeToolCallHook({
+        toolName: "read",
+        params: { path: `/tmp/${i}.txt` },
+        ctx: {
+          agentId: "main",
+          sessionKey: SESSION,
+          delegationNudge: nudgeOnlyConfig,
+        },
+      });
+      expect(result.blocked).toBe(false);
+    }
+  });
+
+  it("allows many tool calls without blocking when blockOnHardLimit is false", async () => {
+    for (let i = 0; i < 20; i += 1) {
+      const result = await runBeforeToolCallHook({
+        toolName: "exec",
+        params: { command: `echo ${i}` },
+        ctx: {
+          agentId: "main",
+          sessionKey: SESSION,
+          delegationNudge: nudgeOnlyConfig,
+        },
+      });
+      expect(result.blocked).toBe(false);
+    }
+  });
+
+  it("does NOT attempt auto-delegation when blockOnHardLimit is false", async () => {
+    for (let i = 0; i < 5; i += 1) {
+      await runBeforeToolCallHook({
+        toolName: "read",
+        params: { path: `/tmp/${i}.txt` },
+        ctx: {
+          agentId: "main",
+          sessionKey: SESSION,
+          messageChannel: "zulip",
+          messageTo: "stream:marcel#general",
+          messageThreadId: "general",
+          turnPrompt: "Do something useful",
+          delegationNudge: nudgeOnlyConfig,
+        },
+      });
+    }
+    // No auto-delegation should have been triggered in nudge-only mode.
+    expect(mockSpawnSubagentDirect).not.toHaveBeenCalled();
+  });
+
+  it("still blocks when blockOnHardLimit is true (default behaviour preserved)", async () => {
+    const SESSION_BLOCK = "agent:main:zulip:channel:nudge-block-confirm";
+    startDelegationNudgeTurn({ sessionKey: SESSION_BLOCK, isFirstTurn: false });
+
+    const blockConfig = {
+      enabled: true,
+      hardThreshold: 2,
+      firstTurnHardThreshold: 10,
+      exemptTools: [] as string[],
+      // blockOnHardLimit not set → defaults to true
+    } as const;
+
+    await runBeforeToolCallHook({
+      toolName: "read",
+      params: { path: "/tmp/1.txt" },
+      ctx: { agentId: "main", sessionKey: SESSION_BLOCK, delegationNudge: blockConfig },
+    });
+
+    const blocked = await runBeforeToolCallHook({
+      toolName: "read",
+      params: { path: "/tmp/2.txt" },
+      ctx: { agentId: "main", sessionKey: SESSION_BLOCK, delegationNudge: blockConfig },
+    });
+
+    expect(blocked.blocked).toBe(true);
+    resetDelegationNudgeCounter(SESSION_BLOCK);
+  });
+
+  it("emits an escalated advisory nudge in tool-result message once hardThreshold is reached", () => {
+    const baseMessage = { role: "toolResult" as const, content: "Tool result" };
+
+    // Simulate counter at hardThreshold.
+    for (let i = 0; i < nudgeOnlyConfig.hardThreshold; i += 1) {
+      incrementDelegationNudgeCounter(SESSION);
+    }
+
+    const result = applyDelegationNudgeToToolResultMessage({
+      message: baseMessage,
+      sessionKey: SESSION,
+      config: nudgeOnlyConfig,
+    });
+
+    const serialized = JSON.stringify(result);
+    expect(serialized).toContain("⚠️ DELEGATION NUDGE:");
+    expect(serialized).toContain("[ADVISORY]");
+    expect(serialized).toContain(
+      `${nudgeOnlyConfig.hardThreshold}/${nudgeOnlyConfig.hardThreshold}`,
+    );
+  });
+
+  it("emits escalated advisory nudge on every tool call beyond hardThreshold in nudge-only mode", () => {
+    const baseMessage = { role: "toolResult" as const, content: "Result" };
+
+    // Advance counter to hardThreshold + 2 (beyond it).
+    for (let i = 0; i < nudgeOnlyConfig.hardThreshold + 2; i += 1) {
+      incrementDelegationNudgeCounter(SESSION);
+    }
+
+    const result = applyDelegationNudgeToToolResultMessage({
+      message: baseMessage,
+      sessionKey: SESSION,
+      config: nudgeOnlyConfig,
+    });
+
+    const serialized = JSON.stringify(result);
+    expect(serialized).toContain("⚠️ DELEGATION NUDGE:");
+    expect(serialized).toContain("[ADVISORY]");
+  });
+
+  it("does NOT emit an escalated advisory nudge below softThreshold even in nudge-only mode", () => {
+    const baseMessage = { role: "toolResult" as const, content: "Result" };
+
+    // Counter is at 1 (below both softThreshold=2 and hardThreshold=3).
+    incrementDelegationNudgeCounter(SESSION);
+
+    const result = applyDelegationNudgeToToolResultMessage({
+      message: baseMessage,
+      sessionKey: SESSION,
+      config: nudgeOnlyConfig,
+    });
+
+    expect(JSON.stringify(result)).not.toContain("⚠️ DELEGATION NUDGE:");
+  });
+});
