@@ -22,19 +22,30 @@ permissions:
 jobs:
   create-release:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Determine version
+      - name: Determine and validate version
         id: version
+        # Use environment variables throughout — never interpolate inputs into shell expressions
+        env:
+          GH_REF: ${{ github.ref }}
+          GH_REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            VERSION=${{ github.ref_name }}
+          if [[ "$GH_REF" == refs/tags/* ]]; then
+            VERSION="$GH_REF_NAME"
           else
-            VERSION="${{ github.event.inputs.version }}"
+            VERSION="$INPUT_VERSION"
           fi
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          # Validate version format before use (prevents command injection via workflow_dispatch input)
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::Invalid version format: $VERSION"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node 22
         uses: actions/setup-node@v4
@@ -59,13 +70,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         env:
           VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          # Validate version format before use (prevents command injection)
-          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9]+)?$ ]]; then
-            echo "::error::Invalid version format: $VERSION"
-            exit 1
-          fi
-          git tag "$VERSION"
+        run: git tag "$VERSION"
 
       - name: Push tag (if manual dispatch)
         if: github.event_name == 'workflow_dispatch'
@@ -74,7 +79,8 @@ jobs:
         run: git push origin "$VERSION"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        # Pinned to commit hash for supply-chain security; @v2 = 2.3.2
+        uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: ZulipClaw ${{ steps.version.outputs.version }}
