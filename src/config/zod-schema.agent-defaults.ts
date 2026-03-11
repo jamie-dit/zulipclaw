@@ -114,6 +114,12 @@ export const AgentDefaultsSchema = z
       .object({
         primary: z.string().optional(),
         fallbacks: z.array(z.string()).optional(),
+        overloadFallback: z
+          .string()
+          .optional()
+          .describe(
+            "Dedicated fallback model for provider overload errors (503/529). On overload, retries once with this model before the normal fallback chain.",
+          ),
       })
       .strict()
       .optional(),

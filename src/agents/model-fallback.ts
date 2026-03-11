@@ -24,6 +24,38 @@ import {
 import type { FailoverReason } from "./pi-embedded-helpers.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 
+/** Resolve the dedicated overload fallback model from config, if set. */
+function resolveOverloadFallbackCandidate(params: {
+  cfg: OpenClawConfig | undefined;
+  defaultProvider: string;
+}): ModelCandidate | null {
+  const model = params.cfg?.agents?.defaults?.model as
+    | { overloadFallback?: string }
+    | string
+    | undefined;
+  if (!model || typeof model !== "object") {
+    return null;
+  }
+  const raw = model.overloadFallback?.trim();
+  if (!raw) {
+    return null;
+  }
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg ?? {},
+    defaultProvider: params.defaultProvider,
+  });
+  const resolved = resolveModelRefFromString({
+    raw,
+    defaultProvider: params.defaultProvider,
+    aliasIndex,
+  });
+  return resolved?.ref ?? null;
+}
+
+function isOverloadedReason(reason: FailoverReason | undefined): boolean {
+  return reason === "overloaded";
+}
+
 type ModelCandidate = {
   provider: string;
   model: string;
@@ -95,6 +127,8 @@ type ModelFallbackRunResult<T> = {
   provider: string;
   model: string;
   attempts: FallbackAttempt[];
+  /** True when the successful result came from the dedicated overload fallback model. */
+  overloadFallbackUsed?: boolean;
 };
 
 function resolveImageFallbackCandidates(params: {
@@ -279,13 +313,28 @@ export async function runWithModelFallback<T>(params: {
     model: params.model,
     fallbacksOverride: params.fallbacksOverride,
   });
+
+  // Resolve the dedicated overload fallback model (if configured).
+  const primaryRef = params.cfg
+    ? resolveConfiguredModelRef({
+        cfg: params.cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+      })
+    : null;
+  const overloadCandidate = resolveOverloadFallbackCandidate({
+    cfg: params.cfg,
+    defaultProvider: primaryRef?.provider ?? DEFAULT_PROVIDER,
+  });
+
   const authStore = params.cfg
     ? ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false })
     : null;
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
+  let overloadFallbackUsed = false;
 
-  const hasFallbackCandidates = candidates.length > 1;
+  const hasFallbackCandidates = candidates.length > 1 || overloadCandidate !== null;
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
@@ -328,14 +377,28 @@ export async function runWithModelFallback<T>(params: {
         lastProbeAttempt.set(probeThrottleKey, now);
       }
     }
+
+    const isOverloadCandidate =
+      overloadFallbackUsed &&
+      overloadCandidate !== null &&
+      candidate.provider === overloadCandidate.provider &&
+      candidate.model === overloadCandidate.model;
+
     try {
       const result = await params.run(candidate.provider, candidate.model);
-      return {
+      const runResult: ModelFallbackRunResult<T> = {
         result,
         provider: candidate.provider,
         model: candidate.model,
         attempts,
       };
+      if (isOverloadCandidate) {
+        runResult.overloadFallbackUsed = true;
+        console.log(
+          `[model-fallback] Overload fallback succeeded: ${candidate.provider}/${candidate.model}`,
+        );
+      }
+      return runResult;
     } catch (err) {
       if (shouldRethrowAbort(err)) {
         throw err;
@@ -374,6 +437,56 @@ export async function runWithModelFallback<T>(params: {
         attempt: i + 1,
         total: candidates.length,
       });
+
+      // --- Overload fallback injection ---
+      // When an overloaded error is detected and a dedicated overloadFallback
+      // model is configured, inject it as the immediate next candidate.
+      // Maximum 1 overload fallback retry (don't cascade).
+      if (!overloadFallbackUsed && overloadCandidate && isOverloadedReason(described.reason)) {
+        overloadFallbackUsed = true;
+
+        // Respect model allowlist: if an allowlist is configured and the
+        // overload fallback model is not on it, skip the fallback and let
+        // normal error handling proceed.
+        const allowlist = buildConfiguredAllowlistKeys({
+          cfg: params.cfg,
+          defaultProvider: primaryRef?.provider ?? DEFAULT_PROVIDER,
+        });
+        const overloadKey = modelKey(overloadCandidate.provider, overloadCandidate.model);
+        if (allowlist && !allowlist.has(overloadKey)) {
+          console.warn(
+            `[model-fallback] Overload fallback ${overloadCandidate.provider}/${overloadCandidate.model} ` +
+              `skipped: not in configured model allowlist (agents.defaults.models)`,
+          );
+        } else {
+          const laterIdx = candidates.findIndex(
+            (c, idx) => idx > i && modelKey(c.provider, c.model) === overloadKey,
+          );
+          if (laterIdx === i + 1) {
+            // Already next in line - no-op, priority is already correct.
+            console.log(
+              `[model-fallback] Overload detected on ${candidate.provider}/${candidate.model} - ` +
+                `overload fallback ${overloadCandidate.provider}/${overloadCandidate.model} already next`,
+            );
+          } else if (laterIdx > i + 1) {
+            // Found later in the queue - move it to be immediately next so it
+            // takes priority over regular fallbacks.
+            candidates.splice(laterIdx, 1);
+            candidates.splice(i + 1, 0, overloadCandidate);
+            console.log(
+              `[model-fallback] Overload detected on ${candidate.provider}/${candidate.model} - ` +
+                `moving overload fallback to front: ${overloadCandidate.provider}/${overloadCandidate.model}`,
+            );
+          } else {
+            // Not queued at all - insert right after the current position.
+            candidates.splice(i + 1, 0, overloadCandidate);
+            console.log(
+              `[model-fallback] Overload detected on ${candidate.provider}/${candidate.model} - ` +
+                `injecting overload fallback: ${overloadCandidate.provider}/${overloadCandidate.model}`,
+            );
+          }
+        }
+      }
     }
   }
 

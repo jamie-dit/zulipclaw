@@ -23,6 +23,14 @@ export type AgentModelEntryConfig = {
 export type AgentModelListConfig = {
   primary?: string;
   fallbacks?: string[];
+  /**
+   * Dedicated fallback model for provider overload errors (HTTP 503, 529,
+   * Anthropic overloaded_error, etc.).  When set, overload errors trigger a
+   * single retry with this model before falling through to the normal
+   * fallback chain.  Value is a provider/model string, e.g.
+   * `"openai-codex/gpt-5.4"`.
+   */
+  overloadFallback?: string;
 };
 
 export type AgentContextPruningConfig = {
