@@ -303,8 +303,12 @@ export async function runWebHeartbeatOnce(opts: {
 
 export function resolveHeartbeatRecipients(
   _cfg: ReturnType<typeof loadConfig>,
-  _opts: { to?: string; all?: boolean } = {},
+  opts: { to?: string; all?: boolean } = {},
 ) {
-  // WhatsApp heartbeat recipients are not available in ZulipClaw fork
+  // WhatsApp auto-discovery removed in ZulipClaw fork.
+  // Still honor explicit targets.
+  if (opts.to) {
+    return [opts.to];
+  }
   return [];
 }
