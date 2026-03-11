@@ -9,7 +9,7 @@ overrides:
   form-data: 2.5.4
   qs: 6.14.2
   '@sinclair/typebox': 0.34.48
-  tar: 7.5.9
+  tar: 7.5.11
   tough-cookie: 4.1.3
   basic-ftp: 5.2.0
 
@@ -106,7 +106,7 @@ importers:
         version: 5.2.1
       file-type:
         specifier: ^21.3.0
-        version: 21.3.0
+        version: 21.3.1
       grammy:
         specifier: ^1.40.0
         version: 1.40.0
@@ -165,8 +165,8 @@ importers:
         specifier: 0.1.7-alpha.2
         version: 0.1.7-alpha.2
       tar:
-        specifier: 7.5.9
-        version: 7.5.9
+        specifier: 7.5.11
+        version: 7.5.11
       tslog:
         specifier: ^4.10.2
         version: 4.10.2
@@ -396,7 +396,7 @@ importers:
         version: 3.0.0
       dompurify:
         specifier: ^3.3.1
-        version: 3.3.1
+        version: 3.3.2
       lit:
         specifier: ^3.3.2
         version: 3.3.2
@@ -2626,15 +2626,15 @@ packages:
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
-  '@swc/helpers@0.5.18':
-    resolution: {integrity: sha512-TXTnIcNJQEKwThMMqBXsZ4VGAza6bvN4pa41Rkqoio6QBKMvo+5lexeTMScGCIxtzgQJzElcvIltani+adC5PQ==}
+  '@swc/helpers@0.5.19':
+    resolution: {integrity: sha512-QamiFeIK3txNjgUTNppE6MiG3p7TdninpZu0E0PbqVh1a9FNLT2FRhisaa4NcaX52XVhA5l7Pk58Ft7Sqi/2sA==}
 
-  '@thi.ng/bitstream@2.4.41':
-    resolution: {integrity: sha512-treRzw3+7I1YCuilFtznwT3SGtceS9spUXhyBqeuKNTm4nIfMuvg4fNqx4GgpuS6cGPQNPMUJm0OyzKnSe2Emw==}
+  '@thi.ng/bitstream@2.4.43':
+    resolution: {integrity: sha512-tObOEr+osboa0kqQPk7Ny0E3vVfBRch13YJO5RpaDDSkMQmoXK/pw3yW/6kKJIObt27YQol6pGlOZBvB8MsghQ==}
     engines: {node: '>=18'}
 
-  '@thi.ng/errors@2.6.3':
-    resolution: {integrity: sha512-owkOOKHf7MrAPN2jNpKWDdY/vjtPFiJf6oxZ3jkkhV6ICTu2iY1fXIR2wQ7kVEeybdtb0w24k2PtrU43OYCWdg==}
+  '@thi.ng/errors@2.6.5':
+    resolution: {integrity: sha512-XKfcJzxikMI1+MKSiABcLzI2WIsm4SxGEdLIIQjYqew3q3CoypGe+w5W/DMvMWF6eFWT6ONINbiJ6QMHFTfVzA==}
     engines: {node: '>=18'}
 
   '@tinyhttp/content-disposition@2.2.4':
@@ -2717,8 +2717,8 @@ packages:
   '@types/node@10.17.60':
     resolution: {integrity: sha512-F0KIgDJfy2nA3zMLmWGKxcH2ZVEtCZXHHdOQs2gSaQ27+lNeEfGxzkIw90aXswATX7AZ33tahPbzy6KAfUreVw==}
 
-  '@types/node@20.19.33':
-    resolution: {integrity: sha512-Rs1bVAIdBs5gbTIKza/tgpMuG1k3U/UMJLWecIMxNdJFDMzcM5LOiLVRYh3PilWEYDIeUDv7bpiHPLPsbydGcw==}
+  '@types/node@20.19.37':
+    resolution: {integrity: sha512-8kzdPJ3FsNsVIurqBs7oodNnCEVbni9yUEkaHbgptDACOPW04jimGagZ51E6+lXUwJjgnBw+hyko/lkFWCldqw==}
 
   '@types/node@24.10.13':
     resolution: {integrity: sha512-oH72nZRfDv9lADUBSo104Aq7gPHpQZc4BTx38r9xf9pg5LfP6EzSyH2n7qFmmxRQXh7YlUXODcYsg6PuTDSxGg==}
@@ -3152,8 +3152,8 @@ packages:
     resolution: {integrity: sha512-H4UfQhZyakIjC74I9d34fGYDwk3XpSr17QhEd0Q3I9Xq1CETHo4Hcuo87WyWHpAF1aSLjLRf5lD9ZGX2qStUvg==}
     engines: {node: '>=4.0.0'}
 
-  command-line-usage@7.0.3:
-    resolution: {integrity: sha512-PqMLy5+YGwhMh1wS04mVG44oqDsgyLRSKJBdOo1bnYhMKBW65gZF1dRp2OZRhiTjgUHljy99qkO7bsctLaw35Q==}
+  command-line-usage@7.0.4:
+    resolution: {integrity: sha512-85UdvzTNx/+s5CkSgBm/0hzP80RFHAa7PsfeADE5ezZF3uHz3/Tqj9gIKGT9PTtpycc3Ua64T0oVulGfKxzfqg==}
     engines: {node: '>=12.20.0'}
 
   commander@10.0.1:
@@ -3270,8 +3270,9 @@ packages:
     resolution: {integrity: sha512-cgwlv/1iFQiFnU96XXgROh8xTeetsnJiDsTc7TYCLFd9+/WNkIqPTxiM/8pSd8VIrhXGTf1Ny1q1hquVqDJB5w==}
     engines: {node: '>= 4'}
 
-  dompurify@3.3.1:
-    resolution: {integrity: sha512-qkdCKzLNtrgPFP1Vo+98FRzJnBRGe4ffyCea9IwHB1fyxPOeNTHpLKYGd4Uk9xvNoH0ZoOjwZxNptyMwqrId1Q==}
+  dompurify@3.3.2:
+    resolution: {integrity: sha512-6obghkliLdmKa56xdbLOpUZ43pAR6xFy1uOrxBaIDjT+yaRuuybLjGS9eVBoSR/UPU5fq3OXClEHLJNGvbxKpQ==}
+    engines: {node: '>=20'}
 
   domutils@3.2.2:
     resolution: {integrity: sha512-6kZKyUajlDuqlHKVX1w7gyslj9MPIXzIFiz/rGu35uC1wMi+kMhQwGhl4lt9unC9Vb9INnY9Z3/ZA3+FhASLaw==}
@@ -3434,8 +3435,8 @@ packages:
     resolution: {integrity: sha512-7yAQpD2UMJzLi1Dqv7qFYnPbaPx7ZfFK6PiIxQ4PfkGPyNyl2Ugx+a/umUonmKqjhM4DnfbMvdX6otXq83soQQ==}
     engines: {node: ^12.20 || >= 14.13}
 
-  file-type@21.3.0:
-    resolution: {integrity: sha512-8kPJMIGz1Yt/aPEwOsrR97ZyZaD1Iqm8PClb1nYFclUCkBi0Ma5IsYNQzvSFS9ib51lWyIw5mIT9rWzI/xjpzA==}
+  file-type@21.3.1:
+    resolution: {integrity: sha512-SrzXX46I/zsRDjTb82eucsGg0ODq2NpGDp4HcsFKApPy8P8vACjpJRDoGGMfEzhFC0ry61ajd7f72J3603anBA==}
     engines: {node: '>=20'}
 
   filename-reserved-regex@3.0.0:
@@ -4035,8 +4036,8 @@ packages:
   minimist@1.2.8:
     resolution: {integrity: sha512-2yyAR8qBkN3YuheJanUpWC5U3bb5osDywNB8RzDVlDwDHbocAJveqqj1u8+SVD7jkWT4yvsHCpWqqWqAxb0zCA==}
 
-  minipass@7.1.2:
-    resolution: {integrity: sha512-qOOzS1cBTWYF4BH8fVePDBOO9iptMnGUEZwNc/cMWnTV2nVLZ7VoNWEPHkYczZA0pdoA7dl6e7FL659nX9S2aw==}
+  minipass@7.1.3:
+    resolution: {integrity: sha512-tEBHqDnIoM/1rXME1zgka9g6Q2lcoCkxHLuc7ODJ5BxbP5d4c2Z5cGgtXAku59200Cx7diuHTOYfSBD8n6mm8A==}
     engines: {node: '>=16 || 14 >=14.17'}
 
   minizlib@3.1.0:
@@ -4763,8 +4764,8 @@ packages:
     resolution: {integrity: sha512-iK5/YhZxq5GO5z8wb0bY1317uDF3Zjpha0QFFLA8/trAoiLbQD0HUbMesEaxyzUgDxi2QlcbM8IvqOlEjgoXBA==}
     engines: {node: '>=12.17'}
 
-  tar@7.5.9:
-    resolution: {integrity: sha512-BTLcK0xsDh2+PUe9F6c2TlRp4zOOBMTkoQHQIWSIzI0R7KG46uEwq4OPk2W7bZcprBMsuaeFsqwYr7pjh6CuHg==}
+  tar@7.5.11:
+    resolution: {integrity: sha512-ChjMH33/KetonMTAtpYdgUFr0tbz69Fp2v7zWxQfYZX4g5ZN2nOBXm1R2xyA+lMIKrLKIoKAwFj93jE/avX9cQ==}
     engines: {node: '>=18'}
 
   thenify-all@1.6.0:
@@ -6029,7 +6030,7 @@ snapshots:
 
   '@isaacs/fs-minipass@4.0.1':
     dependencies:
-      minipass: 7.1.2
+      minipass: 7.1.3
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
@@ -6099,7 +6100,7 @@ snapshots:
 
   '@larksuiteoapi/node-sdk@1.59.0':
     dependencies:
-      axios: 1.13.5(debug@4.4.3)
+      axios: 1.13.5
       lodash.identity: 3.0.0
       lodash.merge: 4.6.2
       lodash.pickby: 4.6.0
@@ -6115,7 +6116,7 @@ snapshots:
     dependencies:
       '@types/node': 24.10.13
     optionalDependencies:
-      axios: 1.13.5(debug@4.4.3)
+      axios: 1.13.5
     transitivePeerDependencies:
       - debug
 
@@ -6256,7 +6257,7 @@ snapshots:
       chalk: 5.6.2
       cli-highlight: 2.1.11
       diff: 8.0.3
-      file-type: 21.3.0
+      file-type: 21.3.1
       glob: 13.0.5
       hosted-git-info: 9.0.2
       ignore: 7.0.5
@@ -7196,7 +7197,7 @@ snapshots:
       '@slack/types': 2.20.0
       '@slack/web-api': 7.14.1
       '@types/express': 5.0.6
-      axios: 1.13.5(debug@4.4.3)
+      axios: 1.13.5
       express: 5.2.1
       path-to-regexp: 8.3.0
       raw-body: 3.0.2
@@ -7242,7 +7243,7 @@ snapshots:
       '@slack/types': 2.20.0
       '@types/node': 25.2.3
       '@types/retry': 0.12.0
-      axios: 1.13.5(debug@4.4.3)
+      axios: 1.13.5
       eventemitter3: 5.0.4
       form-data: 2.5.4
       is-electron: 2.2.2
@@ -7559,16 +7560,16 @@ snapshots:
 
   '@standard-schema/spec@1.1.0': {}
 
-  '@swc/helpers@0.5.18':
+  '@swc/helpers@0.5.19':
     dependencies:
       tslib: 2.8.1
 
-  '@thi.ng/bitstream@2.4.41':
+  '@thi.ng/bitstream@2.4.43':
     dependencies:
-      '@thi.ng/errors': 2.6.3
+      '@thi.ng/errors': 2.6.5
     optional: true
 
-  '@thi.ng/errors@2.6.3':
+  '@thi.ng/errors@2.6.5':
     optional: true
 
   '@tinyhttp/content-disposition@2.2.4': {}
@@ -7657,7 +7658,7 @@ snapshots:
 
   '@types/node@10.17.60': {}
 
-  '@types/node@20.19.33':
+  '@types/node@20.19.37':
     dependencies:
       undici-types: 6.21.0
 
@@ -7908,12 +7909,12 @@ snapshots:
 
   apache-arrow@18.1.0:
     dependencies:
-      '@swc/helpers': 0.5.18
+      '@swc/helpers': 0.5.19
       '@types/command-line-args': 5.2.3
       '@types/command-line-usage': 5.0.4
-      '@types/node': 20.19.33
+      '@types/node': 20.19.37
       command-line-args: 5.2.1
-      command-line-usage: 7.0.3
+      command-line-usage: 7.0.4
       flatbuffers: 24.12.23
       json-bignum: 0.0.3
       tslib: 2.8.1
@@ -7978,6 +7979,14 @@ snapshots:
 
   audio-type@2.2.1:
     optional: true
+
+  axios@1.13.5:
+    dependencies:
+      follow-redirects: 1.15.11
+      form-data: 2.5.4
+      proxy-from-env: 1.1.0
+    transitivePeerDependencies:
+      - debug
 
   axios@1.13.5(debug@4.4.3):
     dependencies:
@@ -8124,7 +8133,7 @@ snapshots:
       npmlog: 6.0.2
       rc: 1.2.8
       semver: 7.7.4
-      tar: 7.5.9
+      tar: 7.5.11
       url-join: 4.0.1
       which: 2.0.2
       yargs: 17.7.2
@@ -8153,7 +8162,7 @@ snapshots:
       lodash.camelcase: 4.3.0
       typical: 4.0.0
 
-  command-line-usage@7.0.3:
+  command-line-usage@7.0.4:
     dependencies:
       array-back: 6.2.2
       chalk-template: 0.4.0
@@ -8242,7 +8251,7 @@ snapshots:
     dependencies:
       domelementtype: 2.3.0
 
-  dompurify@3.3.1:
+  dompurify@3.3.2:
     optionalDependencies:
       '@types/trusted-types': 2.0.7
 
@@ -8418,7 +8427,7 @@ snapshots:
       node-domexception: 1.0.0
       web-streams-polyfill: 3.3.3
 
-  file-type@21.3.0:
+  file-type@21.3.1:
     dependencies:
       '@tokenizer/inflate': 0.4.1
       strtok3: 10.3.4
@@ -8449,6 +8458,8 @@ snapshots:
       array-back: 3.1.0
 
   flatbuffers@24.12.23: {}
+
+  follow-redirects@1.15.11: {}
 
   follow-redirects@1.15.11(debug@4.4.3):
     optionalDependencies:
@@ -8557,14 +8568,14 @@ snapshots:
       foreground-child: 3.3.1
       jackspeak: 3.4.3
       minimatch: 9.0.5
-      minipass: 7.1.2
+      minipass: 7.1.3
       package-json-from-dist: 1.0.1
       path-scurry: 1.11.1
 
   glob@13.0.5:
     dependencies:
       minimatch: 10.2.1
-      minipass: 7.1.2
+      minipass: 7.1.3
       path-scurry: 2.0.1
 
   google-auth-library@10.5.0:
@@ -9031,11 +9042,11 @@ snapshots:
 
   minimist@1.2.8: {}
 
-  minipass@7.1.2: {}
+  minipass@7.1.3: {}
 
   minizlib@3.1.0:
     dependencies:
-      minipass: 7.1.2
+      minipass: 7.1.3
 
   module-details-from-path@1.0.4: {}
 
@@ -9054,7 +9065,7 @@ snapshots:
       '@tokenizer/token': 0.3.0
       content-type: 1.0.5
       debug: 4.4.3
-      file-type: 21.3.0
+      file-type: 21.3.1
       media-typer: 1.1.0
       strtok3: 10.3.4
       token-types: 6.1.2
@@ -9370,12 +9381,12 @@ snapshots:
   path-scurry@1.11.1:
     dependencies:
       lru-cache: 10.4.3
-      minipass: 7.1.2
+      minipass: 7.1.3
 
   path-scurry@2.0.1:
     dependencies:
       lru-cache: 11.2.6
-      minipass: 7.1.2
+      minipass: 7.1.3
 
   path-to-regexp@8.3.0: {}
 
@@ -9527,7 +9538,7 @@ snapshots:
 
   qoa-format@1.0.1:
     dependencies:
-      '@thi.ng/bitstream': 2.4.41
+      '@thi.ng/bitstream': 2.4.43
     optional: true
 
   qrcode-terminal@0.12.0: {}
@@ -9966,11 +9977,11 @@ snapshots:
       array-back: 6.2.2
       wordwrapjs: 5.1.1
 
-  tar@7.5.9:
+  tar@7.5.11:
     dependencies:
       '@isaacs/fs-minipass': 4.0.1
       chownr: 3.0.0
-      minipass: 7.1.2
+      minipass: 7.1.3
       minizlib: 3.1.0
       yallist: 5.0.0
 
