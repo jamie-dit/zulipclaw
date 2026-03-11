@@ -287,4 +287,110 @@ describe("runWithModelFallback – overload fallback", () => {
     expect(result.attempts[0]?.provider).toBe("anthropic");
     expect(result.attempts[0]?.model).toBe("claude-sonnet-4-6");
   });
+
+  it("skips overload fallback when it is not in the model allowlist", async () => {
+    // Config with an allowlist (agents.defaults.models) that does NOT include the overload fallback
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-sonnet-4-6",
+            fallbacks: ["openai/gpt-4.1-mini"],
+            overloadFallback: "openai-codex/gpt-5.4",
+          },
+          models: {
+            "anthropic/claude-sonnet-4-6": {},
+            "openai/gpt-4.1-mini": {},
+            // Note: openai-codex/gpt-5.4 is NOT in the allowlist
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(makeOverloadError(529, "overloaded"))
+      .mockResolvedValueOnce("ok from regular fallback");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      run,
+    });
+
+    expect(result.result).toBe("ok from regular fallback");
+    expect(result.overloadFallbackUsed).toBeUndefined();
+    // Should go primary -> regular fallback (NOT overload fallback)
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]?.[0]).toBe("openai");
+    expect(run.mock.calls[1]?.[1]).toBe("gpt-4.1-mini");
+
+    // Should have logged a warning about the allowlist skip
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("skipped: not in configured model allowlist"),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("uses overload fallback when it IS in the model allowlist", async () => {
+    // Config with an allowlist that includes the overload fallback
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-sonnet-4-6",
+            fallbacks: ["openai/gpt-4.1-mini"],
+            overloadFallback: "openai-codex/gpt-5.4",
+          },
+          models: {
+            "anthropic/claude-sonnet-4-6": {},
+            "openai/gpt-4.1-mini": {},
+            "openai-codex/gpt-5.4": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(makeOverloadError(529, "overloaded"))
+      .mockResolvedValueOnce("ok from overload fallback");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      run,
+    });
+
+    expect(result.result).toBe("ok from overload fallback");
+    expect(result.overloadFallbackUsed).toBe(true);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]?.[0]).toBe("openai-codex");
+    expect(run.mock.calls[1]?.[1]).toBe("gpt-5.4");
+  });
+
+  it("uses overload fallback when no allowlist is configured (no models map)", async () => {
+    // Config without agents.defaults.models - no allowlist enforcement
+    const cfg = makeOverloadCfg("openai-codex/gpt-5.4");
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(makeOverloadError(529, "overloaded"))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(result.overloadFallbackUsed).toBe(true);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]?.[0]).toBe("openai-codex");
+    expect(run.mock.calls[1]?.[1]).toBe("gpt-5.4");
+  });
 });

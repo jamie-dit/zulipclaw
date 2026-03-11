@@ -107,6 +107,11 @@ function collectModels(cfg: OpenClawConfig): ModelRef[] {
   for (const f of cfg.agents?.defaults?.model?.fallbacks ?? []) {
     addModel(out, f, "agents.defaults.model.fallbacks");
   }
+  addModel(
+    out,
+    cfg.agents?.defaults?.model?.overloadFallback,
+    "agents.defaults.model.overloadFallback",
+  );
   addModel(out, cfg.agents?.defaults?.imageModel?.primary, "agents.defaults.imageModel.primary");
   for (const f of cfg.agents?.defaults?.imageModel?.fallbacks ?? []) {
     addModel(out, f, "agents.defaults.imageModel.fallbacks");
@@ -130,6 +135,11 @@ function collectModels(cfg: OpenClawConfig): ModelRef[] {
           addModel(out, f, `agents.list.${id}.model.fallbacks`);
         }
       }
+      addModel(
+        out,
+        (model as { overloadFallback?: unknown }).overloadFallback,
+        `agents.list.${id}.model.overloadFallback`,
+      );
     }
   }
   return out;

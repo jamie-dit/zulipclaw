@@ -444,17 +444,32 @@ export async function runWithModelFallback<T>(params: {
       // Maximum 1 overload fallback retry (don't cascade).
       if (!overloadFallbackUsed && overloadCandidate && isOverloadedReason(described.reason)) {
         overloadFallbackUsed = true;
-        const key = modelKey(overloadCandidate.provider, overloadCandidate.model);
-        const alreadyQueued = candidates.some(
-          (c, idx) => idx > i && modelKey(c.provider, c.model) === key,
-        );
-        if (!alreadyQueued) {
-          // Insert right after the current position so it's tried next.
-          candidates.splice(i + 1, 0, overloadCandidate);
-          console.log(
-            `[model-fallback] Overload detected on ${candidate.provider}/${candidate.model} - ` +
-              `injecting overload fallback: ${overloadCandidate.provider}/${overloadCandidate.model}`,
+
+        // Respect model allowlist: if an allowlist is configured and the
+        // overload fallback model is not on it, skip the fallback and let
+        // normal error handling proceed.
+        const allowlist = buildConfiguredAllowlistKeys({
+          cfg: params.cfg,
+          defaultProvider: primaryRef?.provider ?? DEFAULT_PROVIDER,
+        });
+        const overloadKey = modelKey(overloadCandidate.provider, overloadCandidate.model);
+        if (allowlist && !allowlist.has(overloadKey)) {
+          console.warn(
+            `[model-fallback] Overload fallback ${overloadCandidate.provider}/${overloadCandidate.model} ` +
+              `skipped: not in configured model allowlist (agents.defaults.models)`,
           );
+        } else {
+          const alreadyQueued = candidates.some(
+            (c, idx) => idx > i && modelKey(c.provider, c.model) === overloadKey,
+          );
+          if (!alreadyQueued) {
+            // Insert right after the current position so it's tried next.
+            candidates.splice(i + 1, 0, overloadCandidate);
+            console.log(
+              `[model-fallback] Overload detected on ${candidate.provider}/${candidate.model} - ` +
+                `injecting overload fallback: ${overloadCandidate.provider}/${overloadCandidate.model}`,
+            );
+          }
         }
       }
     }
