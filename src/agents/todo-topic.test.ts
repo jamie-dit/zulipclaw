@@ -6,6 +6,7 @@ import {
   getActiveTodoSnapshot,
   initializeTodoTopicSupport,
   maybeApplyTodoProgressFromSubagent,
+  parseTopicKey,
   syncTodoBackingMessage,
   _resetTopicForTests,
 } from "./todo-topic.js";
@@ -61,6 +62,36 @@ describe("todo-topic", () => {
         sessionKey: "agent:main:zulip:channel:marcel-zulipclaw#todo list tracking",
       }),
     ).toBe("stream:marcel-zulipclaw#todo list tracking");
+  });
+
+  describe("parseTopicKey", () => {
+    it("parses standard stream:X#Y format", () => {
+      expect(parseTopicKey("stream:marcel#seats.aero")).toEqual({
+        stream: "marcel",
+        topic: "seats.aero",
+      });
+    });
+
+    it("parses zulip:stream:X#Y format (with zulip: prefix)", () => {
+      expect(parseTopicKey("zulip:stream:marcel#seats.aero")).toEqual({
+        stream: "marcel",
+        topic: "seats.aero",
+      });
+    });
+
+    it("parses zulip:stream:X#Y format with multi-word topic", () => {
+      expect(parseTopicKey("zulip:stream:marcel-zulipclaw#todo list tracking")).toEqual({
+        stream: "marcel-zulipclaw",
+        topic: "todo list tracking",
+      });
+    });
+
+    it("returns null for unrecognised formats", () => {
+      expect(parseTopicKey("some:random:key")).toBeNull();
+      expect(parseTopicKey("")).toBeNull();
+      expect(parseTopicKey("stream:#no-stream")).toBeNull();
+      expect(parseTopicKey("stream:no-topic#")).toBeNull();
+    });
   });
 
   it("applies subagent ack/progress events to assigned item", async () => {

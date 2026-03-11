@@ -24,7 +24,7 @@ const log = createSubsystemLogger("todo:topic");
 let initialized = false;
 
 function isZulipTopicKey(value: string): boolean {
-  return /^stream:[^#]+#.+$/i.test(value.trim());
+  return /^(?:zulip:)?stream:[^#]+#.+$/i.test(value.trim());
 }
 
 export function parseTopicKey(topicKey: string): { stream: string; topic: string } | null {
@@ -32,7 +32,12 @@ export function parseTopicKey(topicKey: string): { stream: string; topic: string
   if (!isZulipTopicKey(trimmed)) {
     return null;
   }
-  const body = trimmed.slice("stream:".length);
+  // Strip optional "zulip:" prefix, then "stream:" prefix
+  let body = trimmed;
+  if (/^zulip:/i.test(body)) {
+    body = body.slice("zulip:".length);
+  }
+  body = body.slice("stream:".length);
   const index = body.indexOf("#");
   if (index <= 0 || index >= body.length - 1) {
     return null;
