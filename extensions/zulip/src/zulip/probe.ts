@@ -20,6 +20,7 @@ export async function probeZulip(
   email: string,
   apiKey: string,
   timeoutMs?: number,
+  userAgent?: string,
 ): Promise<ZulipProbeResult> {
   const normalized = normalizeZulipBaseUrl(baseUrl);
   if (!normalized) {
@@ -30,8 +31,12 @@ export async function probeZulip(
 
   try {
     const authHeader = Buffer.from(`${email}:${apiKey}`, "utf8").toString("base64");
+    const headers: Record<string, string> = { Authorization: `Basic ${authHeader}` };
+    if (userAgent) {
+      headers["User-Agent"] = userAgent;
+    }
     const res = await fetch(`${normalized}/api/v1/users/me`, {
-      headers: { Authorization: `Basic ${authHeader}` },
+      headers,
       signal: controller.signal,
     });
     if (!res.ok) {

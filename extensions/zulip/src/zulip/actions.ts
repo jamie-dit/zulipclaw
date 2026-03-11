@@ -1,9 +1,10 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { getZulipRuntime } from "../runtime.js";
 import { resolveZulipAccount } from "./accounts.js";
 import type { ZulipAuth } from "./client.js";
-import { zulipRequest, zulipRequestWithRetry } from "./client.js";
+import { buildZulipUserAgent, zulipRequest, zulipRequestWithRetry } from "./client.js";
 import { normalizeStreamName } from "./normalize.js";
 import { normalizeTopic } from "./normalize.js";
 import { sendWithReactionButtons, type ReactionButtonOption } from "./reaction-buttons.js";
@@ -131,7 +132,12 @@ function resolveAuth(
     throw new Error("Missing Zulip credentials");
   }
   return {
-    auth: { baseUrl: account.baseUrl, email: account.email, apiKey: account.apiKey },
+    auth: {
+      baseUrl: account.baseUrl,
+      email: account.email,
+      apiKey: account.apiKey,
+      userAgent: buildZulipUserAgent(getZulipRuntime().version),
+    },
     account,
   };
 }

@@ -19,6 +19,7 @@ import {
   type ResolvedZulipAccount,
 } from "./zulip/accounts.js";
 import { zulipMessageActions } from "./zulip/actions.js";
+import { buildZulipUserAgent } from "./zulip/client.js";
 import { monitorZulipProvider } from "./zulip/monitor.js";
 import { normalizeStreamName, normalizeTopic } from "./zulip/normalize.js";
 import { sendZulipStreamMessage } from "./zulip/send.js";
@@ -182,6 +183,7 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
         baseUrl: account.baseUrl ?? "",
         email: account.email ?? "",
         apiKey: account.apiKey ?? "",
+        userAgent: buildZulipUserAgent(getZulipRuntime().version),
       };
       const result = await (
         await import("./zulip/send.js")
@@ -213,6 +215,7 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
         baseUrl: account.baseUrl ?? "",
         email: account.email ?? "",
         apiKey: account.apiKey ?? "",
+        userAgent: buildZulipUserAgent(getZulipRuntime().version),
       };
 
       const resolved = await resolveOutboundMedia({
@@ -284,7 +287,12 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
       try {
         const { zulipRequest } = await import("./zulip/client.js");
         const res = await zulipRequest({
-          auth: { baseUrl: account.baseUrl, email: account.email, apiKey: account.apiKey },
+          auth: {
+            baseUrl: account.baseUrl,
+            email: account.email,
+            apiKey: account.apiKey,
+            userAgent: buildZulipUserAgent(getZulipRuntime().version),
+          },
           method: "GET",
           path: "/api/v1/users/me",
         });

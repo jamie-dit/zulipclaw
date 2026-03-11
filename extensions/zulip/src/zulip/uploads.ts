@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { resolveChannelMediaMaxBytes, type OpenClawConfig } from "openclaw/plugin-sdk";
 import { getZulipRuntime } from "../runtime.js";
 import type { ZulipApiSuccess, ZulipAuth } from "./client.js";
+import { buildZulipUserAgent } from "./client.js";
 import { normalizeZulipBaseUrl } from "./normalize.js";
 
 const HTTP_URL_RE = /^https?:\/\//i;
@@ -97,10 +98,14 @@ function buildZulipAuthFetch(params: {
     "base64",
   );
   const includeAuthForOrigin = params.includeAuthForOrigin;
+  const userAgent = params.auth.userAgent;
   return async (input, init) => {
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const headers = new Headers(init?.headers);
+    if (userAgent) {
+      headers.set("User-Agent", userAgent);
+    }
     if (includeAuthForOrigin) {
       try {
         if (new URL(url).origin === includeAuthForOrigin) {
@@ -220,11 +225,13 @@ export async function uploadZulipFile(params: {
   });
   form.append("file", blob, params.filename);
 
+  const uploadHeaders: Record<string, string> = { Authorization: `Basic ${token}` };
+  if (params.auth.userAgent) {
+    uploadHeaders["User-Agent"] = params.auth.userAgent;
+  }
   const res = await fetch(url, {
     method: "POST",
-    headers: {
-      Authorization: `Basic ${token}`,
-    },
+    headers: uploadHeaders,
     body: form,
     signal: params.abortSignal,
   });

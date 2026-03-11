@@ -15,7 +15,7 @@ import {
 } from "./accounts.js";
 import type { ZulipAuth } from "./client.js";
 import type { ZulipHttpError } from "./client.js";
-import { zulipRequest } from "./client.js";
+import { buildZulipUserAgent, zulipRequest } from "./client.js";
 import { createDedupeCache } from "./dedupe.js";
 import {
   buildZulipCheckpointId,
@@ -373,6 +373,7 @@ function buildAuth(account: ResolvedZulipAccount): ZulipAuth {
     baseUrl: account.baseUrl,
     email: account.email,
     apiKey: account.apiKey,
+    userAgent: buildZulipUserAgent(getZulipRuntime().version),
   };
 }
 
