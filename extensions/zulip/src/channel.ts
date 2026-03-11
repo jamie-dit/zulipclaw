@@ -20,7 +20,7 @@ import {
 } from "./zulip/accounts.js";
 import { zulipMessageActions } from "./zulip/actions.js";
 import { monitorZulipProvider } from "./zulip/monitor.js";
-import { normalizeStreamName, normalizeTopic } from "./zulip/normalize.js";
+import { canonicalizeStreamName, normalizeStreamName, normalizeTopic } from "./zulip/normalize.js";
 import { sendZulipStreamMessage } from "./zulip/send.js";
 import { parseZulipTarget } from "./zulip/targets.js";
 import { resolveOutboundMedia, uploadZulipFile } from "./zulip/uploads.js";
@@ -163,7 +163,13 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
         };
       }
       const account = cfg ? resolveZulipAccount({ cfg, accountId }) : null;
-      const stream = normalizeStreamName(parsed.stream);
+      const rawStream = normalizeStreamName(parsed.stream);
+      // Canonicalize the stream name against the configured streams allowlist.
+      // This corrects LLM hallucinations where the model reproduces a near-miss
+      // stream name (e.g. "marvel-dreamit" instead of "marcel-dreamit").
+      const { name: stream } = account?.streams?.length
+        ? canonicalizeStreamName(rawStream, account.streams)
+        : { name: rawStream, corrected: false };
       const topic = normalizeTopic(parsed.topic) || account?.defaultTopic || "general chat";
       if (!stream) {
         return { ok: false, error: new Error("Missing Zulip stream name") };

@@ -177,4 +177,84 @@ describe("zulipPlugin", () => {
     });
     expect(requireMention).toBe(true);
   });
+
+  describe("resolveTarget — stream name canonicalization (hallucination guard)", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        zulip: {
+          enabled: true,
+          baseUrl: "https://zulip.example.com",
+          email: "bot@example.com",
+          apiKey: "key",
+          streams: ["marcel-dreamit"],
+          defaultTopic: "general chat",
+        },
+      },
+    };
+
+    it("accepts a correctly-spelled stream name unchanged", () => {
+      const res = zulipPlugin.outbound?.resolveTarget?.({
+        cfg,
+        to: "stream:marcel-dreamit#dream mta",
+        accountId: "default",
+        mode: "explicit",
+      });
+      expect(res?.ok).toBe(true);
+      if (res && res.ok) {
+        expect(res.to).toBe("stream:marcel-dreamit#dream mta");
+      }
+    });
+
+    it("corrects a 1-char hallucination (marvel → marcel) when stream is in streams allowlist", () => {
+      const res = zulipPlugin.outbound?.resolveTarget?.({
+        cfg,
+        to: "stream:marvel-dreamit#dream mta",
+        accountId: "default",
+        mode: "explicit",
+      });
+      expect(res?.ok).toBe(true);
+      if (res && res.ok) {
+        // Should be corrected to the configured stream name
+        expect(res.to).toBe("stream:marcel-dreamit#dream mta");
+      }
+    });
+
+    it("passes through an unknown stream when no close match exists", () => {
+      const res = zulipPlugin.outbound?.resolveTarget?.({
+        cfg,
+        to: "stream:totally-unrelated-stream#some-topic",
+        accountId: "default",
+        mode: "explicit",
+      });
+      expect(res?.ok).toBe(true);
+      if (res && res.ok) {
+        // No close match — stream should pass through as-is
+        expect(res.to).toBe("stream:totally-unrelated-stream#some-topic");
+      }
+    });
+
+    it("does not canonicalize when streams list is empty", () => {
+      const cfgNoStreams: OpenClawConfig = {
+        channels: {
+          zulip: {
+            enabled: true,
+            baseUrl: "https://zulip.example.com",
+            email: "bot@example.com",
+            apiKey: "key",
+          },
+        },
+      };
+      const res = zulipPlugin.outbound?.resolveTarget?.({
+        cfg: cfgNoStreams,
+        to: "stream:marvel-dreamit#dream mta",
+        accountId: "default",
+        mode: "explicit",
+      });
+      expect(res?.ok).toBe(true);
+      if (res && res.ok) {
+        // No streams allowlist — pass through uncorrected
+        expect(res.to).toBe("stream:marvel-dreamit#dream mta");
+      }
+    });
+  });
 });

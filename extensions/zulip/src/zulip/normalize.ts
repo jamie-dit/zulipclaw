@@ -19,6 +19,88 @@ export function normalizeTopic(raw?: string | null): string {
   return value;
 }
 
+/**
+ * Compute the Levenshtein edit-distance between two strings.
+ * Used internally to detect near-miss stream name hallucinations.
+ */
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+
+  const prev: number[] = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const curr: number[] = [i];
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(
+        (curr[j - 1] ?? 0) + 1, // insertion
+        (prev[j] ?? 0) + 1, // deletion
+        (prev[j - 1] ?? 0) + cost, // substitution
+      );
+    }
+    prev.splice(0, prev.length, ...curr);
+  }
+  return prev[b.length] ?? 0;
+}
+
+/**
+ * Canonicalize a stream name against a list of known configured streams.
+ *
+ * If the candidate stream is in the list (case-insensitive), the canonical
+ * (configured) casing is returned unchanged.
+ *
+ * If the candidate is NOT in the list but is within `maxDistance` edits of
+ * exactly one configured stream, that stream's canonical name is returned.
+ * This guards against LLM typos/hallucinations (e.g. "marvel-dreamit" →
+ * "marcel-dreamit").
+ *
+ * If no close-enough match exists, the original candidate is returned so that
+ * existing behaviour (deliver to whatever stream was specified) is preserved.
+ *
+ * @param candidate   The stream name to check (already stripped of "#" prefix).
+ * @param knownStreams The `streams` list from the resolved Zulip account config.
+ * @param maxDistance Maximum edit distance to consider a "close" match (default 2).
+ * @returns           `{ name, corrected }` — name is the (possibly corrected) stream
+ *                    name; corrected is true when a substitution was made.
+ */
+export function canonicalizeStreamName(
+  candidate: string,
+  knownStreams: string[],
+  maxDistance = 2,
+): { name: string; corrected: boolean } {
+  if (!candidate || knownStreams.length === 0) {
+    return { name: candidate, corrected: false };
+  }
+
+  const lower = candidate.toLowerCase();
+
+  // 1. Exact case-insensitive match — return canonical casing.
+  const exact = knownStreams.find((s) => s.toLowerCase() === lower);
+  if (exact !== undefined) {
+    const corrected = exact !== candidate;
+    return { name: exact, corrected };
+  }
+
+  // 2. Find the closest configured stream within the distance threshold.
+  let bestName: string | undefined;
+  let bestDist = Infinity;
+  for (const known of knownStreams) {
+    const dist = levenshtein(lower, known.toLowerCase());
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestName = known;
+    }
+  }
+
+  if (bestDist <= maxDistance && bestName !== undefined) {
+    return { name: bestName, corrected: true };
+  }
+
+  // 3. No close match — leave as-is to preserve backward compatibility.
+  return { name: candidate, corrected: false };
+}
+
 export function normalizeEmojiName(raw?: string | null): string {
   const value = (raw ?? "").trim();
   if (!value) {

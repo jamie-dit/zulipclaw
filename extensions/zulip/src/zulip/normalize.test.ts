@@ -1,11 +1,76 @@
 import { describe, expect, it } from "vitest";
 import {
+  canonicalizeStreamName,
   ensureBlankLineBeforeTables,
   normalizeEmojiName,
   normalizeStreamName,
   normalizeTopic,
   normalizeZulipBaseUrl,
 } from "./normalize.js";
+
+describe("canonicalizeStreamName", () => {
+  describe("exact match (case-insensitive)", () => {
+    it("returns the configured stream name unchanged when exact match", () => {
+      const result = canonicalizeStreamName("marcel-dreamit", ["marcel-dreamit"]);
+      expect(result).toEqual({ name: "marcel-dreamit", corrected: false });
+    });
+
+    it("returns canonical casing when candidate differs only in case", () => {
+      const result = canonicalizeStreamName("Marcel-Dreamit", ["marcel-dreamit"]);
+      expect(result).toEqual({ name: "marcel-dreamit", corrected: true });
+    });
+  });
+
+  describe("near-miss correction (hallucination guard)", () => {
+    it("corrects a 1-char transposition (marvel → marcel)", () => {
+      const result = canonicalizeStreamName("marvel-dreamit", ["marcel-dreamit"]);
+      expect(result).toEqual({ name: "marcel-dreamit", corrected: true });
+    });
+
+    it("corrects a 1-char substitution in stream name", () => {
+      const result = canonicalizeStreamName("marsel-dreamit", ["marcel-dreamit"]);
+      expect(result).toEqual({ name: "marcel-dreamit", corrected: true });
+    });
+
+    it("corrects a 2-char substitution within threshold", () => {
+      const result = canonicalizeStreamName("marce1-dreamt", ["marcel-dreamit"]);
+      expect(result).toEqual({ name: "marcel-dreamit", corrected: true });
+    });
+
+    it("does NOT correct when distance exceeds threshold (3+ edits)", () => {
+      const result = canonicalizeStreamName("totally-different", ["marcel-dreamit"]);
+      expect(result).toEqual({ name: "totally-different", corrected: false });
+    });
+
+    it("picks the closest of multiple configured streams", () => {
+      const result = canonicalizeStreamName("marvel", ["general", "marcel", "other-stream"]);
+      expect(result).toEqual({ name: "marcel", corrected: true });
+    });
+  });
+
+  describe("edge cases", () => {
+    it("returns candidate unchanged when knownStreams is empty", () => {
+      const result = canonicalizeStreamName("any-stream", []);
+      expect(result).toEqual({ name: "any-stream", corrected: false });
+    });
+
+    it("returns candidate unchanged when candidate is empty", () => {
+      const result = canonicalizeStreamName("", ["marcel-dreamit"]);
+      expect(result).toEqual({ name: "", corrected: false });
+    });
+
+    it("handles a single-char difference (extra letter)", () => {
+      const result = canonicalizeStreamName("marcelx-dreamit", ["marcel-dreamit"]);
+      expect(result).toEqual({ name: "marcel-dreamit", corrected: true });
+    });
+
+    it("does not correct when stream is not in list but distance is fine for a different name", () => {
+      // "dreamit" is 3 edits from "dreamt" — should NOT be corrected
+      const result = canonicalizeStreamName("dreamt", ["dreamithost"], 2);
+      expect(result).toEqual({ name: "dreamt", corrected: false });
+    });
+  });
+});
 
 describe("normalizeZulipBaseUrl", () => {
   it("strips trailing slashes", () => {
