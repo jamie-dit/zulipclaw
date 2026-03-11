@@ -6,6 +6,10 @@ on:
       - 'v*'
   workflow_dispatch:
     inputs:
+      version:
+        description: 'Version tag (e.g. v2026.1.0) — required for manual dispatch'
+        required: true
+        type: string
       prerelease:
         description: 'Mark as pre-release'
         required: false
@@ -50,7 +54,6 @@ jobs:
 
       - name: Run tests
         run: pnpm test:fast
-        continue-on-error: true
 
       - name: Create git tag (if manual dispatch)
         if: github.event_name == 'workflow_dispatch'
