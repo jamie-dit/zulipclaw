@@ -544,11 +544,7 @@ function buildPolicyParams(
   return params;
 }
 
-describe("handleCommands /allowlist", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-});
+// /allowlist tests removed (channels stripped in ZulipClaw fork)
 
 describe("/models command", () => {
   const cfg = {

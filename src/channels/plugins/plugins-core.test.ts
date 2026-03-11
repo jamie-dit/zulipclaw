@@ -19,34 +19,6 @@ import { loadChannelOutboundAdapter } from "./outbound/load.js";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "./types.js";
 import type { BaseProbeResult, BaseTokenResolution } from "./types.js";
 
-describe("channel plugin registry", () => {
-  const emptyRegistry = createTestRegistry([]);
-
-  const _createPlugin = (id: string): ChannelPlugin => ({
-    id,
-    meta: {
-      id,
-      label: id,
-      selectionLabel: id,
-      docsPath: `/channels/${id}`,
-      blurb: "test",
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: {
-      listAccountIds: () => [],
-      resolveAccount: () => ({}),
-    },
-  });
-
-  beforeEach(() => {
-    setActivePluginRegistry(emptyRegistry);
-  });
-
-  afterEach(() => {
-    setActivePluginRegistry(emptyRegistry);
-  });
-});
-
 describe("channel plugin catalog", () => {
   it("includes external catalog entries", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-"));
@@ -210,4 +182,4 @@ describe("resolveChannelConfigWrites", () => {
   });
 });
 
-describe("directory (config-backed)", () => {});
+// directory config-backed tests were removed (channels stripped in ZulipClaw fork)
