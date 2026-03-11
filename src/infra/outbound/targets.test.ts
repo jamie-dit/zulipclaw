@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveSessionDeliveryTarget } from "./targets.js";
+import { resolveHeartbeatDeliveryTarget, resolveSessionDeliveryTarget } from "./targets.js";
 
 describe("resolveSessionDeliveryTarget", () => {
   it("derives implicit delivery from the last route", () => {
@@ -138,7 +138,8 @@ describe("resolveSessionDeliveryTarget", () => {
     });
   });
 
-  it("parses :topic:NNN from explicitTo into threadId", () => {
+  it("keeps :topic:NNN in explicitTo when Telegram is not available", () => {
+    // ZulipClaw: no Telegram channel, so :topic: suffix is not parsed
     const resolved = resolveSessionDeliveryTarget({
       entry: {
         sessionId: "sess-topic",
@@ -150,11 +151,11 @@ describe("resolveSessionDeliveryTarget", () => {
       explicitTo: "63448508:topic:1008013",
     });
 
-    expect(resolved.to).toBe("63448508");
-    expect(resolved.threadId).toBe(1008013);
+    expect(resolved.to).toBe("63448508:topic:1008013");
+    expect(resolved.threadId).toBeUndefined();
   });
 
-  it("parses :topic:NNN even when lastTo is absent", () => {
+  it("keeps :topic:NNN in explicitTo even when lastTo is absent", () => {
     const resolved = resolveSessionDeliveryTarget({
       entry: {
         sessionId: "sess-no-last",
@@ -165,8 +166,8 @@ describe("resolveSessionDeliveryTarget", () => {
       explicitTo: "63448508:topic:1008013",
     });
 
-    expect(resolved.to).toBe("63448508");
-    expect(resolved.threadId).toBe(1008013);
+    expect(resolved.to).toBe("63448508:topic:1008013");
+    expect(resolved.threadId).toBeUndefined();
   });
 
   it("skips :topic: parsing for non-telegram channels", () => {
@@ -201,7 +202,8 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.threadId).toBeUndefined();
   });
 
-  it("explicitThreadId takes priority over :topic: parsed value", () => {
+  it("explicitThreadId is used when :topic: is not parsed", () => {
+    // ZulipClaw: no Telegram topic parsing, so explicitThreadId is used directly
     const resolved = resolveSessionDeliveryTarget({
       entry: {
         sessionId: "sess-priority",
@@ -215,7 +217,7 @@ describe("resolveSessionDeliveryTarget", () => {
     });
 
     expect(resolved.threadId).toBe(42);
-    expect(resolved.to).toBe("63448508");
+    expect(resolved.to).toBe("63448508:topic:1008013");
   });
 
   it("allows heartbeat delivery to Slack DMs and avoids inherited threadId by default", () => {

@@ -561,16 +561,7 @@ vi.mock("../web/outbound.js", () => ({
   sendPollWhatsApp: (...args: unknown[]) =>
     (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
 }));
-vi.mock("../channels/web/index.js", async () => {
-  const actual = await vi.importActual<typeof import("../channels/web/index.js")>(
-    "../channels/web/index.js",
-  );
-  return {
-    ...actual,
-    sendMessageWhatsApp: (...args: unknown[]) =>
-      (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
-  };
-});
+// channels/web module removed in ZulipClaw fork
 vi.mock("../commands/agent.js", () => ({
   agentCommand,
 }));

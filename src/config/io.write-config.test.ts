@@ -131,52 +131,6 @@ describe("config io write", () => {
     });
   });
 
-  it("does not reintroduce Slack/Discord legacy dm.policy defaults when writing", async () => {
-    await withTempHome("openclaw-config-io-", async (home) => {
-      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
-        home,
-        initialConfig: {
-          channels: {
-            discord: {
-              dmPolicy: "pairing",
-              dm: { enabled: true, policy: "pairing" },
-            },
-            slack: {
-              dmPolicy: "pairing",
-              dm: { enabled: true, policy: "pairing" },
-            },
-          },
-          gateway: { port: 18789 },
-        },
-      });
-
-      const next = structuredClone(snapshot.config);
-      // Simulate doctor removing legacy keys while keeping dm enabled.
-      if (next.channels?.discord?.dm && typeof next.channels.discord.dm === "object") {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test helper
-        delete (next.channels.discord.dm as any).policy;
-      }
-      if (next.channels?.slack?.dm && typeof next.channels.slack.dm === "object") {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test helper
-        delete (next.channels.slack.dm as any).policy;
-      }
-
-      await io.writeConfigFile(next);
-
-      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
-        channels?: {
-          discord?: { dm?: Record<string, unknown>; dmPolicy?: unknown };
-          slack?: { dm?: Record<string, unknown>; dmPolicy?: unknown };
-        };
-      };
-
-      expect(persisted.channels?.discord?.dmPolicy).toBe("pairing");
-      expect(persisted.channels?.discord?.dm).toEqual({ enabled: true });
-      expect(persisted.channels?.slack?.dmPolicy).toBe("pairing");
-      expect(persisted.channels?.slack?.dm).toEqual({ enabled: true });
-    });
-  });
-
   it("keeps env refs in arrays when appending entries", async () => {
     await withTempHome("openclaw-config-io-", async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");

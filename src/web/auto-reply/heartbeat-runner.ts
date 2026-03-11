@@ -7,7 +7,7 @@ import {
 } from "../../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN } from "../../auto-reply/tokens.js";
-import { resolveWhatsAppHeartbeatRecipients } from "../../channels/plugins/whatsapp-heartbeat.js";
+// whatsapp-heartbeat module was removed in the ZulipClaw fork
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -302,8 +302,9 @@ export async function runWebHeartbeatOnce(opts: {
 }
 
 export function resolveHeartbeatRecipients(
-  cfg: ReturnType<typeof loadConfig>,
-  opts: { to?: string; all?: boolean } = {},
+  _cfg: ReturnType<typeof loadConfig>,
+  _opts: { to?: string; all?: boolean } = {},
 ) {
-  return resolveWhatsAppHeartbeatRecipients(cfg, opts);
+  // WhatsApp heartbeat recipients are not available in ZulipClaw fork
+  return [];
 }
