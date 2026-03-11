@@ -459,11 +459,26 @@ export async function runWithModelFallback<T>(params: {
               `skipped: not in configured model allowlist (agents.defaults.models)`,
           );
         } else {
-          const alreadyQueued = candidates.some(
+          const laterIdx = candidates.findIndex(
             (c, idx) => idx > i && modelKey(c.provider, c.model) === overloadKey,
           );
-          if (!alreadyQueued) {
-            // Insert right after the current position so it's tried next.
+          if (laterIdx === i + 1) {
+            // Already next in line - no-op, priority is already correct.
+            console.log(
+              `[model-fallback] Overload detected on ${candidate.provider}/${candidate.model} - ` +
+                `overload fallback ${overloadCandidate.provider}/${overloadCandidate.model} already next`,
+            );
+          } else if (laterIdx > i + 1) {
+            // Found later in the queue - move it to be immediately next so it
+            // takes priority over regular fallbacks.
+            candidates.splice(laterIdx, 1);
+            candidates.splice(i + 1, 0, overloadCandidate);
+            console.log(
+              `[model-fallback] Overload detected on ${candidate.provider}/${candidate.model} - ` +
+                `moving overload fallback to front: ${overloadCandidate.provider}/${overloadCandidate.model}`,
+            );
+          } else {
+            // Not queued at all - insert right after the current position.
             candidates.splice(i + 1, 0, overloadCandidate);
             console.log(
               `[model-fallback] Overload detected on ${candidate.provider}/${candidate.model} - ` +

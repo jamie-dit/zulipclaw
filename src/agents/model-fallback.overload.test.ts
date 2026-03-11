@@ -246,13 +246,14 @@ describe("runWithModelFallback – overload fallback", () => {
     expect(run.mock.calls[1]?.[1]).toBe("gpt-4.1-mini");
   });
 
-  it("skips overload fallback injection when it is already in the fallback chain", async () => {
-    // When overloadFallback is the same as a regular fallback
+  it("moves overload fallback to front when it appears later in the fallback chain", async () => {
+    // overloadFallback is gpt-4.1-mini, which is ALSO a regular fallback.
+    // On overload, it should be moved to be tried immediately (not after other fallbacks).
     const cfg = makeOverloadCfg("openai/gpt-4.1-mini");
     const run = vi
       .fn()
       .mockRejectedValueOnce(makeOverloadError(529, "overloaded"))
-      .mockResolvedValueOnce("ok from regular/overload model");
+      .mockResolvedValueOnce("ok from overload model (was regular fallback)");
 
     const result = await runWithModelFallback({
       cfg,
@@ -261,11 +262,46 @@ describe("runWithModelFallback – overload fallback", () => {
       run,
     });
 
-    expect(result.result).toBe("ok from regular/overload model");
-    // Should call only 2 times (primary + the already-queued regular fallback)
+    expect(result.result).toBe("ok from overload model (was regular fallback)");
+    // primary + moved-to-front overload fallback = 2 calls total
     expect(run).toHaveBeenCalledTimes(2);
     expect(run.mock.calls[1]?.[0]).toBe("openai");
     expect(run.mock.calls[1]?.[1]).toBe("gpt-4.1-mini");
+  });
+
+  it("prioritises overload fallback over regular fallbacks when overload fallback appears further in the chain", async () => {
+    // fallbacks: ["openai/gpt-4.1-mini", "openai-codex/gpt-5.4"], overloadFallback: "openai-codex/gpt-5.4"
+    // On overload of primary, gpt-5.4 should jump ahead of gpt-4.1-mini.
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-sonnet-4-6",
+            fallbacks: ["openai/gpt-4.1-mini", "openai-codex/gpt-5.4"],
+            overloadFallback: "openai-codex/gpt-5.4",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(makeOverloadError(529, "overloaded"))
+      .mockResolvedValueOnce("ok from gpt-5.4");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      run,
+    });
+
+    expect(result.result).toBe("ok from gpt-5.4");
+    expect(result.overloadFallbackUsed).toBe(true);
+    // primary overloads → gpt-5.4 moved to front → tried next (not gpt-4.1-mini)
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]?.[0]).toBe("openai-codex");
+    expect(run.mock.calls[1]?.[1]).toBe("gpt-5.4");
   });
 
   it("records overload attempts in the attempts array", async () => {
