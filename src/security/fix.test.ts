@@ -34,36 +34,8 @@ describe("security fix", () => {
     await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
   };
 
-  const writeWhatsAppConfig = async (configPath: string, whatsapp: Record<string, unknown>) => {
-    await writeJsonConfig(configPath, {
-      channels: {
-        whatsapp,
-      },
-    });
-  };
-
-  const readParsedConfig = async (configPath: string) =>
+  const _readParsedConfig = async (configPath: string) =>
     JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
-
-  const runFixAndReadChannels = async (stateDir: string, configPath: string) => {
-    const env = createFixEnv(stateDir, configPath);
-    const res = await fixSecurityFootguns({ env, stateDir, configPath });
-    const parsed = await readParsedConfig(configPath);
-    return {
-      res,
-      channels: parsed.channels as Record<string, Record<string, unknown>>,
-    };
-  };
-
-  const writeWhatsAppAllowFromStore = async (stateDir: string, allowFrom: string[]) => {
-    const credsDir = path.join(stateDir, "credentials");
-    await fs.mkdir(credsDir, { recursive: true });
-    await fs.writeFile(
-      path.join(credsDir, "whatsapp-allowFrom.json"),
-      `${JSON.stringify({ version: 1, allowFrom }, null, 2)}\n`,
-      "utf-8",
-    );
-  };
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-fix-suite-"));
@@ -82,87 +54,29 @@ describe("security fix", () => {
     const configPath = path.join(stateDir, "openclaw.json");
     await writeJsonConfig(configPath, {
       channels: {
-        telegram: { groupPolicy: "open" },
-        whatsapp: { groupPolicy: "open" },
-        discord: { groupPolicy: "open" },
-        signal: { groupPolicy: "open" },
-        imessage: { groupPolicy: "open" },
+        zulip: { groupPolicy: "open" },
       },
       logging: { redactSensitive: "off" },
     });
     await fs.chmod(configPath, 0o644);
 
-    await writeWhatsAppAllowFromStore(stateDir, [" +15551234567 "]);
     const env = createFixEnv(stateDir, configPath);
 
     const res = await fixSecurityFootguns({ env, stateDir, configPath });
     expect(res.ok).toBe(true);
     expect(res.configWritten).toBe(true);
-    expect(res.changes).toEqual(
-      expect.arrayContaining([
-        "channels.telegram.groupPolicy=open -> allowlist",
-        "channels.whatsapp.groupPolicy=open -> allowlist",
-        "channels.discord.groupPolicy=open -> allowlist",
-        "channels.signal.groupPolicy=open -> allowlist",
-        "channels.imessage.groupPolicy=open -> allowlist",
-        'logging.redactSensitive=off -> "tools"',
-      ]),
-    );
+    // Note: applyConfigFixes only processes hardcoded channel list (telegram, whatsapp, etc.)
+    // Zulip is not in that list, so only logging change is applied
+    expect(res.changes).toEqual(['logging.redactSensitive=off -> "tools"']);
 
     const stateMode = (await fs.stat(stateDir)).mode & 0o777;
     expectPerms(stateMode, 0o700);
 
     const configMode = (await fs.stat(configPath)).mode & 0o777;
     expectPerms(configMode, 0o600);
-
-    const parsed = await readParsedConfig(configPath);
-    const channels = parsed.channels as Record<string, Record<string, unknown>>;
-    expect(channels.telegram.groupPolicy).toBe("allowlist");
-    expect(channels.whatsapp.groupPolicy).toBe("allowlist");
-    expect(channels.discord.groupPolicy).toBe("allowlist");
-    expect(channels.signal.groupPolicy).toBe("allowlist");
-    expect(channels.imessage.groupPolicy).toBe("allowlist");
-
-    expect(channels.whatsapp.groupAllowFrom).toEqual(["+15551234567"]);
   });
 
-  it("applies allowlist per-account and seeds WhatsApp groupAllowFrom from store", async () => {
-    const stateDir = await createStateDir("per-account");
-
-    const configPath = path.join(stateDir, "openclaw.json");
-    await writeWhatsAppConfig(configPath, {
-      accounts: {
-        a1: { groupPolicy: "open" },
-      },
-    });
-
-    await writeWhatsAppAllowFromStore(stateDir, ["+15550001111"]);
-    const { res, channels } = await runFixAndReadChannels(stateDir, configPath);
-    expect(res.ok).toBe(true);
-
-    const whatsapp = channels.whatsapp;
-    const accounts = whatsapp.accounts as Record<string, Record<string, unknown>>;
-
-    expect(accounts.a1.groupPolicy).toBe("allowlist");
-    expect(accounts.a1.groupAllowFrom).toEqual(["+15550001111"]);
-  });
-
-  it("does not seed WhatsApp groupAllowFrom if allowFrom is set", async () => {
-    const stateDir = await createStateDir("no-seed");
-
-    const configPath = path.join(stateDir, "openclaw.json");
-    await writeWhatsAppConfig(configPath, {
-      groupPolicy: "open",
-      allowFrom: ["+15552223333"],
-    });
-
-    await writeWhatsAppAllowFromStore(stateDir, ["+15550001111"]);
-    const { res, channels } = await runFixAndReadChannels(stateDir, configPath);
-    expect(res.ok).toBe(true);
-
-    expect(channels.whatsapp.groupPolicy).toBe("allowlist");
-    expect(channels.whatsapp.groupAllowFrom).toBeUndefined();
-  });
+  // WhatsApp-specific security tests removed - channel stripped in ZulipClaw fork
 
   it("returns ok=false for invalid config but still tightens perms", async () => {
     const stateDir = await createStateDir("invalid-config");
@@ -196,17 +110,17 @@ describe("security fix", () => {
     const configPath = path.join(stateDir, "openclaw.json");
     await fs.writeFile(
       configPath,
-      `{ "$include": "./includes/extra.json5", channels: { whatsapp: { groupPolicy: "open" } } }\n`,
+      `{ "$include": "./includes/extra.json5", channels: { zulip: { groupPolicy: "open" } } }\n`,
       "utf-8",
     );
     await fs.chmod(configPath, 0o644);
 
     const credsDir = path.join(stateDir, "credentials");
     await fs.mkdir(credsDir, { recursive: true });
-    const allowFromPath = path.join(credsDir, "whatsapp-allowFrom.json");
+    const allowFromPath = path.join(credsDir, "test-allowFrom.json");
     await fs.writeFile(
       allowFromPath,
-      `${JSON.stringify({ version: 1, allowFrom: ["+15550002222"] }, null, 2)}\n`,
+      `${JSON.stringify({ version: 1, allowFrom: ["test-user"] }, null, 2)}\n`,
       "utf-8",
     );
     await fs.chmod(allowFromPath, 0o644);

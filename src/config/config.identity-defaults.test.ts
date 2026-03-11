@@ -91,24 +91,11 @@ describe("config identity defaults", () => {
           responsePrefix: "🦞",
         },
         channels: {
-          whatsapp: { allowFrom: ["+15555550123"], textChunkLimit: 4444 },
-          telegram: { enabled: true, textChunkLimit: 3333 },
-          discord: {
-            enabled: true,
-            textChunkLimit: 1999,
-            maxLinesPerMessage: 17,
-          },
-          signal: { enabled: true, textChunkLimit: 2222 },
-          imessage: { enabled: true, textChunkLimit: 1111 },
+          zulip: { enabled: true, textChunkLimit: 4444 },
         },
       });
 
-      expect(cfg.channels?.whatsapp?.textChunkLimit).toBe(4444);
-      expect(cfg.channels?.telegram?.textChunkLimit).toBe(3333);
-      expect(cfg.channels?.discord?.textChunkLimit).toBe(1999);
-      expect(cfg.channels?.discord?.maxLinesPerMessage).toBe(17);
-      expect(cfg.channels?.signal?.textChunkLimit).toBe(2222);
-      expect(cfg.channels?.imessage?.textChunkLimit).toBe(1111);
+      expect(cfg.channels?.zulip?.textChunkLimit).toBe(4444);
 
       const legacy = (cfg.messages as unknown as Record<string, unknown>).textChunkLimit;
       expect(legacy).toBeUndefined();
