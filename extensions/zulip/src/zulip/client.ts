@@ -4,6 +4,8 @@ export type ZulipAuth = {
   baseUrl: string;
   email: string;
   apiKey: string;
+  /** User-Agent header to include on every API request. */
+  userAgent?: string;
 };
 
 export type ZulipHttpError = Error & {
@@ -21,6 +23,14 @@ export type ZulipApiSuccess = {
   result: "success";
   msg?: string;
 };
+
+/**
+ * Build the User-Agent header value for Zulip API requests.
+ * Format: `OpenClaw-Zulip/<version>`
+ */
+export function buildZulipUserAgent(version: string): string {
+  return `OpenClaw-Zulip/${version}`;
+}
 
 function buildAuthHeader(email: string, apiKey: string): string {
   const token = Buffer.from(`${email}:${apiKey}`, "utf8").toString("base64");
@@ -86,6 +96,9 @@ export async function zulipRequest<T = unknown>(params: {
   const headers: Record<string, string> = {
     Authorization: buildAuthHeader(params.auth.email, params.auth.apiKey),
   };
+  if (params.auth.userAgent) {
+    headers["User-Agent"] = params.auth.userAgent;
+  }
   let body: string | undefined;
   if (params.form) {
     const form = new URLSearchParams();

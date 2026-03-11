@@ -42,6 +42,7 @@ vi.mock("./accounts.js", () => ({
 }));
 
 vi.mock("./client.js", () => ({
+  buildZulipUserAgent: vi.fn((v: string) => `OpenClaw-Zulip/${v}`),
   zulipRequest: mocks.zulipRequest,
 }));
 
