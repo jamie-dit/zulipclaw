@@ -151,7 +151,7 @@ export const zulipOnboardingAdapter: ChannelOnboardingAdapter = {
 
     const streamsRaw = String(
       await prompter.text({
-        message: "Streams to monitor (comma-separated, e.g. marcel-ai, general)",
+        message: "Streams to monitor (comma-separated, e.g. my-assistant, general)",
         validate: (value) => (value?.trim() ? undefined : "Required"),
       }),
     );

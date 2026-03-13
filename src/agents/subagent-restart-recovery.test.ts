@@ -8,6 +8,15 @@ const hoisted = vi.hoisted(() => {
   const saveRegistryMock = vi.fn();
   const loadSessionEntryMock = vi.fn();
   const isEmbeddedPiRunActiveMock = vi.fn().mockReturnValue(false);
+  const loadConfigMock = vi.fn().mockReturnValue({
+    agents: {
+      defaults: {
+        subagents: {
+          restartRecovery: { notifyTarget: "stream:test-bot#infra" },
+        },
+      },
+    },
+  });
   return {
     callGatewayMock,
     spawnMock,
@@ -15,6 +24,7 @@ const hoisted = vi.hoisted(() => {
     saveRegistryMock,
     loadSessionEntryMock,
     isEmbeddedPiRunActiveMock,
+    loadConfigMock,
   };
 });
 
@@ -44,7 +54,7 @@ vi.mock("../runtime.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({}),
+  loadConfig: () => hoisted.loadConfigMock(),
 }));
 
 function makeRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
@@ -64,6 +74,16 @@ function makeRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord 
 describe("subagent-restart-recovery", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    // Restore the default loadConfig mock (clearAllMocks doesn't reset return values)
+    hoisted.loadConfigMock.mockReturnValue({
+      agents: {
+        defaults: {
+          subagents: {
+            restartRecovery: { notifyTarget: "stream:test-bot#infra" },
+          },
+        },
+      },
+    });
   });
 
   describe("detectOrphanedRuns", () => {
@@ -413,9 +433,41 @@ describe("subagent-restart-recovery", () => {
 
       const sendParams = (sendCalls[0][0] as { params: Record<string, string> }).params;
       expect(sendParams.channel).toBe("zulip");
-      expect(sendParams.to).toBe("stream:marcel#infra");
+      expect(sendParams.to).toBe("stream:test-bot#infra");
       expect(sendParams.message).toContain("Gateway restarted");
       expect(sendParams.message).toContain("test-task");
+    });
+
+    it("skips Zulip summary when notifyTarget is not configured", async () => {
+      hoisted.loadConfigMock.mockReturnValue({});
+
+      const run = makeRun({
+        runId: "no-target-1",
+        label: "orphan-task",
+        requesterOrigin: { channel: "zulip", to: "stream:test-bot#infra" },
+      });
+      const registry = new Map<string, SubagentRunRecord>();
+      registry.set("no-target-1", run);
+      hoisted.loadRegistryMock.mockReturnValue(registry);
+
+      hoisted.loadSessionEntryMock.mockReturnValue({ entry: { sessionId: "uuid-no-target" } });
+      hoisted.isEmbeddedPiRunActiveMock.mockReturnValue(false);
+
+      hoisted.callGatewayMock.mockResolvedValue({ messages: [], ok: true });
+      hoisted.spawnMock.mockResolvedValue({
+        status: "accepted",
+        childSessionKey: "agent:main:subagent:new",
+        runId: "new",
+      });
+
+      const { runSubagentRestartRecovery } = await import("./subagent-restart-recovery.js");
+      await runSubagentRestartRecovery();
+
+      // No Zulip summary send call should be made
+      const sendCalls = hoisted.callGatewayMock.mock.calls.filter(
+        (call: unknown[]) => (call[0] as { method: string }).method === "send",
+      );
+      expect(sendCalls).toHaveLength(0);
     });
 
     it("handles multiple orphaned runs", async () => {

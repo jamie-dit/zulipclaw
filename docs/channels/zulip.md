@@ -47,7 +47,7 @@ Minimal config:
       apiKey: "zulip-bot-api-key",
 
       // Only these streams are monitored.
-      streams: ["marcel-ai"],
+      streams: ["my-assistant"],
 
       // Reply to every message in monitored streams/topics (default: true).
       alwaysReply: true,
@@ -172,9 +172,9 @@ Use these target formats with `openclaw message send` (quote if there are spaces
 Examples:
 
 ```bash
-openclaw message send --channel zulip --target "stream:marcel-ai" --message "hello"
-openclaw message send --channel zulip --target "stream:marcel-ai#deploy-notes" --message "ship it"
-openclaw message send --channel zulip --target "stream:marcel-ai" --message "screenshot" --media ./screenshot.png
+openclaw message send --channel zulip --target "stream:my-assistant" --message "hello"
+openclaw message send --channel zulip --target "stream:my-assistant#deploy-notes" --message "ship it"
+openclaw message send --channel zulip --target "stream:my-assistant" --message "screenshot" --media ./screenshot.png
 ```
 
 For Zulip admin-style channel actions:
