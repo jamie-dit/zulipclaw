@@ -529,6 +529,22 @@ function buildChatCommands(): ChatCommandDefinition[] {
       argsMenu: "auto",
     }),
     defineChatCommand({
+      key: "fast",
+      nativeName: "fast",
+      description: "Toggle fast mode (low-latency inference).",
+      textAlias: "/fast",
+      category: "options",
+      args: [
+        {
+          name: "mode",
+          description: "on or off",
+          type: "string",
+          choices: ["on", "off"],
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
       key: "elevated",
       nativeName: "elevated",
       description: "Toggle elevated mode.",

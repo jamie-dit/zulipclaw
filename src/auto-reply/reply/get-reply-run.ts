@@ -426,6 +426,7 @@ export async function runPreparedReply(
       verboseLevel: resolvedVerboseLevel,
       reasoningLevel: resolvedReasoningLevel,
       elevatedLevel: resolvedElevatedLevel,
+      fastMode: sessionEntry?.fastMode === true || sessionEntry?.fastMode === "true" || false,
       execOverrides,
       bashElevated: {
         enabled: elevatedEnabled,

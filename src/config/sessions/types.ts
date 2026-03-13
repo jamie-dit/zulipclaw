@@ -54,6 +54,7 @@ export type SessionEntry = {
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
+  fastMode?: string | boolean;
   ttsAuto?: TtsAutoMode;
   execHost?: string;
   execSecurity?: string;

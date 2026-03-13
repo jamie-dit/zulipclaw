@@ -808,6 +808,7 @@ export function listSessionsFromStore(params: {
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,
         elevatedLevel: entry?.elevatedLevel,
+        fastMode: entry?.fastMode,
         sendPolicy: entry?.sendPolicy,
         inputTokens: entry?.inputTokens,
         outputTokens: entry?.outputTokens,

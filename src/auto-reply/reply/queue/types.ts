@@ -67,6 +67,7 @@ export type FollowupRun = {
     verboseLevel?: VerboseLevel;
     reasoningLevel?: ReasoningLevel;
     elevatedLevel?: ElevatedLevel;
+    fastMode?: boolean;
     execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
     bashElevated?: {
       enabled: boolean;

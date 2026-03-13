@@ -11,6 +11,7 @@ import {
   formatThinkingLevels,
   formatXHighModelHint,
   normalizeElevatedLevel,
+  normalizeFastMode,
   normalizeReasoningLevel,
   normalizeThinkLevel,
   normalizeUsageDisplay,
@@ -242,6 +243,25 @@ export async function applySessionsPatchToStore(params: {
       }
       // Persist "off" explicitly so patches can override defaults.
       next.elevatedLevel = normalized;
+    }
+  }
+
+  if ("fastMode" in patch) {
+    const raw = patch.fastMode;
+    if (raw === null || raw === undefined) {
+      delete next.fastMode;
+    } else {
+      const normalized = normalizeFastMode(
+        typeof raw === "boolean" ? raw : String(raw),
+      );
+      if (normalized === undefined) {
+        return invalid('invalid fastMode (use "on"|"off"|"true"|"false")');
+      }
+      if (normalized === false) {
+        delete next.fastMode;
+      } else {
+        next.fastMode = normalized;
+      }
     }
   }
 
