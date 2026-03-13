@@ -53,8 +53,8 @@ const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 const UNSCHEDULED_REMINDER_NOTE =
   "Note: I did not schedule a reminder in this turn, so this will not trigger automatically.";
 const REMINDER_COMMITMENT_PATTERNS: RegExp[] = [
-  /\b(?:i\s*['']?ll|i will)\s+(?:make sure to\s+)?(?:remember|remind|ping|follow up|follow-up|check back|circle back)\b/i,
-  /\b(?:i\s*['']?ll|i will)\s+(?:set|create|schedule)\s+(?:a\s+)?reminder\b/i,
+  /\b(?:i\s*['’]?ll|i will)\s+(?:make sure to\s+)?(?:remember|remind|ping|follow up|follow-up|check back|circle back)\b/i,
+  /\b(?:i\s*['’]?ll|i will)\s+(?:set|create|schedule)\s+(?:a\s+)?reminder\b/i,
 ];
 
 function hasUnbackedReminderCommitment(text: string): boolean {
@@ -178,9 +178,9 @@ const ACTIVITY_EVIDENCE_TOOLS = new Set([
   "browser",
   "image",
   "nodes",
-  "Read",
-  "Edit",
-  "Write",
+  "read",
+  "edit",
+  "write",
 ]);
 
 /**

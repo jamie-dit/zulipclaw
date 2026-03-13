@@ -125,7 +125,7 @@ describe("hasUnsupportedActivityNarration", () => {
   });
 
   it("returns false when Read was called (activity is backed)", () => {
-    expect(hasUnsupportedActivityNarration("I'm checking the file.", ["Read"])).toBe(false);
+    expect(hasUnsupportedActivityNarration("I'm checking the file.", ["read"])).toBe(false);
   });
 
   it("returns false for 'I'm happy to help' (not an activity claim)", () => {
