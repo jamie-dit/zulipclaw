@@ -326,6 +326,18 @@ export type AgentDefaultsConfig = {
      * Default: ["AGENTS.md", "TOOLS.md", "SOUL.md", "USER.md", "IDENTITY.md"]
      */
     bootstrapFiles?: string[];
+    /**
+     * Restart recovery settings for orphaned sub-agent runs detected after
+     * a gateway restart.
+     */
+    restartRecovery?: {
+      /**
+       * Delivery target for the Zulip summary notification sent after restart
+       * recovery completes (e.g. "stream:my-stream#infra").
+       * When unset, the summary notification is skipped.
+       */
+      notifyTarget?: string;
+    };
   };
   /** Config-driven prompt sections injected into the system prompt. */
   promptSections?: PromptSectionsConfig;

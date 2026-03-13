@@ -187,7 +187,15 @@ describe("restart recovery requester notification", () => {
 
     hoisted.loadSessionEntryMock.mockReturnValue({ entry: { sessionId: "uuid-2" } });
     hoisted.isEmbeddedPiRunActiveMock.mockReturnValue(false);
-    hoisted.loadConfigMock.mockReturnValue({});
+    hoisted.loadConfigMock.mockReturnValue({
+      agents: {
+        defaults: {
+          subagents: {
+            restartRecovery: { notifyTarget: "stream:test-bot#infra" },
+          },
+        },
+      },
+    });
 
     hoisted.callGatewayMock.mockImplementation((opts: Record<string, unknown>) => {
       if ((opts as { method: string }).method === "chat.history") {
@@ -207,13 +215,13 @@ describe("restart recovery requester notification", () => {
     const { runSubagentRestartRecovery } = await import("./subagent-restart-recovery.js");
     await runSubagentRestartRecovery();
 
-    // Infra summary sent via callGateway (send method)
+    // Infra summary sent via callGateway (send method) using configured notifyTarget
     const sendCalls = hoisted.callGatewayMock.mock.calls.filter(
       (call: unknown[]) => (call[0] as { method: string }).method === "send",
     );
     expect(sendCalls.length).toBeGreaterThanOrEqual(1);
     const infraParams = (sendCalls[0][0] as { params: Record<string, string> }).params;
-    expect(infraParams.to).toBe("stream:marcel#infra");
+    expect(infraParams.to).toBe("stream:test-bot#infra");
 
     // Requester notification sent via dispatchChannelMessageAction
     expect(hoisted.dispatchChannelMessageActionMock).toHaveBeenCalled();
