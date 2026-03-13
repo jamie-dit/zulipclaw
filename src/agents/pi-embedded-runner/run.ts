@@ -1099,6 +1099,7 @@ export async function runEmbeddedPiAgent(
               messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
               messagingToolSentTargets: attempt.messagingToolSentTargets,
               successfulCronAdds: attempt.successfulCronAdds,
+              calledToolNames: [...new Set(attempt.toolMetas.map((m) => m.toolName))],
             };
           }
 
@@ -1142,6 +1143,7 @@ export async function runEmbeddedPiAgent(
             messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
             messagingToolSentTargets: attempt.messagingToolSentTargets,
             successfulCronAdds: attempt.successfulCronAdds,
+            calledToolNames: [...new Set(attempt.toolMetas.map((m) => m.toolName))],
           };
         }
       } finally {
