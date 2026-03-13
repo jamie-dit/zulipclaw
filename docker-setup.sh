@@ -7,6 +7,7 @@ EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
 EXTRA_MOUNTS="${OPENCLAW_EXTRA_MOUNTS:-}"
 HOME_VOLUME_NAME="${OPENCLAW_HOME_VOLUME:-}"
+TIMEZONE="${OPENCLAW_TZ:-}"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -24,6 +25,19 @@ fi
 OPENCLAW_CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 OPENCLAW_WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 
+# Validate OPENCLAW_TZ if set
+if [[ -n "$TIMEZONE" ]]; then
+  if [[ ! "$TIMEZONE" =~ ^[A-Za-z0-9/_+\-]+$ ]]; then
+    echo "ERROR: OPENCLAW_TZ must be a valid IANA timezone string (e.g. Australia/Melbourne)." >&2
+    exit 1
+  fi
+  if [[ -e "/usr/share/zoneinfo/$TIMEZONE" && ! -d "/usr/share/zoneinfo/$TIMEZONE" ]]; then
+    : # valid
+  elif [[ ! -e "/usr/share/zoneinfo/$TIMEZONE" ]]; then
+    echo "WARNING: Cannot verify OPENCLAW_TZ='$TIMEZONE' (zoneinfo not found), proceeding anyway." >&2
+  fi
+fi
+
 mkdir -p "$OPENCLAW_CONFIG_DIR"
 mkdir -p "$OPENCLAW_WORKSPACE_DIR"
 
@@ -36,6 +50,7 @@ export OPENCLAW_IMAGE="$IMAGE_NAME"
 export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
 export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
+export OPENCLAW_TZ="$TIMEZONE"
 
 if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
   if command -v openssl >/dev/null 2>&1; then
