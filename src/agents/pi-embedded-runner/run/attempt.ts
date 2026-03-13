@@ -1188,28 +1188,27 @@ export async function runEmbeddedAttempt(
         const preCompactionSnapshot = wasCompactingBefore || wasCompactingAfter ? null : snapshot;
         const preCompactionSessionId = activeSession.sessionId;
 
-        try {
-          await abortable(waitForCompactionRetry());
-        } catch (err) {
-          const yieldCompactionAbort =
-            yieldDetected &&
-            isRunnerAbortError(err) &&
-            err instanceof Error &&
-            err.cause === "sessions_yield";
-          if (yieldCompactionAbort) {
-            aborted = false;
-          } else if (isRunnerAbortError(err)) {
-            if (!promptError) {
-              promptError = err;
-              promptErrorSource = "compaction";
+        // Skip compaction wait when the run was intentionally stopped by
+        // sessions_yield — the abort controller is already signalled so
+        // abortable() would immediately reject.  Skipping entirely is
+        // cleaner than catching-and-discarding the resulting AbortError.
+        if (!yieldAborted) {
+          try {
+            await abortable(waitForCompactionRetry());
+          } catch (err) {
+            if (isRunnerAbortError(err)) {
+              if (!promptError) {
+                promptError = err;
+                promptErrorSource = "compaction";
+              }
+              if (!isProbeSession) {
+                log.debug(
+                  `compaction wait aborted: runId=${params.runId} sessionId=${params.sessionId}`,
+                );
+              }
+            } else {
+              throw err;
             }
-            if (!isProbeSession) {
-              log.debug(
-                `compaction wait aborted: runId=${params.runId} sessionId=${params.sessionId}`,
-              );
-            }
-          } else {
-            throw err;
           }
         }
 
