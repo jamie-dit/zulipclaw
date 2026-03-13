@@ -201,7 +201,14 @@ export const handleFastModeCommand: CommandHandler = async (params, allowTextCom
   if (!rawArgs) {
     const toggled = !currentFastMode;
     if (entry && params.sessionKey) {
-      await updateSessionStore(params.sessionKey, { fastMode: toggled || undefined });
+      entry.fastMode = toggled || undefined;
+      entry.updatedAt = Date.now();
+      params.sessionStore[params.sessionKey] = entry;
+      if (params.storePath) {
+        await updateSessionStore(params.storePath, (store) => {
+          store[params.sessionKey] = entry as SessionEntry;
+        });
+      }
     }
     return {
       shouldContinue: false,
@@ -218,7 +225,14 @@ export const handleFastModeCommand: CommandHandler = async (params, allowTextCom
     };
   }
   if (entry && params.sessionKey) {
-    await updateSessionStore(params.sessionKey, { fastMode: requested || undefined });
+    entry.fastMode = requested || undefined;
+    entry.updatedAt = Date.now();
+    params.sessionStore[params.sessionKey] = entry;
+    if (params.storePath) {
+      await updateSessionStore(params.storePath, (store) => {
+        store[params.sessionKey] = entry as SessionEntry;
+      });
+    }
   }
   return {
     shouldContinue: false,
