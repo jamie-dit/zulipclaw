@@ -340,9 +340,8 @@ export async function runEmbeddedAttempt(
           requireExplicitMessageTarget:
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
-          onYield: (message) => {
+          onYield: (_message) => {
             yieldDetected = true;
-            yieldMessage = message;
             runAbortController.abort("sessions_yield");
           },
           delegationNudgeIsFirstTurn: !hadSessionFileAtTurnStart,
@@ -551,7 +550,6 @@ export async function runEmbeddedAttempt(
 
       // Track sessions_yield tool invocation
       let yieldDetected = false;
-      let yieldMessage: string | null = null;
 
       // Add client tools (OpenResponses hosted tools) to customTools
       let clientToolCallDetected: { name: string; params: Record<string, unknown> } | null = null;
@@ -1193,7 +1191,14 @@ export async function runEmbeddedAttempt(
         try {
           await abortable(waitForCompactionRetry());
         } catch (err) {
-          if (isRunnerAbortError(err)) {
+          const yieldCompactionAbort =
+            yieldDetected &&
+            isRunnerAbortError(err) &&
+            err instanceof Error &&
+            err.cause === "sessions_yield";
+          if (yieldCompactionAbort) {
+            aborted = false;
+          } else if (isRunnerAbortError(err)) {
             if (!promptError) {
               promptError = err;
               promptErrorSource = "compaction";

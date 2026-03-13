@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
+import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { cancelAllSessionRuns } from "../../agents/pi-embedded-runner/session-run-registry.js";
 import {
   abortEmbeddedPiRun,
@@ -172,6 +173,12 @@ export async function runPreparedReply(
   const shouldInjectGroupIntro = Boolean(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
   );
+  const fastModeState = resolveFastModeState({
+    cfg,
+    provider,
+    model,
+    sessionEntry,
+  });
   // Always include persistent group chat context (name, participants, reply guidance)
   const groupChatContext = isGroupChat ? buildGroupChatContext({ sessionCtx }) : "";
   // Behavioral intro (activation mode, lurking, etc.) only on first turn / activation needed
@@ -426,7 +433,7 @@ export async function runPreparedReply(
       verboseLevel: resolvedVerboseLevel,
       reasoningLevel: resolvedReasoningLevel,
       elevatedLevel: resolvedElevatedLevel,
-      fastMode: sessionEntry?.fastMode === true || sessionEntry?.fastMode === "true" || false,
+      fastMode: fastModeState.enabled,
       execOverrides,
       bashElevated: {
         enabled: elevatedEnabled,
