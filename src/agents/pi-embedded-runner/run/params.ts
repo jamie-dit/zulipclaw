@@ -106,6 +106,8 @@ export type RunEmbeddedPiAgentParams = {
   extraSystemPrompt?: string;
   inputProvenance?: InputProvenance;
   streamParams?: AgentStreamParams;
+  /** Fast mode: low-latency inference hints for providers (OpenAI/Anthropic). */
+  fastMode?: boolean;
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
 };

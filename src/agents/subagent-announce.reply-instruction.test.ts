@@ -20,8 +20,6 @@ describe("buildAnnounceReplyInstruction", () => {
         requesterIsSubagent: false,
         announceType: "subagent task",
       });
-      // The completion announce must always produce a visible message.
-      // NO_REPLY is forbidden because the model cannot reliably detect duplicates.
       expect(result).not.toContain(SILENT_REPLY_TOKEN);
       expect(result.toUpperCase()).not.toContain("NO_REPLY");
     });
@@ -56,8 +54,6 @@ describe("buildAnnounceReplyInstruction", () => {
         requesterIsSubagent: true,
         announceType: "subagent task",
       });
-      // Sub-agent orchestrators may still use NO_REPLY for truly duplicate internal
-      // signals, because the sub-agent context is not user-visible.
       expect(result).toContain(SILENT_REPLY_TOKEN);
     });
   });

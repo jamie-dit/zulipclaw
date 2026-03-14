@@ -17,6 +17,7 @@ import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
+import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTodoTool } from "./tools/todo-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
@@ -48,6 +49,8 @@ export function createOpenClawTools(options?: {
   sandboxFsBridge?: SandboxFsBridge;
   workspaceDir?: string;
   sandboxed?: boolean;
+  /** Session ID for tools that need session context (e.g. sessions_yield). */
+  sessionId?: string;
   config?: OpenClawConfig;
   pluginToolAllowlist?: string[];
   /** Current channel ID for auto-threading (Slack). */
@@ -66,6 +69,8 @@ export function createOpenClawTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** Callback invoked when sessions_yield tool is called. */
+  onYield?: (message: string) => Promise<void> | void;
 }): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
   const agentDir = options?.agentDir?.trim() ? resolveWorkspaceRoot(options.agentDir) : undefined;
@@ -154,6 +159,10 @@ export function createOpenClawTools(options?: {
       agentSessionKey: options?.agentSessionKey,
       agentChannel: options?.agentChannel,
       sandboxed: options?.sandboxed,
+    }),
+    createSessionsYieldTool({
+      sessionId: options?.sessionId,
+      onYield: options?.onYield,
     }),
     createSessionsSpawnTool({
       agentSessionKey: options?.agentSessionKey,

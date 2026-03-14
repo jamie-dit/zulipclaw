@@ -178,6 +178,68 @@ export const handleSendPolicyCommand: CommandHandler = async (params, allowTextC
   };
 };
 
+export const handleFastModeCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const normalized = params.command.commandBodyNormalized;
+  if (normalized !== "/fast" && !normalized.startsWith("/fast ")) {
+    return null;
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /fast from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+
+  const rawArgs = normalized === "/fast" ? "" : normalized.slice("/fast".length).trim();
+
+  const entry = params.sessionEntry;
+  const currentFastMode = entry?.fastMode === true || entry?.fastMode === "true";
+
+  if (!rawArgs) {
+    const toggled = !currentFastMode;
+    if (entry && params.sessionKey) {
+      entry.fastMode = toggled || undefined;
+      entry.updatedAt = Date.now();
+      params.sessionStore[params.sessionKey] = entry;
+      if (params.storePath) {
+        await updateSessionStore(params.storePath, (store) => {
+          store[params.sessionKey] = entry as SessionEntry;
+        });
+      }
+    }
+    return {
+      shouldContinue: false,
+      replyText: toggled ? "⚡ Fast mode enabled" : "🐢 Fast mode disabled",
+    };
+  }
+
+  const { normalizeFastMode } = await import("../thinking.js");
+  const requested = normalizeFastMode(rawArgs);
+  if (requested === undefined) {
+    return {
+      shouldContinue: false,
+      replyText: '❌ Invalid fast mode setting. Use "on" or "off".',
+    };
+  }
+  if (entry && params.sessionKey) {
+    entry.fastMode = requested || undefined;
+    entry.updatedAt = Date.now();
+    params.sessionStore[params.sessionKey] = entry;
+    if (params.storePath) {
+      await updateSessionStore(params.storePath, (store) => {
+        store[params.sessionKey] = entry as SessionEntry;
+      });
+    }
+  }
+  return {
+    shouldContinue: false,
+    replyText: requested ? "⚡ Fast mode enabled" : "🐢 Fast mode disabled",
+  };
+};
+
 export const handleUsageCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;

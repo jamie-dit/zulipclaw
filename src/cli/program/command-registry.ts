@@ -104,6 +104,11 @@ const coreEntries: CoreCliEntry[] = [
         hasSubcommands: false,
       },
       {
+        name: "backup",
+        description: "Create and verify local backup archives",
+        hasSubcommands: true,
+      },
+      {
         name: "reset",
         description: "Reset local config/state (keeps the CLI installed)",
         hasSubcommands: false,
@@ -117,6 +122,8 @@ const coreEntries: CoreCliEntry[] = [
     register: async ({ program }) => {
       const mod = await import("./register.maintenance.js");
       mod.registerMaintenanceCommands(program);
+      const backupMod = await import("./register.backup.js");
+      backupMod.registerBackupCommand(program);
     },
   },
   {

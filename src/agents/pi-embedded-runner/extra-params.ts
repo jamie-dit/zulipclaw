@@ -158,6 +158,46 @@ function shouldForceResponsesStore(model: {
   return isDirectOpenAIBaseUrl(model.baseUrl);
 }
 
+/**
+ * Create a streamFn wrapper that applies fast mode hints to provider payloads.
+ * For OpenAI: sets reasoning.effort=low and text.verbosity=low.
+ * For Anthropic: sets service_tier=auto.
+ */
+function createFastModeWrapper(baseStreamFn: StreamFn | undefined, provider: string): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          if (
+            provider === "openai" ||
+            provider === "openai-codex" ||
+            model.api === "openai-responses" ||
+            model.api === "openai-codex-responses"
+          ) {
+            // OpenAI fast mode: low reasoning effort + low verbosity
+            if (payloadObj.reasoning === undefined) {
+              payloadObj.reasoning = { effort: "low" };
+            }
+            if (payloadObj.text === undefined) {
+              payloadObj.text = { verbosity: "low" };
+            }
+          } else if (provider === "anthropic" || model.api === "anthropic-messages") {
+            // Anthropic fast mode: auto service tier for prioritized routing
+            if (payloadObj.service_tier === undefined) {
+              payloadObj.service_tier = "auto";
+            }
+          }
+        }
+        return originalOnPayload?.(payload, model);
+      },
+    });
+  };
+}
+
 function createOpenAIResponsesStoreWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -377,6 +417,7 @@ export function applyExtraParamsToAgent(
   provider: string,
   modelId: string,
   extraParamsOverride?: Record<string, unknown>,
+  options?: { fastMode?: boolean },
 ): void {
   const extraParams = resolveExtraParams({
     cfg,
@@ -434,4 +475,12 @@ export function applyExtraParamsToAgent(
   // Force `store=true` for direct OpenAI/OpenAI Codex providers so multi-turn
   // server-side conversation state is preserved.
   agent.streamFn = createOpenAIResponsesStoreWrapper(agent.streamFn);
+
+  // Apply fast mode wrapper when enabled (low-latency inference hints).
+  // Sets reasoning effort to "low" and text verbosity to "low" for OpenAI,
+  // and service_tier to "auto" for Anthropic.
+  if (options?.fastMode) {
+    log.debug(`applying fast mode wrapper for ${provider}/${modelId}`);
+    agent.streamFn = createFastModeWrapper(agent.streamFn, provider);
+  }
 }

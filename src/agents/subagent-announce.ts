@@ -1150,7 +1150,11 @@ export async function runSubagentAnnounceFlow(params: {
       },
     });
     const internalSummaryMessage = [
-      `[System Message] [sessionId: ${announceSessionId}] A ${announceType} "${taskLabel}" just ${statusLabel}.`,
+      // The [COMPLETED] tag is a durable marker that persists in conversation
+      // context across turns (and survives compaction summaries). It allows
+      // the assistant to know a sub-agent has finished in later turns without
+      // needing to call subagents(action=list) every time.
+      `[System Message] [COMPLETED] [sessionId: ${announceSessionId}] A ${announceType} "${taskLabel}" just ${statusLabel}.`,
       "",
       "Result:",
       findings,

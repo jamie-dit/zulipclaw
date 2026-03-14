@@ -281,6 +281,8 @@ export function createOpenClawCodingTools(options?: {
   disableMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /** Callback invoked when sessions_yield tool is called. */
+  onYield?: (message: string) => Promise<void> | void;
   /** Whether this run is the first turn for the current depth-0 main session. */
   delegationNudgeIsFirstTurn?: boolean;
   /** Current turn prompt text (used for auto-delegation context). */
@@ -528,6 +530,8 @@ export function createOpenClawCodingTools(options?: {
       requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
       disableMessageTool: options?.disableMessageTool,
       requesterAgentIdOverride: agentId,
+      sessionId: options?.sessionId,
+      onYield: options?.onYield,
     }),
   ];
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)

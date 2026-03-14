@@ -439,12 +439,14 @@ export function buildStatusMessage(args: StatusArgs): string {
         ? "elevated"
         : `elevated:${elevatedLevel}`
       : null;
+  const fastModeEnabled = entry?.fastMode === true || entry?.fastMode === "true";
   const optionParts = [
     `Runtime: ${runtime.label}`,
     `Think: ${thinkLevel}`,
     verboseLabel,
     reasoningLevel !== "off" ? `Reasoning: ${reasoningLevel}` : null,
     elevatedLabel,
+    fastModeEnabled ? "⚡ Fast" : null,
   ];
   const optionsLine = optionParts.filter(Boolean).join(" · ");
   const activationParts = [

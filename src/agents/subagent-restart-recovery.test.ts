@@ -751,9 +751,9 @@ describe("subagent-restart-recovery", () => {
       expect(rebuilt).toContain("## Resumed Task (auto-recovery after gateway restart)");
       expect(rebuilt).toContain("### Original Task");
       expect(rebuilt).toContain("actual root task");
-      expect(rebuilt.match(/## Resumed Task \(auto-recovery after gateway restart\)/g)).toHaveLength(
-        1,
-      );
+      expect(
+        rebuilt.match(/## Resumed Task \(auto-recovery after gateway restart\)/g),
+      ).toHaveLength(1);
     });
   });
 

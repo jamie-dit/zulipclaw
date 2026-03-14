@@ -606,6 +606,7 @@ export async function runEmbeddedPiAgent(
             extraSystemPrompt: params.extraSystemPrompt,
             inputProvenance: params.inputProvenance,
             streamParams: params.streamParams,
+            fastMode: params.fastMode,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
           });
@@ -1126,7 +1127,11 @@ export async function runEmbeddedPiAgent(
               aborted,
               systemPromptReport: attempt.systemPromptReport,
               // Handle client tool calls (OpenResponses hosted tools)
-              stopReason: attempt.clientToolCall ? "tool_calls" : undefined,
+              stopReason: attempt.clientToolCall
+                ? "tool_calls"
+                : attempt.yieldDetected
+                  ? "end_turn"
+                  : undefined,
               pendingToolCalls: attempt.clientToolCall
                 ? [
                     {

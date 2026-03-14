@@ -48,7 +48,7 @@ function summarizeToolActivity(toolNames: string[]): string {
     counts.set(name, (counts.get(name) ?? 0) + 1);
   }
   const parts = [...counts.entries()]
-    .sort((a, b) => b[1] - a[1])
+    .toSorted((a, b) => b[1] - a[1])
     .slice(0, 8)
     .map(([name, count]) => `${name}${count > 1 ? ` x${count}` : ""}`);
   return parts.join(", ");
@@ -125,7 +125,7 @@ export async function readSessionProgressSummary(
           ? summaryParts.join("\n---\n")
           : toolNames.length > 0
             ? `Session had no assistant text. Recent tool activity: ${summarizeToolActivity(toolNames)}.`
-          : "Session existed but assistant messages had no text content.",
+            : "Session existed but assistant messages had no text content.",
     };
   } catch {
     return { hasHistory: false, progressSummary: "" };

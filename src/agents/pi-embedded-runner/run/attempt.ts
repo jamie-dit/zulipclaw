@@ -340,6 +340,10 @@ export async function runEmbeddedAttempt(
           requireExplicitMessageTarget:
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
+          onYield: (_message) => {
+            yieldDetected = true;
+            runAbortController.abort("sessions_yield");
+          },
           delegationNudgeIsFirstTurn: !hadSessionFileAtTurnStart,
           turnPrompt: params.prompt,
         });
@@ -544,6 +548,9 @@ export async function runEmbeddedAttempt(
         sandboxEnabled: !!sandbox?.enabled,
       });
 
+      // Track sessions_yield tool invocation
+      let yieldDetected = false;
+
       // Add client tools (OpenResponses hosted tools) to customTools
       let clientToolCallDetected: { name: string; params: Record<string, unknown> } | null = null;
       const clientToolLoopDetection = resolveToolLoopDetectionConfig({
@@ -733,6 +740,7 @@ export async function runEmbeddedAttempt(
         params.provider,
         params.modelId,
         params.streamParams,
+        { fastMode: params.fastMode },
       );
 
       if (cacheTrace) {
@@ -970,6 +978,7 @@ export async function runEmbeddedAttempt(
 
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
+      let yieldAborted = false;
       try {
         const promptStartedAt = Date.now();
 
@@ -1153,8 +1162,16 @@ export async function runEmbeddedAttempt(
             await abortable(activeSession.agent.waitForIdle());
           }
         } catch (err) {
-          promptError = err;
-          promptErrorSource = "prompt";
+          // Yield-triggered abort is intentional - treat as clean stop, not error.
+          yieldAborted =
+            yieldDetected &&
+            isRunnerAbortError(err) &&
+            err instanceof Error &&
+            err.cause === "sessions_yield";
+          if (!yieldAborted) {
+            promptError = err;
+            promptErrorSource = "prompt";
+          }
         } finally {
           log.debug(
             `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
@@ -1171,31 +1188,44 @@ export async function runEmbeddedAttempt(
         const preCompactionSnapshot = wasCompactingBefore || wasCompactingAfter ? null : snapshot;
         const preCompactionSessionId = activeSession.sessionId;
 
-        try {
-          await abortable(waitForCompactionRetry());
-        } catch (err) {
-          if (isRunnerAbortError(err)) {
-            if (!promptError) {
-              promptError = err;
-              promptErrorSource = "compaction";
+        // Skip compaction wait when the run was intentionally stopped by
+        // sessions_yield — the abort controller is already signalled so
+        // abortable() would immediately reject.  Skipping entirely is
+        // cleaner than catching-and-discarding the resulting AbortError.
+        if (!yieldAborted) {
+          try {
+            await abortable(waitForCompactionRetry());
+          } catch (err) {
+            if (isRunnerAbortError(err)) {
+              if (!promptError) {
+                promptError = err;
+                promptErrorSource = "compaction";
+              }
+              if (!isProbeSession) {
+                log.debug(
+                  `compaction wait aborted: runId=${params.runId} sessionId=${params.sessionId}`,
+                );
+              }
+            } else {
+              throw err;
             }
-            if (!isProbeSession) {
-              log.debug(
-                `compaction wait aborted: runId=${params.runId} sessionId=${params.sessionId}`,
-              );
-            }
-          } else {
-            throw err;
           }
         }
 
+        // Check if ANY compaction occurred during the entire attempt (prompt + retry).
+        // Using a cumulative count (> 0) instead of a delta check avoids missing
+        // compactions that complete during activeSession.prompt() before the delta
+        // baseline is sampled.
+        const compactionOccurredThisAttempt = getCompactionCount() > 0;
         // Append cache-TTL timestamp AFTER prompt + compaction retry completes.
         // Previously this was before the prompt, which caused a custom entry to be
         // inserted between compaction and the next prompt — breaking the
         // prepareCompaction() guard that checks the last entry type, leading to
         // double-compaction. See: https://github.com/openclaw/openclaw/issues/9282
         // Skip when timed out during compaction — session state may be inconsistent.
-        if (!timedOutDuringCompaction) {
+        // Also skip when compaction ran this attempt — appending a custom entry
+        // after compaction would break the guard again. See: #28491
+        if (!timedOutDuringCompaction && !compactionOccurredThisAttempt) {
           const shouldTrackCacheTtl =
             params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
             isCacheTtlEligibleProvider(params.provider, params.modelId);
@@ -1362,6 +1392,7 @@ export async function runEmbeddedAttempt(
         compactionCount: getCompactionCount(),
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
+        yieldDetected: yieldDetected || undefined,
       };
     } finally {
       // Always tear down the session (and release the lock) before we leave this attempt.
