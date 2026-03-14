@@ -129,13 +129,13 @@ const SUBAGENT_STATUS_CHECK_TOOLS = new Set(["subagents", "sessions_list"]);
  */
 const STALE_SUBAGENT_STATUS_PATTERNS: RegExp[] = [
   // "the sub-agent is still running / it's still running / it is still running"
-  /\b(?:it(?:'s|\s+is)|the\s+(?:sub-?agent|task|job|run|process|agent)\s+is)\s+still\s+running\b/i,
+  /\b(?:it(?:['\u2019]s|\s+is)|the\s+(?:sub-?agent|task|job|run|process|agent)\s+is)\s+still\s+running\b/i,
   // "still in progress" (referring to a background operation)
   /\b(?:sub-?agent|task|job|run)\s+(?:is\s+)?still\s+in\s+progress\b/i,
   // "hasn't finished yet" / "not done yet"
-  /\b(?:hasn'?t|has\s+not)\s+finished\s+yet\b/i,
+  /\b(?:hasn['\u2019]?t|has\s+not)\s+finished\s+yet\b/i,
   // "currently running" (in context: the sub-agent / it is currently running)
-  /\b(?:it(?:'s|\s+is)|the\s+(?:sub-?agent|task|job|run|process)\s+(?:is\s+)?)\s*currently\s+running\b/i,
+  /\b(?:it(?:['\u2019]s|\s+is)|the\s+(?:sub-?agent|task|job|run|process)\s+(?:is\s+)?)\s*currently\s+running\b/i,
   // "is still active" referring to a run
   /\b(?:sub-?agent|task|job|run|process)\s+is\s+still\s+active\b/i,
 ];
@@ -192,14 +192,14 @@ const ACTIVITY_EVIDENCE_TOOLS = new Set([
  * help" or "I'm not sure".
  */
 const ACTIVITY_NARRATION_PATTERNS: RegExp[] = [
-  // "I'm checking / I am checking"
-  /\bI(?:'m|\s+am)\s+(?:currently\s+)?(?:checking|verifying|inspecting|scanning)\b/i,
+  // "I'm checking / I am checking" (matches both ASCII ' and smart apostrophe \u2019)
+  /\bI(?:['\u2019]m|\s+am)\s+(?:currently\s+)?(?:checking|verifying|inspecting|scanning)\b/i,
   // "I'm tracing / tracking / monitoring"
-  /\bI(?:'m|\s+am)\s+(?:currently\s+)?(?:tracing|tracking|monitoring|watching)\b/i,
+  /\bI(?:['\u2019]m|\s+am)\s+(?:currently\s+)?(?:tracing|tracking|monitoring|watching)\b/i,
   // "I'm searching / fetching / querying"
-  /\bI(?:'m|\s+am)\s+(?:currently\s+)?(?:searching|fetching|querying|looking\s+up)\b/i,
+  /\bI(?:['\u2019]m|\s+am)\s+(?:currently\s+)?(?:searching|fetching|querying|looking\s+up)\b/i,
   // "I'm investigating / I'm looking into it now"
-  /\bI(?:'m|\s+am)\s+(?:currently\s+)?(?:investigating|looking\s+into(?:\s+it(?:\s+now)?)?)\b/i,
+  /\bI(?:['\u2019]m|\s+am)\s+(?:currently\s+)?(?:investigating|looking\s+into(?:\s+it(?:\s+now)?)?)\b/i,
   // "checking now / investigating now / verifying now"
   /\b(?:checking|investigating|verifying|tracing|searching|fetching)\s+now\b/i,
 ];
@@ -256,6 +256,36 @@ function appendClaimGuardNotes(
 
     return result === text ? payload : { ...payload, text: result };
   });
+}
+
+/**
+ * Collect standalone correction notes for claim guards without modifying
+ * payloads.  Used when block streaming already delivered the text and we
+ * need to send correction notes as a follow-up message.
+ */
+export function collectClaimGuardCorrectionNotes(
+  payloads: ReplyPayload[],
+  calledToolNames: string[],
+): string[] {
+  const notes: string[] = [];
+  let staleChecked = false;
+  let activityChecked = false;
+
+  for (const payload of payloads) {
+    if (staleChecked && activityChecked) {break;}
+    if (payload.isError || typeof payload.text !== "string") {continue;}
+
+    if (!staleChecked && hasStaleSubagentStatusClaim(payload.text, calledToolNames)) {
+      notes.push(STALE_SUBAGENT_STATUS_NOTE);
+      staleChecked = true;
+    }
+    if (!activityChecked && hasUnsupportedActivityNarration(payload.text, calledToolNames)) {
+      notes.push(UNSUPPORTED_ACTIVITY_NOTE);
+      activityChecked = true;
+    }
+  }
+
+  return notes;
 }
 
 // Track sessions pending post-compaction read audit (Layer 3)
@@ -635,12 +665,22 @@ export async function runReplyAgent(params: {
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
-    if (replyPayloads.length === 0) {
-      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
-    }
-
     const successfulCronAdds = runResult.successfulCronAdds ?? 0;
     const calledToolNames = runResult.calledToolNames ?? [];
+
+    if (replyPayloads.length === 0) {
+      // When block streaming dropped final payloads, the content was already
+      // delivered to the user via the pipeline. We still need to run claim
+      // guards against the *original* payloads so that correction notes are
+      // not silently skipped. If any guard fires, send the note as a
+      // standalone follow-up payload.
+      const correctionNotes = collectClaimGuardCorrectionNotes(payloadArray, calledToolNames);
+      if (correctionNotes.length > 0) {
+        const correctionPayload: ReplyPayload = { text: correctionNotes.join("\n\n") };
+        return finalizeWithFollowup(correctionPayload, queueKey, runFollowupTurn);
+      }
+      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+    }
     const hasReminderCommitment = replyPayloads.some(
       (payload) =>
         !payload.isError &&

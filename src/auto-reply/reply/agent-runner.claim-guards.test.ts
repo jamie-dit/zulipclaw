@@ -10,6 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  collectClaimGuardCorrectionNotes,
   hasStaleSubagentStatusClaim,
   hasUnsupportedActivityNarration,
   STALE_SUBAGENT_STATUS_NOTE,
@@ -148,5 +149,104 @@ describe("hasUnsupportedActivityNarration", () => {
   it("does not trigger on passive description without present progressive", () => {
     // "I will check" is a future commitment, not a present-tense activity claim
     expect(hasUnsupportedActivityNarration("I will check on this for you.", [])).toBe(false);
+  });
+
+  // Smart apostrophe (U+2019) regression tests
+  it("returns true for smart apostrophe I\u2019m checking with no tool calls", () => {
+    expect(hasUnsupportedActivityNarration("I\u2019m checking the logs.", [])).toBe(true);
+  });
+
+  it("returns true for smart apostrophe I\u2019m investigating with no tool calls", () => {
+    expect(hasUnsupportedActivityNarration("I\u2019m investigating the error.", [])).toBe(true);
+  });
+
+  it("returns true for smart apostrophe I\u2019m searching with no tool calls", () => {
+    expect(hasUnsupportedActivityNarration("I\u2019m searching for the file.", [])).toBe(true);
+  });
+
+  it("returns true for smart apostrophe I\u2019m tracing with no tool calls", () => {
+    expect(hasUnsupportedActivityNarration("I\u2019m tracing the issue.", [])).toBe(true);
+  });
+
+  it("returns false for smart apostrophe I\u2019m checking when exec was called", () => {
+    expect(hasUnsupportedActivityNarration("I\u2019m checking the logs.", ["exec"])).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3. Smart apostrophe support in stale sub-agent patterns
+// ---------------------------------------------------------------------------
+
+describe("hasStaleSubagentStatusClaim - smart apostrophes", () => {
+  it("returns true for smart apostrophe it\u2019s still running with no tool calls", () => {
+    expect(hasStaleSubagentStatusClaim("it\u2019s still running.", [])).toBe(true);
+  });
+
+  it("returns true for smart apostrophe hasn\u2019t finished yet", () => {
+    expect(hasStaleSubagentStatusClaim("The job hasn\u2019t finished yet.", [])).toBe(true);
+  });
+
+  it("returns true for smart apostrophe it\u2019s currently running", () => {
+    expect(hasStaleSubagentStatusClaim("it\u2019s currently running.", [])).toBe(true);
+  });
+
+  it("returns false for smart apostrophe it\u2019s still running when subagents was called", () => {
+    expect(hasStaleSubagentStatusClaim("it\u2019s still running.", ["subagents"])).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4. collectClaimGuardCorrectionNotes (block-streaming drop path)
+// ---------------------------------------------------------------------------
+
+describe("collectClaimGuardCorrectionNotes", () => {
+  it("returns stale sub-agent note when payloads contain status claim and no live check", () => {
+    const payloads = [{ text: "The sub-agent is still running." }];
+    const notes = collectClaimGuardCorrectionNotes(payloads, []);
+    expect(notes).toContain(STALE_SUBAGENT_STATUS_NOTE);
+  });
+
+  it("returns activity note when payloads contain narration claim and no evidence tool", () => {
+    const payloads = [{ text: "I'm checking the logs now." }];
+    const notes = collectClaimGuardCorrectionNotes(payloads, []);
+    expect(notes).toContain(UNSUPPORTED_ACTIVITY_NOTE);
+  });
+
+  it("returns both notes when both claims are present", () => {
+    const payloads = [
+      { text: "The sub-agent is still running." },
+      { text: "I'm checking the logs." },
+    ];
+    const notes = collectClaimGuardCorrectionNotes(payloads, []);
+    expect(notes).toHaveLength(2);
+    expect(notes).toContain(STALE_SUBAGENT_STATUS_NOTE);
+    expect(notes).toContain(UNSUPPORTED_ACTIVITY_NOTE);
+  });
+
+  it("returns empty array when claims are backed by tool calls", () => {
+    const payloads = [
+      { text: "The sub-agent is still running." },
+      { text: "I'm checking the logs." },
+    ];
+    const notes = collectClaimGuardCorrectionNotes(payloads, ["subagents", "exec"]);
+    expect(notes).toHaveLength(0);
+  });
+
+  it("returns empty array for neutral text", () => {
+    const payloads = [{ text: "Here are the results." }];
+    const notes = collectClaimGuardCorrectionNotes(payloads, []);
+    expect(notes).toHaveLength(0);
+  });
+
+  it("skips error payloads", () => {
+    const payloads = [{ text: "The sub-agent is still running.", isError: true }];
+    const notes = collectClaimGuardCorrectionNotes(payloads, []);
+    expect(notes).toHaveLength(0);
+  });
+
+  it("detects smart apostrophe claims in block-streamed payloads", () => {
+    const payloads = [{ text: "I\u2019m checking the logs." }];
+    const notes = collectClaimGuardCorrectionNotes(payloads, []);
+    expect(notes).toContain(UNSUPPORTED_ACTIVITY_NOTE);
   });
 });
