@@ -348,59 +348,18 @@ describe("mention helpers", () => {
 });
 
 describe("resolveGroupRequireMention", () => {
-  it("respects Discord guild/channel requireMention settings", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        discord: {
-          guilds: {
-            "145": {
-              requireMention: false,
-              channels: {
-                general: { allow: true },
-              },
-            },
-          },
-        },
-      },
-    };
+  it("returns true by default when no channel-specific config exists", () => {
+    const cfg: OpenClawConfig = {};
     const ctx: TemplateContext = {
-      Provider: "discord",
-      From: "discord:group:123",
-      GroupChannel: "#general",
-      GroupSpace: "145",
+      Provider: "zulip",
+      From: "zulip:stream:test",
     };
     const groupResolution: GroupKeyResolution = {
-      key: "discord:group:123",
-      channel: "discord",
-      id: "123",
+      key: "zulip:group:test",
+      channel: "zulip",
+      id: "test",
       chatType: "group",
     };
-
-    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
-  });
-
-  it("respects Slack channel requireMention settings", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        slack: {
-          channels: {
-            C123: { requireMention: false },
-          },
-        },
-      },
-    };
-    const ctx: TemplateContext = {
-      Provider: "slack",
-      From: "slack:channel:C123",
-      GroupSubject: "#general",
-    };
-    const groupResolution: GroupKeyResolution = {
-      key: "slack:group:C123",
-      channel: "slack",
-      id: "C123",
-      chatType: "group",
-    };
-
-    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
+    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(true);
   });
 });

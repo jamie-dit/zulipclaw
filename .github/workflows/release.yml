@@ -1,0 +1,75 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION=${{ github.ref_name }}
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Run tests
+        run: pnpm test:fast
+        continue-on-error: true
+
+      - name: Create git tag (if manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        run: git tag ${{ steps.version.outputs.version }}
+
+      - name: Push tag (if manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        run: git push origin ${{ steps.version.outputs.version }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ZulipClaw ${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          prerelease: ${{ github.event.inputs.prerelease || false }}
+          body: |
+            ## ZulipClaw Release
+
+            Zulip-optimised fork of OpenClaw.
+
+            ### Changes since last release

@@ -114,6 +114,12 @@ export const AgentDefaultsSchema = z
       .object({
         primary: z.string().optional(),
         fallbacks: z.array(z.string()).optional(),
+        overloadFallback: z
+          .string()
+          .optional()
+          .describe(
+            "Dedicated fallback model for provider overload errors (503/529). On overload, retries once with this model before the normal fallback chain.",
+          ),
       })
       .strict()
       .optional(),
@@ -276,6 +282,17 @@ export const AgentDefaultsSchema = z
           .describe(
             'Workspace files to include in sub-agent bootstrap context. Default: ["AGENTS.md", "TOOLS.md", "SOUL.md", "USER.md", "IDENTITY.md"]',
           ),
+        restartRecovery: z
+          .object({
+            notifyTarget: z
+              .string()
+              .optional()
+              .describe(
+                'Delivery target for the Zulip summary sent after restart recovery (e.g. "stream:my-stream#infra"). When unset, the summary is skipped.',
+              ),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

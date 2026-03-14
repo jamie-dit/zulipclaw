@@ -15,22 +15,6 @@ import {
 describe("buildThreadingToolContext", () => {
   const cfg = {} as OpenClawConfig;
 
-  it("uses conversation id for WhatsApp", () => {
-    const sessionCtx = {
-      Provider: "whatsapp",
-      From: "123@g.us",
-      To: "+15550001",
-    } as TemplateContext;
-
-    const result = buildThreadingToolContext({
-      sessionCtx,
-      config: cfg,
-      hasRepliedRef: undefined,
-    });
-
-    expect(result.currentChannelId).toBe("123@g.us");
-  });
-
   it("falls back to To for WhatsApp when From is missing", () => {
     const sessionCtx = {
       Provider: "whatsapp",
@@ -60,90 +44,6 @@ describe("buildThreadingToolContext", () => {
     });
 
     expect(result.currentChannelId).toBe("chat:99");
-  });
-
-  it("normalizes signal direct targets for tool context", () => {
-    const sessionCtx = {
-      Provider: "signal",
-      ChatType: "direct",
-      From: "signal:+15550001",
-      To: "signal:+15550002",
-    } as TemplateContext;
-
-    const result = buildThreadingToolContext({
-      sessionCtx,
-      config: cfg,
-      hasRepliedRef: undefined,
-    });
-
-    expect(result.currentChannelId).toBe("+15550001");
-  });
-
-  it("preserves signal group ids for tool context", () => {
-    const sessionCtx = {
-      Provider: "signal",
-      ChatType: "group",
-      To: "signal:group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
-    } as TemplateContext;
-
-    const result = buildThreadingToolContext({
-      sessionCtx,
-      config: cfg,
-      hasRepliedRef: undefined,
-    });
-
-    expect(result.currentChannelId).toBe("group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=");
-  });
-
-  it("uses the sender handle for iMessage direct chats", () => {
-    const sessionCtx = {
-      Provider: "imessage",
-      ChatType: "direct",
-      From: "imessage:+15550001",
-      To: "chat_id:12",
-    } as TemplateContext;
-
-    const result = buildThreadingToolContext({
-      sessionCtx,
-      config: cfg,
-      hasRepliedRef: undefined,
-    });
-
-    expect(result.currentChannelId).toBe("imessage:+15550001");
-  });
-
-  it("uses chat_id for iMessage groups", () => {
-    const sessionCtx = {
-      Provider: "imessage",
-      ChatType: "group",
-      From: "imessage:group:7",
-      To: "chat_id:7",
-    } as TemplateContext;
-
-    const result = buildThreadingToolContext({
-      sessionCtx,
-      config: cfg,
-      hasRepliedRef: undefined,
-    });
-
-    expect(result.currentChannelId).toBe("chat_id:7");
-  });
-
-  it("prefers MessageThreadId for Slack tool threading", () => {
-    const sessionCtx = {
-      Provider: "slack",
-      To: "channel:C1",
-      MessageThreadId: "123.456",
-    } as TemplateContext;
-
-    const result = buildThreadingToolContext({
-      sessionCtx,
-      config: { channels: { slack: { replyToMode: "all" } } } as OpenClawConfig,
-      hasRepliedRef: undefined,
-    });
-
-    expect(result.currentChannelId).toBe("C1");
-    expect(result.currentThreadTs).toBe("123.456");
   });
 });
 

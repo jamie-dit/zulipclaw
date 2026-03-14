@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./client.js", () => ({
+  buildZulipUserAgent: vi.fn((v: string) => `OpenClaw-Zulip/${v}`),
   zulipRequest: vi.fn(async () => ({ result: "success" })),
   zulipRequestWithRetry: vi.fn(async () => ({ result: "success" })),
 }));
@@ -22,6 +23,10 @@ vi.mock("./reactions.js", () => ({
 vi.mock("./uploads.js", () => ({
   resolveOutboundMedia: vi.fn(),
   uploadZulipFile: vi.fn(),
+}));
+
+vi.mock("../runtime.js", () => ({
+  getZulipRuntime: vi.fn(() => ({ version: "test" })),
 }));
 
 import { zulipMessageActions } from "./actions.js";
@@ -516,6 +521,7 @@ describe("zulipMessageActions", () => {
         baseUrl: "https://zulip.example.com",
         email: "bot@example.com",
         apiKey: "key",
+        userAgent: "OpenClaw-Zulip/test",
       },
       messageId: 123,
       emojiName: "eyes",
@@ -541,6 +547,7 @@ describe("zulipMessageActions", () => {
         baseUrl: "https://zulip.example.com",
         email: "bot@example.com",
         apiKey: "key",
+        userAgent: "OpenClaw-Zulip/test",
       },
       messageId: 123,
       emojiName: "eyes",

@@ -173,6 +173,21 @@ export type DelegationNudgeConfig = {
   firstTurnHardThreshold?: number;
   /** Tools exempt from blocking (always allowed). */
   exemptTools?: string[];
+  /**
+   * Whether to enforce a hard block when the tool call count reaches `hardThreshold`.
+   *
+   * When `true` (the default), non-exempt tool calls are **rejected** once the limit is
+   * reached.  Auto-delegation is attempted first; if it fails the tool call is still
+   * blocked and the agent must delegate manually.
+   *
+   * When `false`, the limit is **advisory only**: the agent receives an escalated warning
+   * in the tool-result message but the tool call is **not blocked**.  This is the
+   * "nudge-only" mode.  Set to `false` when you want the system to encourage delegation
+   * without ever enforcing it.
+   *
+   * Default: `true` (hard block enabled) – existing behaviour is preserved.
+   */
+  blockOnHardLimit?: boolean;
 };
 
 export type CodeGuardConfig = {

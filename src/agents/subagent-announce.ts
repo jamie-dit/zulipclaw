@@ -884,8 +884,10 @@ function formatIterationsUsedLabel(outcome: SubagentRunOutcome): string {
 }
 
 /**
- * Exported for testing only. Builds the reply instruction appended to the
- * trigger message sent to the requester session when a sub-agent completes.
+ * Builds the reply instruction appended to the sub-agent completion system message
+ * that is injected into the requester session.
+ *
+ * Exported for unit testing.
  */
 export function buildAnnounceReplyInstruction(params: {
   remainingActiveSubagentRuns: number;
@@ -903,10 +905,10 @@ export function buildAnnounceReplyInstruction(params: {
   if (params.requesterIsSubagent) {
     return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
   }
-  // NOTE: No NO_REPLY escape hatch here. A visible completion announcement
-  // MUST always be delivered to the user so they can see the sub-agent finished.
-  // Allowing NO_REPLY caused the main agent to silently suppress completions,
-  // leaving later turns with no record that the sub-agent had finished.
+  // Do NOT include a NO_REPLY escape hatch here. The model cannot reliably
+  // determine whether a completion was already delivered in the same turn,
+  // so allowing NO_REPLY causes completions to be silently swallowed. A
+  // completion announce must always produce a visible user-facing message.
   return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the system message verbatim.`;
 }
 

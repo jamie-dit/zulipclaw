@@ -136,6 +136,39 @@ timeouts that exhausted profile rotation (other errors do not advance fallback).
 When a run starts with a model override (hooks or CLI), fallbacks still end at
 `agents.defaults.model.primary` after trying any configured fallbacks.
 
+### Overload fallback
+
+When a provider returns an overload error (HTTP 503, 529, or Anthropic's
+`overloaded_error`), OpenClaw can automatically retry with a dedicated fallback
+model before trying the normal fallback chain.
+
+Configure it with `agents.defaults.model.overloadFallback`:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "anthropic/claude-sonnet-4-6",
+        "fallbacks": ["openai/gpt-4.1-mini"],
+        "overloadFallback": "openai-codex/gpt-5.4"
+      }
+    }
+  }
+}
+```
+
+Behavior:
+
+- On overload detection, the request is retried **once** with the overload
+  fallback model.
+- If the overload fallback also fails, the normal fallback chain continues.
+- Maximum 1 overload fallback retry per request (no cascading).
+- The fallback event is logged clearly, and `overloadFallbackUsed` is set in
+  the response metadata.
+- If `overloadFallback` is not configured, overload errors are handled by the
+  normal fallback chain as before.
+
 ## Related config
 
 See [Gateway configuration](/gateway/configuration) for:
@@ -143,7 +176,7 @@ See [Gateway configuration](/gateway/configuration) for:
 - `auth.profiles` / `auth.order`
 - `auth.cooldowns.billingBackoffHours` / `auth.cooldowns.billingBackoffHoursByProvider`
 - `auth.cooldowns.billingMaxHours` / `auth.cooldowns.failureWindowHours`
-- `agents.defaults.model.primary` / `agents.defaults.model.fallbacks`
+- `agents.defaults.model.primary` / `agents.defaults.model.fallbacks` / `agents.defaults.model.overloadFallback`
 - `agents.defaults.imageModel` routing
 
 See [Models](/concepts/models) for the broader model selection and fallback overview.

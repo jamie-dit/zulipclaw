@@ -48,7 +48,7 @@ function summarizeToolActivity(toolNames: string[]): string {
     counts.set(name, (counts.get(name) ?? 0) + 1);
   }
   const parts = [...counts.entries()]
-    .sort((a, b) => b[1] - a[1])
+    .toSorted((a, b) => b[1] - a[1])
     .slice(0, 8)
     .map(([name, count]) => `${name}${count > 1 ? ` x${count}` : ""}`);
   return parts.join(", ");
@@ -125,7 +125,7 @@ export async function readSessionProgressSummary(
           ? summaryParts.join("\n---\n")
           : toolNames.length > 0
             ? `Session had no assistant text. Recent tool activity: ${summarizeToolActivity(toolNames)}.`
-          : "Session existed but assistant messages had no text content.",
+            : "Session existed but assistant messages had no text content.",
     };
   } catch {
     return { hasHistory: false, progressSummary: "" };
@@ -436,17 +436,24 @@ async function sendRequesterNotification(run: SubagentRunRecord, newLabel: strin
  * Send a summary to Zulip. Uses the outbound delivery system via callGateway
  * so it works from the gateway process context.
  *
- * The target is intentionally hardcoded to match the infra notification routing
- * convention. If this needs to be configurable in the future, it should be
- * pulled from the OpenClaw config under a dedicated restart-recovery section.
+ * The target is read from config at `agents.defaults.subagents.restartRecovery.notifyTarget`.
+ * When the target is not configured, the summary is silently skipped.
  */
 async function sendZulipSummary(message: string): Promise<void> {
+  const cfg = loadConfig();
+  const target = cfg.agents?.defaults?.subagents?.restartRecovery?.notifyTarget;
+  if (!target) {
+    defaultRuntime.log?.(
+      "[info] subagent restart recovery: no notifyTarget configured, skipping Zulip summary",
+    );
+    return;
+  }
   try {
     await callGateway({
       method: "send",
       params: {
         channel: "zulip",
-        to: "stream:marcel#infra",
+        to: target,
         message,
         idempotencyKey: crypto.randomUUID(),
       },

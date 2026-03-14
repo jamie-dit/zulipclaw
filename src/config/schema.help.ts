@@ -90,6 +90,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Hard block threshold for only the first depth-0 main turn (default: 10).",
   "tools.delegationNudge.exemptTools":
     "Tool names exempt from delegation hard-limit blocking/auto-delegation.",
+  "tools.delegationNudge.blockOnHardLimit":
+    "When true (default), non-exempt tool calls are blocked once hardThreshold is reached. " +
+    "Set to false for advisory/nudge-only mode: the tool call is allowed through but the model " +
+    "receives an escalated warning in the tool-result message.",
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions enqueue a system event and request a heartbeat on exit.",
   "tools.exec.notifyOnExitEmptySuccess":
@@ -310,6 +314,8 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
+  "agents.defaults.model.overloadFallback":
+    "Dedicated fallback model (provider/model) for provider overload errors (HTTP 503/529). Retries once with this model before the normal fallback chain.",
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
@@ -673,8 +679,6 @@ export const FIELD_HELP: Record<string, string> = {
     'Override native skill commands for Slack (bool or "auto").',
   "channels.slack.streamMode":
     "Live stream preview mode for Slack replies (replace | status_final | append).",
-  "session.agentToAgent.maxPingPongTurns":
-    "Max reply-back turns between requester and target (0–5).",
   "channels.telegram.customCommands":
     "Additional Telegram bot menu commands (merged with native; conflicts ignored).",
   "messages.suppressToolErrors":

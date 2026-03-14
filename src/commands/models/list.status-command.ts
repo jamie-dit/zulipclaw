@@ -673,7 +673,7 @@ export async function modelsStatusCommand(
         if (status === "ok") {
           return theme.success;
         }
-        if (status === "rate_limit") {
+        if (status === "rate_limit" || status === "overloaded") {
           return theme.warn;
         }
         if (status === "timeout" || status === "billing") {

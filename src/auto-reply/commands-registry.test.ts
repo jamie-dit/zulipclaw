@@ -122,24 +122,19 @@ describe("commands registry", () => {
 
   it("respects text command gating", () => {
     const cfg = { commands: { text: false } };
+    // ZulipClaw: no native command surfaces, so text=false still allows text commands
+    // for surfaces without native command support
     expect(
       shouldHandleTextCommands({
         cfg,
-        surface: "discord",
-        commandSource: "text",
-      }),
-    ).toBe(false);
-    expect(
-      shouldHandleTextCommands({
-        cfg,
-        surface: "whatsapp",
+        surface: "zulip",
         commandSource: "text",
       }),
     ).toBe(true);
     expect(
       shouldHandleTextCommands({
         cfg,
-        surface: "discord",
+        surface: "zulip",
         commandSource: "native",
       }),
     ).toBe(true);
@@ -165,8 +160,9 @@ describe("commands registry", () => {
     );
   });
 
-  it("normalizes dock command aliases", () => {
-    expect(normalizeCommandBody("/dock_telegram")).toBe("/dock-telegram");
+  it("preserves unknown dock commands unchanged", () => {
+    // ZulipClaw: no telegram dock, so /dock_telegram stays as-is
+    expect(normalizeCommandBody("/dock_telegram")).toBe("/dock_telegram");
   });
 });
 

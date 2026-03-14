@@ -23,6 +23,14 @@ export type AgentModelEntryConfig = {
 export type AgentModelListConfig = {
   primary?: string;
   fallbacks?: string[];
+  /**
+   * Dedicated fallback model for provider overload errors (HTTP 503, 529,
+   * Anthropic overloaded_error, etc.).  When set, overload errors trigger a
+   * single retry with this model before falling through to the normal
+   * fallback chain.  Value is a provider/model string, e.g.
+   * `"openai-codex/gpt-5.4"`.
+   */
+  overloadFallback?: string;
 };
 
 export type AgentContextPruningConfig = {
@@ -318,6 +326,18 @@ export type AgentDefaultsConfig = {
      * Default: ["AGENTS.md", "TOOLS.md", "SOUL.md", "USER.md", "IDENTITY.md"]
      */
     bootstrapFiles?: string[];
+    /**
+     * Restart recovery settings for orphaned sub-agent runs detected after
+     * a gateway restart.
+     */
+    restartRecovery?: {
+      /**
+       * Delivery target for the Zulip summary notification sent after restart
+       * recovery completes (e.g. "stream:my-stream#infra").
+       * When unset, the summary notification is skipped.
+       */
+      notifyTarget?: string;
+    };
   };
   /** Config-driven prompt sections injected into the system prompt. */
   promptSections?: PromptSectionsConfig;

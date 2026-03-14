@@ -165,6 +165,24 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   );
 }
 
+const OVERLOAD_HTTP_ERROR_CODES = new Set([503, 529]);
+
+/**
+ * Returns true when the raw error message starts with an HTTP status code
+ * that specifically indicates provider overload / capacity exhaustion (503, 529).
+ */
+export function isOverloadHttpError(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const status = extractLeadingHttpStatus(trimmed);
+  if (!status) {
+    return false;
+  }
+  return OVERLOAD_HTTP_ERROR_CODES.has(status.code);
+}
+
 export function isTransientHttpError(raw: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -775,6 +793,11 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isImageSizeError(raw)) {
     return null;
   }
+  // Check overload-specific HTTP codes (503, 529) before the general transient bucket
+  // so they get the dedicated "overloaded" reason instead of "timeout".
+  if (isOverloadHttpError(raw)) {
+    return "overloaded";
+  }
   if (isTransientHttpError(raw)) {
     // Treat transient 5xx provider failures as retryable transport issues.
     return "timeout";
@@ -783,7 +806,7 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     return "rate_limit";
   }
   if (isOverloadedErrorMessage(raw)) {
-    return "rate_limit";
+    return "overloaded";
   }
   if (isCloudCodeAssistFormatError(raw)) {
     return "format";

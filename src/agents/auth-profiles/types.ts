@@ -36,6 +36,7 @@ export type AuthProfileFailureReason =
   | "auth"
   | "format"
   | "rate_limit"
+  | "overloaded"
   | "billing"
   | "timeout"
   | "unknown";

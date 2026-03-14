@@ -1,11 +1,13 @@
 import type { ChannelOnboardingAdapter, OpenClawConfig, WizardPrompter } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
 import { promptAccountId } from "./onboarding-helpers.js";
+import { getZulipRuntime } from "./runtime.js";
 import {
   listZulipAccountIds,
   resolveDefaultZulipAccountId,
   resolveZulipAccount,
 } from "./zulip/accounts.js";
+import { buildZulipUserAgent } from "./zulip/client.js";
 import { probeZulip } from "./zulip/probe.js";
 
 const channel = "zulip" as const;
@@ -149,7 +151,7 @@ export const zulipOnboardingAdapter: ChannelOnboardingAdapter = {
 
     const streamsRaw = String(
       await prompter.text({
-        message: "Streams to monitor (comma-separated, e.g. marcel-ai, general)",
+        message: "Streams to monitor (comma-separated, e.g. my-assistant, general)",
         validate: (value) => (value?.trim() ? undefined : "Required"),
       }),
     );
@@ -163,7 +165,13 @@ export const zulipOnboardingAdapter: ChannelOnboardingAdapter = {
     const probeEmail = email || resolvedAccount.email;
     const probeKey = apiKey || resolvedAccount.apiKey;
     if (probeUrl && probeEmail && probeKey) {
-      const probe = await probeZulip(probeUrl, probeEmail, probeKey, 10_000);
+      const probe = await probeZulip(
+        probeUrl,
+        probeEmail,
+        probeKey,
+        10_000,
+        buildZulipUserAgent(getZulipRuntime().version),
+      );
       if (probe.ok && probe.bot) {
         await prompter.note(
           `Connected as ${probe.bot.fullName ?? probe.bot.email ?? "bot"} (user_id: ${String(probe.bot.userId)})`,

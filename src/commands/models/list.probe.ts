@@ -32,6 +32,7 @@ export type AuthProbeStatus =
   | "ok"
   | "auth"
   | "rate_limit"
+  | "overloaded"
   | "billing"
   | "timeout"
   | "format"
@@ -91,6 +92,9 @@ const toStatus = (reason?: string | null): AuthProbeStatus => {
   }
   if (reason === "rate_limit") {
     return "rate_limit";
+  }
+  if (reason === "overloaded") {
+    return "overloaded";
   }
   if (reason === "billing") {
     return "billing";

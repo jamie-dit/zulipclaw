@@ -400,6 +400,7 @@ const DelegationNudgeSchema = z
     hardThreshold: z.number().int().positive().optional(),
     firstTurnHardThreshold: z.number().int().positive().optional(),
     exemptTools: z.array(z.string()).optional(),
+    blockOnHardLimit: z.boolean().optional().default(true),
   })
   .strict()
   .superRefine((value, ctx) => {
