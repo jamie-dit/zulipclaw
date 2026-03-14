@@ -494,9 +494,10 @@ export function createGatewayHttpServer(opts: {
       ) {
         return;
       }
-      if (await handleSlackHttpRequest(req, res)) {
-        return;
-      }
+      // Slack HTTP handler removed - ZulipClaw fork does not include the Slack
+      // channel plugin. The upstream reference to handleSlackHttpRequest caused
+      // a ReferenceError (the function was never imported) which silently broke
+      // all HTTP request handling with 500 errors.
       if (handlePluginRequest) {
         // Channel HTTP endpoints are gateway-auth protected by default.
         // Non-channel plugin routes remain plugin-owned and must enforce
