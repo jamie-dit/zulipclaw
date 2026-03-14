@@ -74,6 +74,10 @@ export type EmbeddedPiRunResult = {
   messagingToolSentTargets?: MessagingToolSend[];
   // Count of successful cron.add tool calls in this run.
   successfulCronAdds?: number;
+  // Unique tool names called during the run. Used by reply guards to detect
+  // unsupported claims (e.g. claiming a sub-agent is running without having
+  // called subagents(action=list) in this turn).
+  calledToolNames?: string[];
 };
 
 export type EmbeddedPiCompactResult = {

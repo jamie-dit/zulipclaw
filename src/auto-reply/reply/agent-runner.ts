@@ -86,6 +86,208 @@ function appendUnscheduledReminderNote(payloads: ReplyPayload[]): ReplyPayload[]
   });
 }
 
+// ---------------------------------------------------------------------------
+// Runtime claim guards
+//
+// These detect reply text that makes unsupported claims – i.e. claims that
+// cannot be true given the tool calls actually made in the current turn – and
+// append a correction footnote.  The approach mirrors the existing
+// `hasUnbackedReminderCommitment` pattern: never block delivery, just append
+// a transparent advisory so the user (and any follow-up turns) have accurate
+// context.
+//
+// Two claim families are covered:
+//
+//   1. Stale sub-agent status  – "it's still running", "still in progress", etc.
+//      when subagents(action=list) was not called this turn.
+//
+//   2. Unsupported present-tense activity narration – "I'm checking",
+//      "I'm tracing", "I'm looking into it now", etc. when no tool call
+//      plausibly backs the claim (e.g. exec, web_search, browser, etc. were
+//      not called).
+//
+// Extension point: add new pattern arrays and guard functions here to cover
+// additional claim families.  Each guard should follow the three-step shape:
+//   (a) detect: boolean function over (text, calledToolNames)
+//   (b) correct note: a short, neutral factual note to append
+//   (c) apply: map over payloads, append note to first matching payload
+// ---------------------------------------------------------------------------
+
+/**
+ * Tool names that constitute evidence of a live sub-agent status check.
+ * A reply that claims a sub-agent is running/active is only valid when one of
+ * these tools was called with action=list (or equivalent) in the same turn.
+ *
+ * We do not inspect the `action` argument here – presence of the tool name is
+ * sufficient as a conservative signal, keeping the check cheap.
+ */
+const SUBAGENT_STATUS_CHECK_TOOLS = new Set(["subagents", "sessions_list"]);
+
+/**
+ * Phrases that assert a sub-agent (or background task) is currently running
+ * without having been verified by a live tool call.
+ */
+const STALE_SUBAGENT_STATUS_PATTERNS: RegExp[] = [
+  // "the sub-agent is still running / it's still running / it is still running"
+  /\b(?:it(?:['\u2019]s|\s+is)|the\s+(?:sub-?agent|task|job|run|process|agent)\s+is)\s+still\s+running\b/i,
+  // "still in progress" (referring to a background operation)
+  /\b(?:sub-?agent|task|job|run)\s+(?:is\s+)?still\s+in\s+progress\b/i,
+  // "hasn't finished yet" / "not done yet"
+  /\b(?:hasn['\u2019]?t|has\s+not)\s+finished\s+yet\b/i,
+  // "currently running" (in context: the sub-agent / it is currently running)
+  /\b(?:it(?:['\u2019]s|\s+is)|the\s+(?:sub-?agent|task|job|run|process)\s+(?:is\s+)?)\s*currently\s+running\b/i,
+  // "is still active" referring to a run
+  /\b(?:sub-?agent|task|job|run|process)\s+is\s+still\s+active\b/i,
+];
+
+/** Correction note appended when a stale status claim is detected. */
+export const STALE_SUBAGENT_STATUS_NOTE =
+  "Note: I did not check live sub-agent status this turn (`subagents(action=list)` was not called). The status above is based on context from a previous turn and may be stale.";
+
+/**
+ * Returns true when the reply text contains a stale sub-agent status claim
+ * AND the subagents/sessions_list tool was not called in the same turn.
+ *
+ * Exported for unit testing.
+ */
+export function hasStaleSubagentStatusClaim(text: string, calledToolNames: string[]): boolean {
+  if (!text.trim()) {
+    return false;
+  }
+  // If the note was already appended (e.g. by block-streaming), skip.
+  if (text.includes(STALE_SUBAGENT_STATUS_NOTE)) {
+    return false;
+  }
+  // If a live check was performed, the claim is backed by evidence.
+  const checkedLive = calledToolNames.some((t) => SUBAGENT_STATUS_CHECK_TOOLS.has(t));
+  if (checkedLive) {
+    return false;
+  }
+  return STALE_SUBAGENT_STATUS_PATTERNS.some((p) => p.test(text));
+}
+
+/**
+ * Tool names that constitute evidence for present-tense activity narration.
+ * These are tools that involve active fetching/searching/checking work.
+ */
+const ACTIVITY_EVIDENCE_TOOLS = new Set([
+  "exec",
+  "web_search",
+  "web_fetch",
+  "web_research",
+  "browser",
+  "image",
+  "nodes",
+  "read",
+  "edit",
+  "write",
+]);
+
+/**
+ * Present-tense activity narration patterns that claim the assistant is
+ * currently doing something that has no backing tool call.
+ *
+ * These are intentionally narrow – first-person present-progressive + action
+ * verb – to minimise false positives on legitimate text like "I'm happy to
+ * help" or "I'm not sure".
+ */
+const ACTIVITY_NARRATION_PATTERNS: RegExp[] = [
+  // "I'm checking / I am checking" (matches both ASCII ' and smart apostrophe \u2019)
+  /\bI(?:['\u2019]m|\s+am)\s+(?:currently\s+)?(?:checking|verifying|inspecting|scanning)\b/i,
+  // "I'm tracing / tracking / monitoring"
+  /\bI(?:['\u2019]m|\s+am)\s+(?:currently\s+)?(?:tracing|tracking|monitoring|watching)\b/i,
+  // "I'm searching / fetching / querying"
+  /\bI(?:['\u2019]m|\s+am)\s+(?:currently\s+)?(?:searching|fetching|querying|looking\s+up)\b/i,
+  // "I'm investigating / I'm looking into it now"
+  /\bI(?:['\u2019]m|\s+am)\s+(?:currently\s+)?(?:investigating|looking\s+into(?:\s+it(?:\s+now)?)?)\b/i,
+  // "checking now / investigating now / verifying now"
+  /\b(?:checking|investigating|verifying|tracing|searching|fetching)\s+now\b/i,
+];
+
+/** Correction note appended when unsupported activity narration is detected. */
+export const UNSUPPORTED_ACTIVITY_NOTE =
+  "Note: No tool call backing the above activity was made in this turn.";
+
+/**
+ * Returns true when the reply text contains unsupported present-tense activity
+ * narration AND no activity-evidence tool was called in the same turn.
+ *
+ * Exported for unit testing.
+ */
+export function hasUnsupportedActivityNarration(text: string, calledToolNames: string[]): boolean {
+  if (!text.trim()) {
+    return false;
+  }
+  // If the note was already appended, skip.
+  if (text.includes(UNSUPPORTED_ACTIVITY_NOTE)) {
+    return false;
+  }
+  // If any activity-evidence tool was called, the narration is plausibly backed.
+  const hasEvidence = calledToolNames.some((t) => ACTIVITY_EVIDENCE_TOOLS.has(t));
+  if (hasEvidence) {
+    return false;
+  }
+  return ACTIVITY_NARRATION_PATTERNS.some((p) => p.test(text));
+}
+
+function appendClaimGuardNotes(
+  payloads: ReplyPayload[],
+  calledToolNames: string[],
+): ReplyPayload[] {
+  let staleSubagentNoteAppended = false;
+  let activityNoteAppended = false;
+
+  return payloads.map((payload) => {
+    if (payload.isError || typeof payload.text !== "string") {
+      return payload;
+    }
+    const text = payload.text;
+    let result = text;
+
+    if (!staleSubagentNoteAppended && hasStaleSubagentStatusClaim(text, calledToolNames)) {
+      result = `${result.trimEnd()}\n\n${STALE_SUBAGENT_STATUS_NOTE}`;
+      staleSubagentNoteAppended = true;
+    }
+
+    if (!activityNoteAppended && hasUnsupportedActivityNarration(result, calledToolNames)) {
+      result = `${result.trimEnd()}\n\n${UNSUPPORTED_ACTIVITY_NOTE}`;
+      activityNoteAppended = true;
+    }
+
+    return result === text ? payload : { ...payload, text: result };
+  });
+}
+
+/**
+ * Collect standalone correction notes for claim guards without modifying
+ * payloads.  Used when block streaming already delivered the text and we
+ * need to send correction notes as a follow-up message.
+ */
+export function collectClaimGuardCorrectionNotes(
+  payloads: ReplyPayload[],
+  calledToolNames: string[],
+): string[] {
+  const notes: string[] = [];
+  let staleChecked = false;
+  let activityChecked = false;
+
+  for (const payload of payloads) {
+    if (staleChecked && activityChecked) {break;}
+    if (payload.isError || typeof payload.text !== "string") {continue;}
+
+    if (!staleChecked && hasStaleSubagentStatusClaim(payload.text, calledToolNames)) {
+      notes.push(STALE_SUBAGENT_STATUS_NOTE);
+      staleChecked = true;
+    }
+    if (!activityChecked && hasUnsupportedActivityNarration(payload.text, calledToolNames)) {
+      notes.push(UNSUPPORTED_ACTIVITY_NOTE);
+      activityChecked = true;
+    }
+  }
+
+  return notes;
+}
+
 // Track sessions pending post-compaction read audit (Layer 3)
 const pendingPostCompactionAudits = new Map<string, boolean>();
 
@@ -463,21 +665,36 @@ export async function runReplyAgent(params: {
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
+    const successfulCronAdds = runResult.successfulCronAdds ?? 0;
+    const calledToolNames = runResult.calledToolNames ?? [];
+
     if (replyPayloads.length === 0) {
+      // When block streaming dropped final payloads, the content was already
+      // delivered to the user via the pipeline. We still need to run claim
+      // guards against the *original* payloads so that correction notes are
+      // not silently skipped. If any guard fires, send the note as a
+      // standalone follow-up payload.
+      const correctionNotes = collectClaimGuardCorrectionNotes(payloadArray, calledToolNames);
+      if (correctionNotes.length > 0) {
+        const correctionPayload: ReplyPayload = { text: correctionNotes.join("\n\n") };
+        return finalizeWithFollowup(correctionPayload, queueKey, runFollowupTurn);
+      }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
-
-    const successfulCronAdds = runResult.successfulCronAdds ?? 0;
     const hasReminderCommitment = replyPayloads.some(
       (payload) =>
         !payload.isError &&
         typeof payload.text === "string" &&
         hasUnbackedReminderCommitment(payload.text),
     );
-    const guardedReplyPayloads =
+    const reminderGuardedPayloads =
       hasReminderCommitment && successfulCronAdds === 0
         ? appendUnscheduledReminderNote(replyPayloads)
         : replyPayloads;
+    // Apply runtime claim guards: stale sub-agent status and unsupported
+    // activity narration. These append a transparent correction footnote when
+    // the reply makes claims that are not backed by tool calls in this turn.
+    const guardedReplyPayloads = appendClaimGuardNotes(reminderGuardedPayloads, calledToolNames);
 
     await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
@@ -569,7 +786,7 @@ export async function runReplyAgent(params: {
             }
           })
           .catch(() => {
-            // Silent failure — post-compaction context is best-effort
+            // Silent failure - post-compaction context is best-effort
           });
 
         // Set pending audit flag for Layer 3 (post-compaction read audit)
@@ -590,7 +807,7 @@ export async function runReplyAgent(params: {
 
     // Post-compaction read audit (Layer 3)
     if (sessionKey && pendingPostCompactionAudits.get(sessionKey)) {
-      pendingPostCompactionAudits.delete(sessionKey); // Delete FIRST — one-shot only
+      pendingPostCompactionAudits.delete(sessionKey); // Delete FIRST - one-shot only
       try {
         const sessionFile = activeSessionEntry?.sessionFile;
         if (sessionFile) {
@@ -603,7 +820,7 @@ export async function runReplyAgent(params: {
           }
         }
       } catch {
-        // Silent failure — audit is best-effort
+        // Silent failure - audit is best-effort
       }
     }
 
